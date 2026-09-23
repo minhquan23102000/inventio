@@ -211,3 +211,98 @@ def test_type_widening_only_adds_and_respects_privacy(tmp_path, capsys):
     run(capsys, "--db", str(db), "init", str(tmp_path / "repo" / "docs"), "--name", "notes")  # private
     with pytest.raises(CloudRefused, match="notes"):
         search(con, "velocity limit", pool=2, ranker=FakeRanker(cloud=True), by_type=True)
+
+
+class FakeJudge:
+    """Counts calls. Categories: a chunk naming a card is about a Product, one naming a merchant
+    about an Organization; every query is about a Product. Two passages are about the same thing
+    when both name the same card."""
+
+    packs = True
+
+    def __init__(self, cloud=False):
+        self.cloud, self.name, self.calls, self.refused, self.failed = cloud, "fake", 0, 0, 0
+
+    def batch(self, jobs):
+        for i, (state, qs) in enumerate(jobs):
+            self.calls += 1
+            if "query" in state:
+                yield i, {c: (0.9 if c == "Product" else 0.1) for c in qs}
+            elif "n0" not in state:
+                t = state["passage"]
+                yield i, {c: (0.9 if (c == "Product" and "card" in t) or (c == "Organization" and "merchant" in t)
+                              else 0.1) for c in qs}
+            else:
+                card = lambda t: next((w for w in ("gold card", "blue card") if w in t), None)
+                yield i, {s: (0.9 if card(state[s]) and card(state[s]) == card(state["passage"]) else 0.1) for s in qs}
+
+
+def test_facts_categories_links_and_query_widening(tmp_path, capsys):
+    from inventio.facts import build
+    from inventio.links import rebuild_links
+    from inventio.search import search
+    from inventio.store import connect
+
+    db = tmp_path / "map.db"
+    repo = tmp_path / "repo"
+    write(repo, "a.md", "# Gold card\nthe gold card has a monthly spend cap of 5000\n")
+    write(repo, "b.md", "# Disputes\nchargebacks on the gold card go to the disputes desk within 30 days\n")
+    write(repo, "c.md", "# Blue card\nthe blue card is issued to students\n")
+    write(repo, "d.md", "# Merchants\na merchant is onboarded after a site visit\n")
+    write(repo, "e.md", "# Cap\nspend cap limits reset at month end for every product\n")
+    write(repo, "code.py", "def gold_card_cap():\n    return 5000\n")
+    run(capsys, "--db", str(db), "init", str(repo), "--name", "repo", "--public")
+    con = connect(db)
+    judge = FakeJudge()
+    res = build(con, judge)
+
+    # every prose chunk has all eight p; code is not categorized; kept = p >= 0.5
+    per_chunk = con.execute(
+        "SELECT f.path, count(*) n, group_concat(CASE WHEN kept THEN category END) kept FROM chunk_categories cc "
+        "JOIN chunks c ON c.id = cc.chunk_id JOIN files f ON f.id = c.file_id GROUP BY c.id").fetchall()
+    assert {r["path"]: (r["n"], r["kept"]) for r in per_chunk} == {
+        "a.md": (8, "Product"), "b.md": (8, "Product"), "c.md": (8, "Product"), "d.md": (8, "Organization"), "e.md": (8, None)}
+    # the gold card chunks are linked; the blue card shares their type but not their card
+    about = con.execute("SELECT fa.path a, fb.path b, l.via FROM links l JOIN chunks ca ON ca.id = l.src "
+                        "JOIN files fa ON fa.id = ca.file_id JOIN chunks cb ON cb.id = l.dst "
+                        "JOIN files fb ON fb.id = cb.file_id WHERE l.rel = 'about'").fetchall()
+    assert [tuple(sorted((r["a"], r["b"]))) + (r["via"],) for r in about] == [("a.md", "b.md", "Product")]
+    # every judgment is kept with the text it read
+    j = con.execute("SELECT kind, passage, other, model FROM judgments WHERE kind = 'same_thing' AND p >= 0.5").fetchone()
+    assert j["model"] == "fake" and "gold card" in j["passage"] and "gold card" in j["other"]
+
+    # a rerun pays nothing: the judgments answer again, and code-drawn links do not remove judged ones
+    calls = judge.calls
+    con.execute("DELETE FROM chunk_categories")
+    build(con, judge, relink=True)
+    rebuild_links(con)
+    assert judge.calls == calls
+    assert con.execute("SELECT count(*) FROM links WHERE rel = 'about'").fetchone()[0] == 1
+
+    # query time only adds: the plain pool is a prefix, the rest came through a category or a link
+    plain = search(con, "spend cap", k=100, pool=1)
+    wide = search(con, "spend cap", k=100, pool=1, facts=judge, ranker=None)
+    assert [h.id for h in wide[:len(plain)]] == [h.id for h in plain]
+    assert plain[0].path == "a.md" or plain[0].path == "e.md"
+    added = {h.path: h.via for h in wide[len(plain):]}
+    assert set(added) <= {"a.md", "b.md", "c.md"} and "b.md" in added
+    assert all(v.startswith(("category:Product", "about:Product")) for v in added.values())
+
+    # editing a file drops its judged links with its chunks
+    write(repo, "b.md", "# Disputes\nchargebacks go to the disputes desk\n")
+    run(capsys, "--db", str(db), "init", str(repo), "--name", "repo", "--public")
+    assert con.execute("SELECT count(*) FROM links WHERE rel = 'about'").fetchone()[0] == 0
+
+
+def test_cloud_judge_refuses_private_sources(tmp_path, capsys):
+    from inventio.facts import build
+    from inventio.rankers import CloudRefused
+    from inventio.store import connect
+
+    db = tmp_path / "map.db"
+    write(tmp_path / "private", "notes.md", "# Notes\ncustomer 4411 flagged for mule activity\n")
+    run(capsys, "--db", str(db), "init", str(tmp_path / "private"), "--name", "bank")
+    judge = FakeJudge(cloud=True)
+    with pytest.raises(CloudRefused, match="bank"):
+        build(connect(db), judge)
+    assert judge.calls == 0

@@ -1,4 +1,5 @@
-"""One SQLite file holds the whole map: sources, files, chunks, the BM25 index, links, labels.
+"""One SQLite file holds the whole map: sources, files, chunks, the BM25 index, links, labels,
+content categories and every model judgment behind them.
 
 The file lives in the user's cache directory, never inside an indexed repository: every derived
 table carries source text, and a map built over private sources must not be committed anywhere.
@@ -79,6 +80,35 @@ CREATE TABLE IF NOT EXISTS labels (
     at TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE (query, passage, model)
 );
+-- Every judgment a decision model made at index or query time, with the text it read: the
+-- teacher data for fine-tuning Laya. `key` is the sha1 of (kind, question, passage, other), so a
+-- rebuilt map or a rerun reuses a judgment instead of paying for it again.
+--   kind 'category'        passage = a chunk, question = a schema.org type
+--   kind 'query_category'  passage = a query, question = a schema.org type
+--   kind 'same_thing'      passage = a chunk, other = a neighbour chunk
+CREATE TABLE IF NOT EXISTS judgments (
+    id INTEGER PRIMARY KEY,
+    kind TEXT NOT NULL,
+    question TEXT NOT NULL,
+    passage TEXT NOT NULL,
+    other TEXT NOT NULL DEFAULT '',
+    key TEXT NOT NULL,
+    p REAL NOT NULL,
+    model TEXT NOT NULL,
+    source TEXT NOT NULL,
+    at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (key, model)
+);
+-- one row per (chunk, type); `kept` marks the types the chunk keeps (p >= threshold, at most 3)
+CREATE TABLE IF NOT EXISTS chunk_categories (
+    chunk_id INTEGER NOT NULL REFERENCES chunks(id) ON DELETE CASCADE,
+    category TEXT NOT NULL,
+    p REAL NOT NULL,
+    kept INTEGER NOT NULL,
+    model TEXT NOT NULL,
+    PRIMARY KEY (chunk_id, category)
+);
+CREATE INDEX IF NOT EXISTS chunk_categories_kept ON chunk_categories(category, chunk_id) WHERE kept = 1;
 """
 
 
@@ -110,17 +140,21 @@ def connect(path: Path | None = None) -> sqlite3.Connection:
     return con
 
 
+# fact links (`about`) are judged, not rebuilt from the sources, so they are removed with their chunks
+_ABOUT = "DELETE FROM links WHERE rel = 'about' AND (src IN ({ids}) OR dst IN ({ids}))"
+
+
 def drop_source(con: sqlite3.Connection, source_id: int) -> None:
     """Remove every derived row of one source; FTS rows are keyed by chunk id, so clear them first."""
-    con.execute(
-        "DELETE FROM chunks_fts WHERE rowid IN "
-        "(SELECT c.id FROM chunks c JOIN files f ON f.id = c.file_id WHERE f.source_id = ?)",
-        (source_id,),
-    )
+    ids = "SELECT c.id FROM chunks c JOIN files f ON f.id = c.file_id WHERE f.source_id = ?"
+    con.execute(_ABOUT.format(ids=ids), (source_id, source_id))
+    con.execute(f"DELETE FROM chunks_fts WHERE rowid IN ({ids})", (source_id,))
     con.execute("DELETE FROM files WHERE source_id = ?", (source_id,))
 
 
 def drop_file(con: sqlite3.Connection, file_id: int) -> None:
     """Remove one file and everything derived from it (chunks, BM25 rows, identifiers, references)."""
-    con.execute("DELETE FROM chunks_fts WHERE rowid IN (SELECT id FROM chunks WHERE file_id = ?)", (file_id,))
+    ids = "SELECT id FROM chunks WHERE file_id = ?"
+    con.execute(_ABOUT.format(ids=ids), (file_id, file_id))
+    con.execute(f"DELETE FROM chunks_fts WHERE rowid IN ({ids})", (file_id,))
     con.execute("DELETE FROM files WHERE id = ?", (file_id,))

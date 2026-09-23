@@ -6,6 +6,7 @@ import time
 from pathlib import Path
 
 from . import __version__
+from .facts import JUDGES, make_judge
 from .rankers import RANKERS, CloudRefused, make_ranker
 from .store import connect, default_db
 
@@ -24,10 +25,9 @@ def cmd_init(args) -> int:
         return 2
     con = _db(args)
     t = time.time()
+    name = args.name or root.resolve().name
     with con:
-        stats = ingest_source(
-            con, args.name or root.resolve().name, root, args.public, args.exclude or [], full=args.full
-        )
+        stats = ingest_source(con, name, root, args.public, args.exclude or [], full=args.full)
         links = rebuild_links(con)
     print(
         f"{stats['source']}: {stats['files']} files, {stats['chunks']} chunks "
@@ -36,6 +36,29 @@ def cmd_init(args) -> int:
         f"map links {', '.join(f'{k} {v}' for k, v in sorted(links.items())) or 'none'}; "
         f"{time.time() - t:.1f}s -> {args.db or default_db()}"
     )
+    if args.facts:
+        args.source = [name]
+        return cmd_facts(args)
+    return 0
+
+
+def cmd_facts(args) -> int:
+    from .facts import build
+
+    con = _db(args)
+    t = time.time()
+    try:
+        res = build(con, make_judge(args.judge), args.source, relink=getattr(args, "relink", False))
+    except CloudRefused as e:
+        print(str(e), file=sys.stderr)
+        return 3
+    c, l = res["categories"], res["links"]
+    print(
+        f"categories: {c['chunks']} chunks ({c['asked']} judged, {c['cached']} from earlier judgments, "
+        f"{c['refused']} refused, {c['failed']} failed); kept {', '.join(f'{k} {v}' for k, v in res['kept'].items()) or 'none'}"
+    )
+    print(f"fact links: {l['chunks']} chunks, {l['pairs']} pairs ({l['asked']} judged, {l['cached']} earlier), "
+          f"{l['links']} about links; {time.time() - t:.1f}s")
     return 0
 
 
@@ -82,8 +105,9 @@ def cmd_query(args) -> int:
     con = _db(args)
     try:
         ranker = make_ranker(args.ranker, con)
-        hits = search(con, args.text, k=args.k, pool=args.pool, ranker=ranker,
-                      expand_links=args.links, by_type=args.types, sources=args.source)
+        hits = search(con, args.text, k=args.k, pool=args.pool, ranker=ranker, expand_links=args.links,
+                      by_type=args.types, facts=make_judge(args.judge) if args.facts else None,
+                      sources=args.source)
     except CloudRefused as e:
         print(str(e), file=sys.stderr)
         return 3
@@ -116,14 +140,27 @@ def cmd_bench(args) -> int:
     con = _db(args)
     rows = bench.load(Path(args.file))
     try:
-        res = bench.run(con, rows, make_ranker(args.ranker, con), pool=args.pool, expand_links=args.links,
-                        by_type=args.types)
+        ranker = make_ranker(args.ranker, con)
+        if args.arms:
+            res = bench.run_arms(con, rows, ranker, make_judge(args.judge), pool=args.pool)
+        else:
+            res = bench.run(con, rows, ranker, pool=args.pool, expand_links=args.links, by_type=args.types,
+                            facts=make_judge(args.judge) if args.facts else None)
     except CloudRefused as e:
         print(str(e), file=sys.stderr)
         return 3
-    res["config"] = {"ranker": args.ranker, "links": args.links, "types": args.types, "pool": args.pool}
+    res["config"] = {"ranker": args.ranker, "links": args.links, "types": args.types, "pool": args.pool,
+                     "arms": args.arms, "judge": args.judge if args.arms else None}
     if args.json:
         print(json.dumps(res))
+    elif args.arms:
+        print(f"ranker={args.ranker} judge={args.judge} pool={args.pool}")
+        for arm in bench.ARMS:
+            r = res[arm]
+            n = r["n"]
+            print(f"  {arm:<8} pool {r['mean_pool']:>5}  in pool {r['in_pool']}/{n}  top-1 {r['top1']}/{n}  "
+                  f"top-5 {r['top5']}/{n}  top-10 {r['top10']}/{n}  nDCG@10 {r['ndcg@10']}")
+        print(f"  facts vs control: {res['facts_vs_control']}")
     else:
         n = res["n"]
         print(f"ranker={args.ranker} links={'on' if args.links else 'off'} types={'on' if args.types else 'off'} "
@@ -138,6 +175,9 @@ def cmd_labels(args) -> int:
     n = 0
     with open(args.out, "w", encoding="utf-8") as f:
         for r in con.execute("SELECT query, passage, noul, model, source FROM labels ORDER BY id"):
+            f.write(json.dumps({"kind": "relevance", **dict(r)}, ensure_ascii=False) + "\n")
+            n += 1
+        for r in con.execute("SELECT kind, question, passage, other, p, model, source FROM judgments ORDER BY id"):
             f.write(json.dumps(dict(r), ensure_ascii=False) + "\n")
             n += 1
     print(f"{n} labels -> {args.out}")
@@ -158,7 +198,18 @@ def main(argv=None) -> int:
     s.add_argument("--public", action="store_true", help="allow this source's text to be sent to a cloud ranker")
     s.add_argument("--exclude", action="append", metavar="GLOB", help="skip paths matching GLOB (repeatable)")
     s.add_argument("--full", action="store_true", help="drop the source and rebuild it from scratch")
+    s.add_argument("--facts", action="store_true", help="then judge content categories and fact links (see `facts`)")
+    s.add_argument("--judge", choices=JUDGES, default=os.environ.get("INVENTIO_JUDGE", "laya"),
+                   help="model for --facts: laya (local) or typesafe (cloud, public sources only)")
     s.set_defaults(fn=cmd_init)
+
+    s = sub.add_parser("facts", help="judge content categories and fact links for chunks that have none yet")
+    s.add_argument("--source", action="append", metavar="NAME", help="only this source (repeatable)")
+    s.add_argument("--judge", choices=JUDGES, default=os.environ.get("INVENTIO_JUDGE", "laya"),
+                   help="laya (local) or typesafe (cloud, public sources only)")
+    s.add_argument("--relink", action="store_true",
+                   help="look for neighbours of every categorized chunk, not only new ones (judged pairs are reused)")
+    s.set_defaults(fn=cmd_facts)
 
     s = sub.add_parser("sources", help="list indexed sources")
     s.set_defaults(fn=cmd_sources)
@@ -176,6 +227,11 @@ def main(argv=None) -> int:
         s.add_argument("--types", action="store_true",
                        help="ask the ranker which document types hold the answer and add BM25's best chunks "
                             "of those types to the pool (needs --ranker)")
+        s.add_argument("--facts", action="store_true",
+                       help="add BM25's best chunks of the query's predicted content categories and the chunks "
+                            "its top hits are linked to by judged fact links (needs `facts` run on the map)")
+        s.add_argument("--judge", choices=JUDGES, default=os.environ.get("INVENTIO_JUDGE", "laya"),
+                       help="model that predicts the query's categories for --facts / --arms")
 
     s = sub.add_parser("query", help="find the passages that answer a question")
     s.add_argument("text")
@@ -188,10 +244,12 @@ def main(argv=None) -> int:
     s = sub.add_parser("bench", help="measure a configuration on questions with known answers")
     s.add_argument("file", help="JSON Lines: question, source, path, start_line, end_line")
     s.add_argument("--json", action="store_true")
+    s.add_argument("--arms", action="store_true",
+                   help="compare base BM25, BM25 + --facts, and BM25 with a pool as large as the facts one")
     ranking(s)
     s.set_defaults(fn=cmd_bench)
 
-    s = sub.add_parser("labels", help="export TypeSafe judgments as fine-tuning data for Laya")
+    s = sub.add_parser("labels", help="export TypeSafe judgments (relevance, categories, fact links) as fine-tuning data for Laya")
     s.add_argument("out")
     s.set_defaults(fn=cmd_labels)
 

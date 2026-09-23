@@ -2,6 +2,13 @@
 
     python benchmarks/beir_bench.py scifact --rankers none,laya,typesafe
     python benchmarks/beir_bench.py coir-stackoverflow-qa --rankers laya --limit 300
+    python benchmarks/beir_bench.py scifact --arms --rankers none,typesafe
+
+`--arms` first has Jev judge the content categories and fact links of every chunk (facts.py;
+judgments are stored in the dataset's map and reused on a rerun), then compares three pools on
+the same queries: `base` (BM25's 30), `facts` (plus what the query's predicted categories and the
+judged links add) and `control` (BM25 grown to the facts pool's size), each reordered by every
+ranker. Per-query rows go to results/beir-<name>/arms.jsonl, totals to summary.json["arms"].
 
 The dataset is read from `<data>/beir/<name>` (fetch it with `benchmarks/data.py`). Each document
 becomes one Markdown file (`# title` + text) in a scratch tree next to the dataset, indexed with
@@ -22,6 +29,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from data import data_dir  # noqa: E402
+from inventio.bench import ARMS, arm_pools, paired, rank_arms  # noqa: E402
 from inventio.ingest import ingest_source  # noqa: E402
 from inventio.rankers import make_ranker  # noqa: E402
 from inventio.search import bm25, rank_key  # noqa: E402
@@ -30,7 +38,7 @@ from inventio.store import connect  # noqa: E402
 RESULTS = Path(__file__).resolve().parent / "results"
 
 
-def load_beir(d: Path):
+def load_beir(d: Path, split: str = "test"):
     corpus = {}
     for line in (d / "corpus.jsonl").open(encoding="utf-8"):
         r = json.loads(line)
@@ -40,13 +48,29 @@ def load_beir(d: Path):
         r = json.loads(line)
         queries[r["_id"]] = r["text"]
     qrels: dict[str, dict[str, int]] = {}
-    for i, line in enumerate((d / "qrels" / "test.tsv").open(encoding="utf-8")):
+    for i, line in enumerate((d / "qrels" / f"{split}.tsv").open(encoding="utf-8")):
         if i == 0:
             continue
         q, doc, s = line.rstrip("\n").split("\t")
         if int(s) > 0:
             qrels.setdefault(q, {})[doc] = int(s)
     return corpus, {q: queries[q] for q in qrels}, qrels
+
+
+def teach(con, args, queries) -> None:
+    """Teacher labels on the train split, for fine-tuning Laya (benchmarks/finetune_laya.py):
+    Jev's query categories and its relevance p for BM25's 30 candidates of every train query,
+    stored in the dataset's map. Test queries are never asked here."""
+    from inventio.facts import JevJudge, warm_query_categories
+    from inventio.rankers import TypeSafeRanker
+
+    t = time.time()
+    print(f"query categories: {warm_query_categories(con, JevJudge(), list(queries.values()))} asked", flush=True)
+    ranker = TypeSafeRanker(con)  # writes every (query, passage, p) into the map's labels table
+    for n, q in enumerate(queries.values(), 1):
+        ranker.score(q, bm25(con, q, args.pool, [args.dataset]))
+        if n % 50 == 0:
+            print(f"  relevance {n}/{len(queries)}  {time.time() - t:.0f}s", flush=True)
 
 
 def safe_name(doc_id: str) -> str:
@@ -69,6 +93,73 @@ def ndcg10(ranked: list[str], rel: dict[str, int]) -> float:
     return dcg / idcg if idcg else 0.0
 
 
+def load_cache(path: Path) -> dict:
+    cache = {}
+    if path.exists():
+        for line in path.open(encoding="utf-8"):
+            r = json.loads(line)
+            cache[(r["q"], r["chunk"])] = r["p"]
+    return cache
+
+
+def run_arms(con, args, queries, qrels, safe, out_dir, summary) -> None:
+    from inventio.facts import JevJudge, build, warm_query_categories
+
+    judge = JevJudge()
+    t = time.time()
+    res = build(con, judge, [args.dataset], relink=True)
+    print(f"facts: {json.dumps(res)} in {time.time() - t:.0f}s", flush=True)
+    t = time.time()
+    warm_query_categories(con, judge, list(queries.values()))
+    print(f"query categories in {time.time() - t:.0f}s", flush=True)
+    pools = {qid: arm_pools(con, q, judge, args.pool, [args.dataset]) for qid, q in queries.items()}
+    rows_path = out_dir / "arms.jsonl"
+    arms_summary = summary.setdefault("arms", {})
+    arms_summary["facts"] = {"categories": res["categories"], "links": res["links"], "kept": res["kept"]}
+    for rname in args.rankers.split(","):
+        ranker = make_ranker(rname, None)
+        cache_path = out_dir / f"scores-{rname}.jsonl"
+        cache = load_cache(cache_path)
+        nd = {a: [] for a in ARMS}
+        rec = {a: [] for a in ARMS}
+        size = {a: [] for a in ARMS}
+        unscored = 0
+        with cache_path.open("a", encoding="utf-8") as cf, rows_path.open("a", encoding="utf-8") as rf:
+            for n, (qid, q) in enumerate(queries.items(), 1):
+                scores = None
+                if ranker is not None:
+                    uniq = list({h.id: h for hs in pools[qid].values() for h in hs}.values())
+                    todo = [h for h in uniq if (qid, h.id) not in cache]
+                    if todo:
+                        for h, p in zip(todo, ranker.score(q, todo)):
+                            cache[(qid, h.id)] = p
+                            cf.write(json.dumps({"q": qid, "chunk": h.id, "p": p}) + "\n")
+                        cf.flush()
+                    scores = {h.id: cache[(qid, h.id)] for h in uniq}
+                    unscored += sum(p is None for p in scores.values())
+                for arm, hits in rank_arms(pools[qid], scores).items():
+                    ranked = list(dict.fromkeys(safe[Path(h.path).stem] for h in hits))
+                    nd[arm].append(ndcg10(ranked, qrels[qid]))
+                    rec[arm].append(len(set(ranked) & set(qrels[qid])) / len(qrels[qid]))
+                    size[arm].append(len(hits))
+                    rf.write(json.dumps({"q": qid, "ranker": rname, "arm": arm, "ndcg10": round(nd[arm][-1], 4),
+                                         "recall": round(rec[arm][-1], 4), "pool": len(hits),
+                                         "via": sorted({h.via.split(":")[0] for h in hits if h.via})}) + "\n")
+                if n % 100 == 0:
+                    print(f"  {rname} {n}/{len(queries)} " + " ".join(
+                        f"{a} {sum(nd[a]) / len(nd[a]):.3f}" for a in ARMS), flush=True)
+        arms_summary[rname] = {
+            **{a: {"queries": len(queries), "ndcg@10": round(sum(nd[a]) / len(nd[a]), 4),
+                   "recall@pool": round(sum(rec[a]) / len(rec[a]), 4),
+                   "mean_pool": round(sum(size[a]) / len(size[a]), 1)} for a in ARMS},
+            "facts_vs_control": paired(nd["control"], nd["facts"]),
+            "facts_vs_base": paired(nd["base"], nd["facts"]),
+            "unscored_pairs": unscored,  # firewall refusals and repeated timeouts: keep their BM25 place
+        }
+        print(rname, json.dumps(arms_summary[rname]), flush=True)
+        (out_dir / "summary.json").write_text(json.dumps(summary, indent=2))
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("dataset", help="name under <data>/beir, e.g. scifact or coir-stackoverflow-qa")
@@ -76,12 +167,14 @@ def main() -> int:
     ap.add_argument("--pool", type=int, default=30)
     ap.add_argument("--limit", type=int, default=0, help="first N test queries only")
     ap.add_argument("--data", help="data directory (default: user cache)")
+    ap.add_argument("--arms", action="store_true", help="base / facts / control pools (see module docstring)")
+    ap.add_argument("--teach", action="store_true", help="Jev labels on the train split (see teach())")
     args = ap.parse_args()
     ds = data_dir(args.data) / "beir" / args.dataset
     out_dir = RESULTS / f"beir-{args.dataset}"
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    corpus, queries, qrels = load_beir(ds)
+    corpus, queries, qrels = load_beir(ds, "train" if args.teach else "test")
     safe = {safe_name(d): d for d in corpus}
     if args.limit:
         queries = dict(list(queries.items())[: args.limit])
@@ -96,13 +189,16 @@ def main() -> int:
 
     summary_path = out_dir / "summary.json"
     summary = json.loads(summary_path.read_text()) if summary_path.exists() else {}
+    if args.teach:
+        teach(con, args, queries)
+        return 0
+    if args.arms:
+        (out_dir / "arms.jsonl").unlink(missing_ok=True)
+        run_arms(con, args, queries, qrels, safe, out_dir, summary)
+        return 0
     for rname in args.rankers.split(","):
         cache_path = out_dir / f"scores-{rname}.jsonl"
-        cache = {}
-        if cache_path.exists():
-            for line in cache_path.open(encoding="utf-8"):
-                r = json.loads(line)
-                cache[(r["q"], r["chunk"])] = r["p"]
+        cache = load_cache(cache_path)
         ranker = make_ranker(rname, None)
         nd, rec, fresh_secs, fresh_n = [], [], 0.0, 0
         with cache_path.open("a", encoding="utf-8") as cf:
