@@ -24,10 +24,12 @@ def gold_rank(hits, g: dict) -> int | None:
     return None
 
 
-def run(con, rows: list[dict], ranker, *, pool: int = 30, expand_links: bool = False) -> dict:
+def run(con, rows: list[dict], ranker, *, pool: int = 30, expand_links: bool = False,
+        by_type: bool = False) -> dict:
     ranks, t0 = [], time.time()
     for g in rows:
-        hits = search(con, g["question"], k=10_000, pool=pool, ranker=ranker, expand_links=expand_links)
+        hits = search(con, g["question"], k=10_000, pool=pool, ranker=ranker, expand_links=expand_links,
+                      by_type=by_type)
         ranks.append(gold_rank(hits, g))
     n = len(rows)
     at = lambda k: sum(1 for r in ranks if r is not None and r <= k)

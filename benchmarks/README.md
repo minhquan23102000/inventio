@@ -28,6 +28,7 @@ python benchmarks/beir_bench.py scifact --rankers none,laya,typesafe
 python benchmarks/beir_bench.py coir-stackoverflow-qa --rankers none
 python benchmarks/beir_bench.py coir-stackoverflow-qa --rankers none,laya,typesafe --limit 300
 python benchmarks/swe_bench.py --rankers none,laya,typesafe
+python benchmarks/swe_bench.py --types --variants mixed --rankers none,typesafe
 ```
 
 Data goes to `<user cache>/inventio/bench` (`--data` or `INVENTIO_BENCH_DATA` to move it), never
@@ -62,6 +63,37 @@ first five:
 
 Cost per query: BM25 35-140 ms; Laya 0.6-0.9 s on the laptop GPU; TypeSafe 1.0-1.3 s. Indexing
 a repository at one commit takes 6 s (`code`) to 14 s (`mixed`) on average.
+
+### Widening the pool by document type (SWE-bench Lite `mixed`)
+
+Every file carries a document type decided by code from its path (`SoftwareSourceCode`,
+`Test`, `Configuration`, `Article`). With `--types`, Jev is asked once per query which types
+would hold the answer, and BM25's best 30 chunks inside each likely type join the pool. Three
+arms on the same 300 issues, same index, same ranker:
+
+| Arm | Candidates (mean) | Gold in the pool | BM25 nDCG@10 | + TypeSafe nDCG@10 | + TypeSafe top 1 | top 5 |
+|---|---|---|---|---|---|---|
+| `base`: BM25's 30 | 30 | 63% | 0.401 | 0.511 | 40% | 58% |
+| `control`: BM25's top N, N as large as the widened pool | 56.5 | 72% | 0.402 | 0.560 | 43% | 64% |
+| `types`: BM25's 30 + the predicted types' best | 56.5 | **81%** | 0.402 | **0.627** | **47%** | **71%** |
+
+- The control is what makes this a finding: `types` and `control` hand the ranker the same
+  number of candidates, and the typed pool holds the gold file for 30 issues the larger BM25
+  pool misses (2 the other way). With TypeSafe, `types` beats `control` on 45 issues and
+  loses on 17 (238 tie); mean nDCG@10 gain 0.067, 95% bootstrap interval 0.042 to 0.094.
+- Without a ranker the widened chunks sit after BM25's, so only the pool ceiling moves; the
+  gain arrives when a ranker can reorder them.
+- The types that widened the pool: `SoftwareSourceCode` on 268 of 300 issues, `Article` on
+  190. On a repository the typed pass lets code in past the docs and tests that crowd BM25's 30.
+- `base` gives 0.511 here against 0.515 in the table above: this index was built with the
+  `code` extra, so the repositories' non-Python files are cut by tree-sitter.
+- Cost: one type question per query (about 0.8 s over the network) plus scoring 26 more
+  candidates (2.2 s per query in total against 1.0 s for `control`).
+- The type question went to Jev in every arm, including the BM25 rows. Laya as the type
+  predictor was not measured.
+
+Results: `results/swe-lite-types/` (one line per issue, ranker and arm, with Jev's type
+probabilities and the types that widened the pool).
 
 Published retrievers on the same test sets (nDCG@10, single-stage, whole corpus):
 

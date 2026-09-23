@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS files (
     source_id INTEGER NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
     path TEXT NOT NULL,
     lang TEXT NOT NULL,
+    type TEXT,
     size INTEGER,
     mtime_ns INTEGER,
     sha1 TEXT,
@@ -101,9 +102,9 @@ def connect(path: Path | None = None) -> sqlite3.Connection:
     con.execute("PRAGMA foreign_keys = ON")
     con.execute("PRAGMA journal_mode = WAL")
     con.executescript(SCHEMA)
-    # maps built before incremental indexing lack the fingerprint columns; NULL reads as "changed"
+    # maps built by earlier versions lack these columns; NULL reads as "changed" or "retype"
     have = {r["name"] for r in con.execute("PRAGMA table_info(files)")}
-    for col, kind in (("size", "INTEGER"), ("mtime_ns", "INTEGER"), ("sha1", "TEXT")):
+    for col, kind in (("size", "INTEGER"), ("mtime_ns", "INTEGER"), ("sha1", "TEXT"), ("type", "TEXT")):
         if col not in have:
             con.execute(f"ALTER TABLE files ADD COLUMN {col} {kind}")
     return con

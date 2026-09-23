@@ -12,6 +12,7 @@ license = { text = "Apache-2.0" }
 dependencies = []
 
 [project.optional-dependencies]
+code = ["tree-sitter-language-pack>=1.0"]
 laya = ["laya>=0.3.6"]
 typesafe = ["typesafe-sdk>=0.7"]
 bench = ["datasets"]

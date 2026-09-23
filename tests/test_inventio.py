@@ -131,3 +131,83 @@ def test_cloud_ranker_refuses_private_sources(tmp_path, capsys, monkeypatch):
     code, out = run(capsys, "--db", db, "query", "mule activity", "--ranker", "typesafe")
     assert code == 3
     assert "bank" in out.err
+
+
+def test_tree_sitter_definitions_carry_coordinates_and_links(tmp_path, capsys):
+    pytest.importorskip("tree_sitter_language_pack")
+    db = str(tmp_path / "map.db")
+    repo, wiki = tmp_path / "repo", tmp_path / "wiki"
+    write(repo, "models/score_daily.sql", """
+        -- one row per customer per day
+        create table risk.daily_score as
+        select customer_id, sum(amount) amt from txn group by 1;
+
+        create view risk.v_alerts as select * from risk.daily_score where amt > 1000;
+    """)
+    ts = write(repo, "src/rules.ts", """
+        import { Txn } from "./txn";
+
+        export class Velocity {
+          limit = 5;
+
+          /** txns in the last hour above the limit */
+          breached(txns: Txn[]): boolean {
+            return txns.length > this.limit;
+          }
+        }
+
+        export const muleScore = (t: Txn) => t.amount * 0.3;
+    """)
+    write(wiki, "alerts.md", "# Alerts\nAlerts read `risk.daily_score` every morning.\n")
+    run(capsys, "--db", db, "init", str(repo), "--name", "repo")
+    run(capsys, "--db", db, "init", str(wiki), "--name", "wiki")
+
+    lines = ts.read_text(encoding="utf-8").split("\n")
+    by_name = {c.heading_path: c for c in chunk_file("\n".join(lines), "typescript", "src/rules.ts")}
+    assert (by_name["Velocity"].start_line, by_name["Velocity"].end_line) == (3, 10)
+    assert (by_name["muleScore"].kind, by_name["muleScore"].start_line) == ("function", 12)
+
+    top = json.loads(run(capsys, "--db", db, "query", "alerts every morning", "--json", "--source", "wiki")[1].out)[0]
+    assert ("mentions", "repo", "models/score_daily.sql:1-3") in {(l["rel"], l["source"], l["coord"]) for l in top["links"]}
+
+
+class FakeRanker:
+    """Says the answer is in a test; scores nothing, so the order stays BM25 then widened."""
+
+    def __init__(self, cloud=False):
+        self.cloud = cloud
+
+    def types(self, query, types):
+        return {t: (0.9 if t == "Test" else 0.1 / len(types)) for t in types}
+
+    def score(self, query, hits):
+        return [None] * len(hits)
+
+
+def test_type_widening_only_adds_and_respects_privacy(tmp_path, capsys):
+    from inventio.search import search
+    from inventio.rankers import CloudRefused
+    from inventio.store import connect
+
+    db = tmp_path / "map.db"
+    repo = tmp_path / "repo"
+    for i in range(3):
+        write(repo, f"docs/limits{i}.md", f"# Limits {i}\nthe velocity limit is five per hour, note {i}\n")
+    write(repo, "tests/test_cap.py", """
+        def test_velocity_cap():
+            txns = make_txns(count=6, window="1h")
+            assert flagged(txns)
+            assert not flagged(txns[:5])
+    """)
+    run(capsys, "--db", str(db), "init", str(repo), "--name", "repo", "--public")
+    con = connect(db)
+
+    plain = search(con, "velocity limit", k=100, pool=2)
+    wide = search(con, "velocity limit", k=100, pool=2, ranker=FakeRanker(), by_type=True)
+    assert [h.id for h in wide[:len(plain)]] == [h.id for h in plain]
+    added = wide[len(plain):]
+    assert [(h.path, h.type, h.via) for h in added] == [("tests/test_cap.py", "Test", "type:Test")]
+
+    run(capsys, "--db", str(db), "init", str(tmp_path / "repo" / "docs"), "--name", "notes")  # private
+    with pytest.raises(CloudRefused, match="notes"):
+        search(con, "velocity limit", pool=2, ranker=FakeRanker(cloud=True), by_type=True)

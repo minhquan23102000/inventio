@@ -21,6 +21,7 @@ calls it.
 
 ```sh
 pip install -e .                 # core: standard library only (sqlite3 with FTS5)
+pip install -e ".[code]"         # tree-sitter grammars: cut Java, Scala, SQL, TS, Go... at definitions
 pip install -e ".[laya]"         # local ranker (torch + transformers)
 pip install -e ".[typesafe]"     # cloud ranker; needs TYPESAFE_API_KEY
 ```
@@ -36,11 +37,14 @@ inventio query "which job recomputes customer risk overnight?"
 inventio query "..." --ranker laya              # local GPU/CPU
 inventio query "..." --ranker typesafe --source wiki
 inventio query "..." --json                     # for agents
+inventio query "..." --ranker typesafe --types  # also search inside the document types it predicts
 ```
 
-Each result shows where it lives and where it leads:
+Results are grouped by document type, groups in the order of their best hit; each result
+shows where it lives and where it leads:
 
 ```
+== Article
 1. wiki:runbook.md:1-2  Daily scoring
    The nightly job `fraud_score_daily` recomputes customer risk before the morning review.
    -> mentions rules:jobs/score.py:1-2  (fraud_score_daily)
@@ -61,16 +65,24 @@ Set a default ranker with `INVENTIO_RANKER`.
 Everything the source already knows is read by code, not guessed by a model.
 
 1. **Structure.** Markdown is cut at headings (fenced code is respected), Python at top-level
-   functions and classes (large classes at their methods), anything else at blank-line blocks
-   of about 1,500 characters. The file path and heading path of each chunk are indexed next
-   to its text, so BM25 can match on where a passage sits as well as on what it says.
-2. **Links.** Drawn by code, named with schema.org's `CreativeWork` vocabulary:
+   functions and classes (large classes at their methods). With the `code` extra, tree-sitter
+   does the same for JavaScript, TypeScript, Java, Scala, Kotlin, Go, Rust, C/C++, C#, Ruby,
+   PHP, Swift, Lua, Bash and SQL (a `CREATE TABLE` or `CREATE VIEW` is one definition, named
+   by its table). Anything else, or those languages without the extra, is cut at blank-line
+   blocks of about 1,500 characters. The file path and heading path of each chunk are indexed
+   next to its text, so BM25 can match on where a passage sits as well as on what it says.
+2. **Types.** Every file gets one document type from its path, never from a model:
+   `SoftwareSourceCode` and `Article` (schema.org), and `Test` and `Configuration`, this
+   tool's own words because schema.org has none. `--types` asks the ranker which types would
+   hold the answer and adds BM25's best chunks of each likely type to the pool. It only adds:
+   a wrong guess costs extra candidates, never an answer plain BM25 had found.
+3. **Links.** Drawn by code, named with schema.org's `CreativeWork` vocabulary:
    - `citation`: a Markdown link to a file or a heading, resolved to the chunk it points at.
-   - `mentions`: a chunk names an identifier another chunk defines (a Python function or
-     class), or chunks in different files share a rare identifier-shaped token
+   - `mentions`: a chunk names an identifier another chunk defines (a function, class or
+     table), or chunks in different files share a rare identifier-shaped token
      (`fraud_score_daily`, `risk.daily.score`, `FRAML-123`). This is the bridge between a
      repository and the prose written about it, and it works across sources.
-3. **Ranking.** BM25 (SQLite FTS5, diacritics folded) picks 30 candidates; the ranker asks one
+4. **Ranking.** BM25 (SQLite FTS5, diacritics folded) picks 30 candidates; the ranker asks one
    yes/no question per candidate with explicit criteria ("states the specific answer" versus
    "only on a related topic") and sorts by the probability.
 
@@ -108,6 +120,11 @@ What the rows say:
   78%), matches a 7B embedder on SciFact, and gains 0.12 on StackOverflow QA but stays under
   the strongest embedders there: the answer is among the 30 candidates for only 80% of those
   questions, so no reordering of them can pass 0.805. The candidate pool is the next limit.
+- **Whole repositories.** Indexed with its tests, docs and configs, SWE-bench Lite drops to
+  0.511 with TypeSafe, because tests and docs push the fix's files out of the 30 candidates.
+  `--types` lifts it to 0.627 (the gold file in the pool for 81% of issues instead of 63%),
+  against 0.560 for a plain BM25 pool of the same size. Details in
+  [benchmarks/README.md](benchmarks/README.md#widening-the-pool-by-document-type-swe-bench-lite-mixed).
 - **Laya** is a small decision model that runs on your own GPU, so private sources never
   leave the machine. Out of the box it ranks worse than no model at all; its author calls it
   "a fast base to specialise". It is meant to learn from Jev: every TypeSafe ranking on a
@@ -167,7 +184,9 @@ One question per line; a result counts when it overlaps the lines you name:
 
 - Every source is private unless you pass `--public` to `init`.
 - `--ranker typesafe` refuses (exit code 3) when any candidate comes from a private source, and
-  sends nothing. Narrow the query with `--source`, or rank locally with `--ranker laya`.
+  sends nothing. With `--types` it refuses when any source in scope is private, because the
+  widened pool can reach any of them. Narrow the query with `--source`, or rank locally with
+  `--ranker laya`.
 - The map file contains source text. It is ignored by this repository's `.gitignore` and is
   written outside the indexed trees; keep it that way.
 
