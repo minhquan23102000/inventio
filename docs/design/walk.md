@@ -33,9 +33,10 @@ Updated: 2026-09-23
   - StackOverflow QA (CoIR, văn bản trộn code): BM25 0,670 trên 1.994 câu (công bố 0,568); 300 câu đầu: BM25 0,713, Laya 0,203, TypeSafe 0,837.
   - SWE-bench Lite `code` (CodeRAG-Bench): BM25 0,540 (công bố 0,430), Laya 0,391, TypeSafe 0,696; có file cần sửa ở hạng 1 là 38% → 56%, trong top-5 là 64% → 78%.
   - SWE-bench Lite `mixed` (cả repo: code, test, docs): BM25 0,400, TypeSafe 0,515; trần pool tụt 0,823 → 0,633. Trên repo hỗn hợp, cái giới hạn là pool 30 ứng viên, không phải bộ chấm.
-- Next move: Zero đưa repo + Confluence và 20-30 câu hỏi thật; đo lại `--links` trên bộ đó. Việc kế tiếp về kỹ thuật: pool cho repo hỗn hợp; tree-sitter cho SQL/Java/Scala (dbt, Flink), Python giữ `ast`.
+- Next move: Zero đưa repo + Confluence và 20-30 câu hỏi thật; đo lại `--links` trên bộ đó. Việc kế tiếp về kỹ thuật: pool cho repo hỗn hợp; link dbt `ref()`/`source()`; tree-sitter cho SQL/Java/Scala, Python giữ `ast`.
 
 ## Decisions
+- Tree-sitter để sau demo (2026-09-23, Zero: "Demo general nên không sao"). Lý do: bench toàn Python/văn bản nên tree-sitter không đổi số nào; chỗ yếu đo được là pool trên repo hỗn hợp; đổi cách cắt đoạn trước demo thì phải đo lại toàn bộ. Làm khi đưa repo Java/Scala (Flink) thật vào, theo mẫu `clerk.py`: `tree_sitter_language_pack` là phụ thuộc tuỳ chọn, thiếu thì quay về cách cũ.
 - Link expansion mặc định tắt: đo trên markdown không thắng BM25 (correction trigger đầu tiên của map đã kích hoạt). Đảo lại nếu bộ repo + Confluence cho thấy nó kéo thêm đáp án vào pool.
 - Bộ chấm mặc định `none`: Laya zero-shot tệ hơn BM25; TypeSafe là cloud nên phải bật tường minh.
 - Tên: Inventio, lệnh `inventio` (2026-09-23). Zero bác `laya-atlas` ("tôi không thích", muốn "có tính sử thi"), rồi bác Lạc Thư ("nên đặt tiếng anh hoặc latin"). Inventio là canon thứ nhất của tu từ học, từ *invenire*, "tìm thấy": tìm chất liệu có sẵn trong các *loci*, khớp với nguyên tắc cấu trúc lấy từ chính source. Tên còn trống trên PyPI.
