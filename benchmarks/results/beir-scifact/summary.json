@@ -1,0 +1,23 @@
+{
+  "none": {
+    "queries": 300,
+    "ndcg@10": 0.6703,
+    "recall@30chunks": 0.8494,
+    "sec_per_query": 0.013,
+    "timed_queries": 300
+  },
+  "laya": {
+    "queries": 300,
+    "ndcg@10": 0.3017,
+    "recall@30chunks": 0.8494,
+    "sec_per_query": null,
+    "timed_queries": 0
+  },
+  "typesafe": {
+    "queries": 300,
+    "ndcg@10": 0.765,
+    "recall@30chunks": 0.8494,
+    "sec_per_query": null,
+    "timed_queries": 0
+  }
+}

@@ -70,7 +70,15 @@ Everything the source already knows is read by code, not guessed by a model.
 
 ## Measured
 
-40 questions over 2,132 chunks of Markdown (126 files: design maps, agent skills, logs, in
+On public benchmarks (SciFact, StackOverflow QA, SWE-bench Lite) BM25 through Inventio's
+structure scores 0.540 nDCG@10 on SWE-bench Lite file retrieval against the published BM25's
+0.430, and TypeSafe reranking lifts it to 0.696. Zero-shot Laya lowers every score. Numbers,
+method and one-command reproduction: [benchmarks/](benchmarks/README.md).
+
+The design record behind the tool (why no embeddings, what was measured and dropped) is in
+[docs/design/](docs/design/): `map.md` is the orientation map, `walk.md` the build log.
+
+On an own corpus: 40 questions over 2,132 chunks of Markdown (126 files: design maps, agent skills, logs, in
 Vietnamese and English). Each question was written by a small LLM from one passage, picked at
 random from 40 different files; the answer is that passage. The bench file format is below.
 

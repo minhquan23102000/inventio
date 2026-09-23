@@ -1,0 +1,30 @@
+{
+  "none": {
+    "queries": 1994,
+    "ndcg@10": 0.6699,
+    "recall@30chunks": 0.8049,
+    "sec_per_query": 0.139,
+    "timed_queries": 1994
+  },
+  "none@first300": {
+    "queries": 300,
+    "ndcg@10": 0.7128,
+    "recall@30chunks": 0.8533,
+    "sec_per_query": 0.133,
+    "timed_queries": 300
+  },
+  "laya@first300": {
+    "queries": 300,
+    "ndcg@10": 0.2032,
+    "recall@30chunks": 0.8533,
+    "sec_per_query": null,
+    "timed_queries": 0
+  },
+  "typesafe@first300": {
+    "queries": 300,
+    "ndcg@10": 0.8372,
+    "recall@30chunks": 0.8533,
+    "sec_per_query": 1.195,
+    "timed_queries": 85
+  }
+}

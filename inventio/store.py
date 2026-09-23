@@ -74,12 +74,16 @@ CREATE TABLE IF NOT EXISTS labels (
 """
 
 
+def cache_dir() -> Path:
+    base = os.environ.get("LOCALAPPDATA") or os.environ.get("XDG_CACHE_HOME") or str(Path.home() / ".cache")
+    return Path(base) / "inventio"
+
+
 def default_db() -> Path:
     env = os.environ.get("INVENTIO_DB")
     if env:
         return Path(env)
-    base = os.environ.get("LOCALAPPDATA") or os.environ.get("XDG_CACHE_HOME") or str(Path.home() / ".cache")
-    return Path(base) / "inventio" / "map.db"
+    return cache_dir() / "map.db"
 
 
 def connect(path: Path | None = None) -> sqlite3.Connection:
