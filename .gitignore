@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+.venv/
+.pytest_cache/
+# a map file carries source text; never commit one
+*.db
+*.db-wal
+*.db-shm
+labels*.jsonl
