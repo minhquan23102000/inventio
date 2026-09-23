@@ -1,0 +1,9 @@
+{
+  "none": {
+    "queries": 788,
+    "ndcg@10": 0.5426,
+    "recall@30chunks": 0.8147,
+    "sec_per_query": 0.248,
+    "timed_queries": 788
+  }
+}

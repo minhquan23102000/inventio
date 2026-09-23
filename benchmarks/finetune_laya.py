@@ -1,153 +1,199 @@
-"""Fine-tune Laya on Jev's judgments, on this machine's GPU.
+"""Fine-tune Laya as Inventio's local ranker, on this machine's GPU, from human labels only.
 
     python benchmarks/finetune_laya.py --time-steps 40      # measure, print the projected run time, exit
-    python benchmarks/finetune_laya.py                      # the overnight run
+    python benchmarks/finetune_laya.py                      # the full run
     set INVENTIO_LAYA_MODEL=%LOCALAPPDATA%\\inventio\\laya-tuned   # then Inventio uses the tuned Laya
 
-Teacher data: every judgment Jev left in the maps (the default map and the BEIR benchmark maps):
-content categories of chunks and of queries, same-thing judgments between chunks (facts.py) and
-relevance of a passage to a query (rankers.py). Each becomes one training item in the form Laya
-reads at inference, with Jev's p as a soft target.
+Laya learns the one question the ranker asks (rankers.INSTRUCTIONS / CRITERIA: does the passage
+answer the query?), in the exact form it reads at query time: the query and a passage rendered as
+`[path > heading]` + text. No label comes from a model. Two kinds of item:
 
-Kept out of training, so a later benchmark of the tuned Laya is not measured on what it learned:
-- every test query of the three benchmarks (.omp bench-md.jsonl, SciFact test, StackOverflow QA
-  test), as a relevance query and as a query-category passage;
-- every chunk that is a gold answer of one of those queries, on either side of a pair;
-- a fixed 10% of all other chunks (sha1 of the passage), written to <out>/holdout.jsonl so the
-  tuned Laya can later be scored against Jev on judgments it never saw.
+- relevance: the train split of three public benchmarks with human-annotated answers, SciFact
+  (English science), StackOverflow QA (English, code) and Zalo legal (Vietnamese law). Each train
+  query gives its answer chunks as positives and four of BM25's 30 candidates that are not
+  answers as hard negatives (two from ranks 1-10, two from 11-30), the candidates the ranker
+  actually has to separate.
+- title: a document's own title as the query and its first chunk, heading removed, as the
+  positive; BM25's candidates for that title from other documents as negatives, with their
+  headings removed too, so a missing heading is not a cue. Titles are kept only when they have at
+  least four words and occur once in the corpus. SciFact paper titles and Zalo article titles.
 
-The loop is the author's (notebooks/laya_finetune_typed_decisions_2xT4_kaggle.ipynb in
-NandhaKishorM/laya): policy gradient on a proper scoring rule plus soft cross-entropy, then one
-temperature per question type fitted on 400 held-out items. Ported to one GPU with bf16; the
-token-embedding matrix (197M of the 322M parameters) is frozen so the optimiser fits in 8 GB.
+Targets are 0.95 / 0.05, not 1 / 0: qrels are incomplete and a BM25 negative can be an unmarked
+answer. On half of the groups the path is dropped from the passage (`[heading]` + text), so the
+model cannot lean on file names or document ids.
+
+Kept out of training: every test query of the three benchmarks, and every document that answers
+one (no title item is built from it). 10% of the train queries and of the titles (sha1) are held
+out; for them all 30 BM25 candidates are scored, in their natural proportion of answers, and split
+in two: one half fits the temperature, the other is the report (AUC, Brier, and nDCG@10 of the 30
+candidates reordered, against BM25's own order), for the published Laya and the tuned one.
+
+The loop is the one in the Laya author's fine-tuning notebook
+(notebooks/laya_finetune_typed_decisions_2xT4_kaggle.ipynb in NandhaKishorM/laya): policy
+gradient on a proper scoring rule plus soft cross-entropy. Ported to one GPU with bf16, with a 5%
+linear warm-up before the cosine decay; the token-embedding matrix (197M of the 322M parameters)
+is frozen so the optimiser fits in 8 GB, which also keeps every language's token vectors as the
+base model learned them.
 """
 
 import argparse
 import hashlib
 import json
+import math
 import os
 import random
-import sqlite3
 import sys
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from beir_bench import load_beir, safe_name  # noqa: E402
 from data import data_dir  # noqa: E402
-from inventio.facts import category_question, passage as passage_of, query_category_question, same_question  # noqa: E402
 from inventio.rankers import CRITERIA, INSTRUCTIONS  # noqa: E402
-from inventio.store import default_db  # noqa: E402
+from inventio.search import bm25  # noqa: E402
+from inventio.store import connect  # noqa: E402
 
-HERE = Path(__file__).resolve().parent
-BEIR = ("scifact", "coir-stackoverflow-qa")
+DATASETS = ("scifact", "coir-stackoverflow-qa", "zalo-legal")
+TITLES = ("scifact", "zalo-legal")  # corpora whose documents carry a real title
 HOLDOUT = 0.10
+POOL = 30
+POS, NEG = 0.95, 0.05
+SEED = 20260923
 
 
 def sha(s: str) -> str:
     return hashlib.sha1(s.encode("utf-8")).hexdigest()
 
 
-# ------------------------------------------------------------------------------ what is excluded
-
-def omp_tests(con) -> tuple[set[str], set[str]]:
-    """The .omp bench questions and the passages of the chunks that answer them."""
-    queries, gold = set(), set()
-    for line in (HERE.parent / "docs" / "design" / "evidence" / "bench-md.jsonl").read_text(encoding="utf-8").splitlines():
-        if not line.strip():
-            continue
-        g = json.loads(line)
-        queries.add(g["question"])
-        for r in con.execute(
-            "SELECT f.path, c.heading_path, c.text FROM chunks c JOIN files f ON f.id = c.file_id "
-            "JOIN sources s ON s.id = f.source_id WHERE s.name = ? AND f.path = ? AND c.start_line <= ? AND c.end_line >= ?",
-            (g["source"], g["path"], g["end_line"], g["start_line"]),
-        ):
-            gold.add(passage_of(r["path"], r["heading_path"], r["text"]))
-    return queries, gold
+def held(key: str) -> bool:
+    return int(sha(key)[:8], 16) / 0xFFFFFFFF < HOLDOUT
 
 
-def beir_tests(ds: Path, con) -> tuple[set[str], set[str]]:
-    qtext = {}
-    for line in (ds / "queries.jsonl").open(encoding="utf-8"):
-        r = json.loads(line)
-        qtext[r["_id"]] = r["text"]
-    queries, docs = set(), set()
-    for i, line in enumerate((ds / "qrels" / "test.tsv").open(encoding="utf-8")):
-        if i == 0:
-            continue
-        q, d, s = line.rstrip("\n").split("\t")
-        queries.add(qtext[q])
-        docs.add(f"docs/{d.replace('/', '_')}.md")
-    gold = set()
-    for r in con.execute("SELECT f.path, c.heading_path, c.text FROM chunks c JOIN files f ON f.id = c.file_id"):
-        if r["path"] in docs:
-            gold.add(passage_of(r["path"], r["heading_path"], r["text"]))
-    return queries, gold
+def render(h, *, heading: bool, path: bool) -> str:
+    """Hit.passage(), optionally without its heading or its path."""
+    head = " > ".join(x for x in (h.path if path else "", h.heading_path if heading else "") if x)
+    return f"[{head}]\n{h.text}" if head else h.text
 
 
-# ------------------------------------------------------------------------------ teacher data
-
-def collect(maps: list[tuple[str, Path]]) -> tuple[list[dict], dict]:
-    rows, test_q, test_p, report = [], set(), set(), {}
-    for name, path in maps:
-        con = sqlite3.connect(path)
-        con.row_factory = sqlite3.Row
-        q, p = omp_tests(con) if name == "omp" else beir_tests(path.parent, con)
-        test_q |= q
-        test_p |= p
-        n0 = len(rows)
-        for r in con.execute("SELECT kind, question, passage, other, p, model, source FROM judgments"):
-            rows.append(dict(r))
-        for r in con.execute("SELECT query, passage, noul, model, source FROM labels"):
-            rows.append({"kind": "relevance", "question": "rel", "passage": r["passage"], "other": r["query"],
-                         "p": r["noul"], "model": r["model"], "source": r["source"]})
-        report[name] = {"judgments": len(rows) - n0, "test_queries": len(q), "gold_passages": len(p)}
-        con.close()
-    return rows, {"test_queries": test_q, "test_passages": test_p, "per_map": report}
+def doc_of(h) -> str:
+    return Path(h.path).stem
 
 
-def split(rows: list[dict], tests: dict) -> tuple[list[dict], list[dict], dict]:
-    tq, tp = tests["test_queries"], tests["test_passages"]
-    held = lambda s: int(sha(s)[:8], 16) / 0xFFFFFFFF < HOLDOUT
-    train, holdout, dropped = [], [], {"test_query": 0, "gold_chunk": 0}
+# ------------------------------------------------------------------------------ groups
+
+def relevance_groups(name: str, ds: Path, con, rng):
+    """One group per train query: (held out?, a function building the group). BM25 runs only
+    when the group is built, so a source whose share is full skips its remaining queries cheaply."""
+    _, train_q, train_rel = load_beir(ds, "train")
+    _, test_q, _ = load_beir(ds, "test")
+    qids = [q for q in train_rel if q in train_q and q not in test_q]
+    rng.shuffle(qids)
+    for qid in qids:
+        q, gold = train_q[qid], {safe_name(d) for d, s in train_rel[qid].items() if s > 0}
+
+        def make(q=q, gold=gold):
+            hits = bm25(con, q, POOL, [name])
+            got = {doc_of(h) for h in hits}
+            extra = [c for c in (gold_chunk(con, name, d) for d in sorted(gold - got)[:1]) if c]
+            return {"src": f"{name}:relevance", "query": q, "heading": True, "hits": hits,
+                    "gold": [i for i, h in enumerate(hits) if doc_of(h) in gold], "extra": extra}
+
+        yield held(f"{name}\t{q}"), make
+
+
+def title_groups(name: str, ds: Path, con, rng):
+    """One group per unique title: the title as query, its document's first chunk as the answer."""
+    _, _, test_rel = load_beir(ds, "test")
+    banned = {safe_name(d) for rel in test_rel.values() for d in rel}
+    rows = con.execute(
+        "SELECT f.path, c.heading_path, c.text, min(c.start_line) FROM chunks c JOIN files f ON f.id = c.file_id "
+        "JOIN sources s ON s.id = f.source_id WHERE s.name = ? GROUP BY c.file_id", (name,)).fetchall()
+    count: dict[str, int] = {}
     for r in rows:
-        if r["kind"] == "relevance" and r["other"] in tq or r["kind"] == "query_category" and r["passage"] in tq:
-            dropped["test_query"] += 1
-            continue
-        chunks = [r["passage"]] + ([r["other"]] if r["kind"] == "same_thing" else [])
-        if r["kind"] != "query_category" and any(c in tp for c in chunks):
-            dropped["gold_chunk"] += 1
-            continue
-        (holdout if r["kind"] != "query_category" and any(held(c) for c in chunks) else train).append(r)
-    return train, holdout, dropped
-
-
-def question(r: dict) -> tuple[dict, dict]:
-    """The (state, question) Laya reads for a judgment, identical to inference (facts.py, rankers.py)."""
-    k = r["kind"]
-    if k == "category":
-        return {"passage": r["passage"]}, category_question(r["question"])
-    if k == "query_category":
-        return {"query": r["passage"]}, query_category_question(r["question"])
-    if k == "same_thing":
-        return {"passage": r["passage"], "n0": r["other"]}, same_question("n0")
-    return {"query": r["other"], "passage": r["passage"]}, {"instructions": INSTRUCTIONS, "criteria": CRITERIA}
-
-
-def sample(rows: list[dict], n: int, seed: int = 20260923) -> list[dict]:
-    """At most n items, spread evenly over (kind, Jev said true / false) so the rare kinds and the
-    rare positives are not drowned by eight negative category questions per chunk."""
-    rng = random.Random(seed)
-    buckets: dict[tuple, list] = {}
+        count[r["heading_path"]] = count.get(r["heading_path"], 0) + 1
+    rows = [r for r in rows if count[r["heading_path"]] == 1 and Path(r["path"]).stem not in banned]
+    rng.shuffle(rows)
     for r in rows:
-        buckets.setdefault((r["kind"], r["p"] >= 0.5), []).append(r)
-    out, left = [], n
-    for i, (b, items) in enumerate(sorted(buckets.items(), key=lambda kv: len(kv[1]))):
-        take = min(len(items), left // (len(buckets) - i))
-        out += rng.sample(items, take)
-        left -= take
-    rng.shuffle(out)
-    return out
+        title = r["heading_path"].split(" > ")[-1]
+        q = title.split(". ", 1)[1] if title.startswith("Điều ") and ". " in title else title  # "Điều 5. ..."
+        if len(q.split()) < 4:
+            continue
+        own = SimpleNamespace(path=r["path"], heading_path=r["heading_path"], text=r["text"])
+
+        def make(q=q, own=own):
+            hits = [h for h in bm25(con, q, POOL + 5, [name]) if h.path != own.path][:POOL - 1]
+            return {"src": f"{name}:title", "query": q, "heading": False, "hits": [own] + hits, "gold": [0], "extra": []}
+
+        yield held(f"{name}\t{r['path']}"), make
+
+
+def gold_chunk(con, name: str, doc: str):
+    """The first chunk of an answer document BM25 did not put among its 30."""
+    r = con.execute(
+        "SELECT f.path, c.heading_path, c.text FROM chunks c JOIN files f ON f.id = c.file_id "
+        "JOIN sources s ON s.id = f.source_id WHERE s.name = ? AND f.path = ? ORDER BY c.start_line LIMIT 1",
+        (name, f"docs/{doc}.md")).fetchone()
+    return SimpleNamespace(path=r["path"], heading_path=r["heading_path"], text=r["text"]) if r else None
+
+
+def train_items(g, rng) -> list[dict]:
+    """Answers and four hard negatives of a group, in one rendering (path dropped half the time)."""
+    path = rng.random() < 0.5
+    rend = lambda h: render(h, heading=g["heading"], path=path)  # noqa: E731
+    pos = [g["hits"][i] for i in g["gold"][:2]] or g["extra"]
+    neg_idx = [i for i in range(len(g["hits"])) if i not in g["gold"]]
+    top, rest = [i for i in neg_idx if i < 10], [i for i in neg_idx if i >= 10]
+    negs = rng.sample(top, min(2, len(top))) + rng.sample(rest, min(2, len(rest)))
+    return ([{"src": g["src"], "query": g["query"], "passage": rend(h), "p": POS} for h in pos]
+            + [{"src": g["src"], "query": g["query"], "passage": rend(g["hits"][i]), "p": NEG} for i in negs])
+
+
+def eval_items(g) -> list[dict]:
+    """All candidates of a held-out group, as the ranker sees them at query time (path kept)."""
+    gold = set(g["gold"])
+    return [{"src": g["src"], "query": g["query"], "passage": render(h, heading=g["heading"], path=True),
+             "p": 1.0 if i in gold else 0.0, "rank": i} for i, h in enumerate(g["hits"])]
+
+
+def build(max_items: int, eval_groups: int, rng) -> tuple[list[dict], list[dict], dict]:
+    """Equal shares of the item budget per source; what a source cannot fill passes to the ones
+    after it. Held-out groups are scored whole and never trained on."""
+    sources = []
+    for name in DATASETS:
+        ds = data_dir(None) / "beir" / name
+        db = ds / "inventio.db"
+        if not db.exists():
+            print(f"skip {name}: no map at {db} (run benchmarks/beir_bench.py {name} first)", flush=True)
+            continue
+        con = connect(db)
+        sources.append((f"{name}:relevance", relevance_groups(name, ds, con, rng)))
+        if name in TITLES:
+            sources.append((f"{name}:title", title_groups(name, ds, con, rng)))
+    train, held_out, report = [], [], {}
+    left = max_items
+    for i, (src, groups) in enumerate(sources):
+        share, n_train, n_eval, n_groups = left // (len(sources) - i), 0, 0, 0
+        for is_held, make in groups:
+            if n_train >= share and n_eval >= eval_groups:
+                break
+            if is_held:
+                if n_eval < eval_groups:
+                    g = make()
+                    if g["gold"]:  # an answer among the 30, or nothing to reorder
+                        held_out += eval_items(g)
+                        n_eval += 1
+            elif n_train < share:
+                items = train_items(make(), rng)
+                if any(it["p"] == POS for it in items):
+                    train += items
+                    n_train += len(items)
+                    n_groups += 1
+        left -= n_train
+        report[src] = {"train_items": n_train, "train_groups": n_groups, "eval_groups": n_eval}
+        print(src, report[src], flush=True)
+    rng.shuffle(train)
+    return train, held_out, report
 
 
 # ------------------------------------------------------------------------------ training
@@ -163,21 +209,21 @@ def load_base():
 
 
 def tokenize(rows, tok, cfg):
+    """Items whose state fits: a truncated passage would carry a label about text Laya never reads."""
     from laya.common import QTYPES, build_sequence, render_options
 
-    items = []
+    crit = CRITERIA
+    k = len(render_options({"t": "noul", "crit": crit}))
+    items, cut = [], 0
     for r in rows:
-        state, q = question(r)
-        crit = q["criteria"]
-        k = len(render_options({"t": "noul", "crit": crit}))
-        seq, markers = build_sequence(tok, state, {"t": "noul", "ins": q["instructions"], "crit": crit},
-                                      cfg["max_len"], cfg["head_max_len"])
-        if len(markers) != k:
+        seq, markers = build_sequence(tok, {"query": r["query"], "passage": r["passage"]},
+                                      {"t": "noul", "ins": INSTRUCTIONS, "crit": crit}, cfg["max_len"], cfg["head_max_len"])
+        if len(markers) != k or len(seq) >= cfg["max_len"]:
+            cut += 1
             continue
-        p = min(max(float(r["p"]), 0.0), 1.0)
-        items.append({"ids": seq, "markers": markers, "qtype": QTYPES["noul"], "target": [1 - p, p],
-                      "label": int(p >= 0.5)})
-    return items
+        p = float(r["p"])
+        items.append({**r, "ids": seq, "markers": markers, "qtype": QTYPES["noul"], "target": [1 - p, p]})
+    return items, cut
 
 
 def collate(items, pad_id):
@@ -200,17 +246,29 @@ def collate(items, pad_id):
     return ids, att, mpos, mmask, target, torch.tensor([it["qtype"] for it in items])
 
 
-def fit_temp(sel):
+def logits_of(model, items, tok, dev) -> list:
     import torch
 
-    if len(sel) < 10:
+    model.eval()
+    out = []
+    with torch.no_grad():
+        for i in range(0, len(items), 16):
+            ch = items[i:i + 16]
+            ids, att, mpos, mmask, _, qtype = (x.to(dev) for x in collate(ch, tok.pad_token_id))
+            with torch.autocast("cuda", dtype=torch.bfloat16):
+                lg, _ = model(ids, att, mpos, mmask, qtype)
+            lg = lg.float().cpu()
+            out += [lg[j, :2].tolist() for j in range(len(ch))]
+    return out
+
+
+def fit_temp(logits, items) -> float:
+    import torch
+
+    if len(items) < 10:
         return 1.0
-    kmax = max(len(z) for z, _ in sel)
-    Z = torch.full((len(sel), kmax), -1e4)
-    T = torch.zeros((len(sel), kmax))
-    for i, (z, t) in enumerate(sel):
-        Z[i, : len(z)] = torch.tensor(z)
-        T[i, : len(t)] = torch.tensor(t, dtype=torch.float32)
+    Z = torch.tensor(logits)
+    T = torch.tensor([it["target"] for it in items], dtype=torch.float32)
     log_t = torch.zeros(1, requires_grad=True)
     opt = torch.optim.LBFGS([log_t], lr=0.1, max_iter=100)
 
@@ -224,7 +282,33 @@ def fit_temp(sel):
     return float(torch.clamp(log_t.exp(), 0.1, 10.0).item())
 
 
-def train(items, base_dir, out_dir: Path, *, epochs, micro, accum, time_steps=0):
+def report(logits, items, temp: float) -> dict:
+    """Per source: AUC and Brier on the natural mix, nDCG@10 of each group's candidates reordered."""
+    out = {}
+    for src in sorted({it["src"] for it in items}):
+        sel = [(lg, it) for lg, it in zip(logits, items) if it["src"] == src]
+        p = [1 / (1 + math.exp(-(lg[1] - lg[0]) / temp)) for lg, _ in sel]
+        y = [it["p"] for _, it in sel]
+        pos = [a for a, b in zip(p, y) if b]
+        neg = [a for a, b in zip(p, y) if not b]
+        auc = sum((a > b) + 0.5 * (a == b) for a in pos for b in neg) / max(1, len(pos) * len(neg))
+        groups: dict[str, list] = {}
+        for pi, (_, it) in zip(p, sel):
+            groups.setdefault(it["query"], []).append((pi, it["rank"], it["p"]))
+
+        def ndcg(order):
+            dcg = sum(g / math.log2(i + 2) for i, (_, _, g) in enumerate(order[:10]))
+            ideal = sum(1 / math.log2(i + 2) for i in range(min(10, int(sum(g for *_, g in order)))))
+            return dcg / ideal if ideal else 0.0
+
+        out[src] = {"items": len(sel), "positives": len(pos), "auc": round(auc, 4),
+                    "brier": round(sum((a - b) ** 2 for a, b in zip(p, y)) / len(y), 4),
+                    "ndcg10_ranked": round(sum(ndcg(sorted(g, key=lambda x: -x[0])) for g in groups.values()) / len(groups), 4),
+                    "ndcg10_bm25": round(sum(ndcg(sorted(g, key=lambda x: x[1])) for g in groups.values()) / len(groups), 4)}
+    return out
+
+
+def train(items, calib, test, base_dir, out_dir: Path, *, epochs, micro, accum, time_steps=0):
     import torch
     from safetensors.torch import load_file
     from transformers import AutoTokenizer
@@ -234,31 +318,34 @@ def train(items, base_dir, out_dir: Path, *, epochs, micro, accum, time_steps=0)
     tok = AutoTokenizer.from_pretrained(os.path.join(base_dir, "tokenizer"))
     model = build_model(cfg, encoder_dir=os.path.join(base_dir, "encoder"))
     model.load_state_dict(load_file(os.path.join(base_dir, "model.safetensors")), strict=True)
+    dev = torch.device("cuda")
+    model.to(dev)
+    base_temp = float(cfg.get("temperature", [1.0, 1.0, 1.0])[2])
+    before = None
+    if not time_steps:
+        before = report(logits_of(model, test, tok, dev), test, base_temp)
+        print("published Laya on held-out:", json.dumps(before), flush=True)
     model.encoder.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
     model.head_checkpointing = True
     for p in model.encoder.embeddings.tok_embeddings.parameters():
         p.requires_grad = False
-    dev = torch.device("cuda")
-    model.to(dev).train()
+    model.train()
 
-    rng = random.Random(20260922)
-    order = list(range(len(items)))
-    rng.shuffle(order)
-    n_cal = min(400, len(items) // 10)
-    calib = [items[i] for i in sorted(order[:n_cal])]
-    train_items = [items[i] for i in sorted(order[n_cal:])]
     # batches of similar length waste less padding; shuffled again per epoch below
-    train_items.sort(key=lambda it: len(it["ids"]))
-
+    items = sorted(items, key=lambda it: len(it["ids"]))
     enc = [p for n, p in model.named_parameters() if n.startswith("encoder.") and p.requires_grad]
     head = [p for n, p in model.named_parameters() if not n.startswith("encoder.") and p.requires_grad]
     opt = torch.optim.AdamW([{"params": enc, "lr": 2.5e-5}, {"params": head, "lr": 1.0e-4}], weight_decay=0.01)
-    batches = [train_items[i:i + micro] for i in range(0, len(train_items), micro)]
-    total = max(1, len(batches) // accum * epochs)
-    sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=total, eta_min=1e-6)
+    batches = [items[i:i + micro] for i in range(0, len(items), micro)]
+    total = max(1, math.ceil(len(batches) / accum) * epochs)
+    warm = max(1, total // 20)
+    floor = 1e-6 / 2.5e-5
+    sched = torch.optim.lr_scheduler.LambdaLR(opt, lambda s: (s + 1) / warm if s < warm else
+                                              floor + (1 - floor) * 0.5 * (1 + math.cos(math.pi * (s - warm) / max(1, total - warm))))
     G, S0, S1 = 4, 0.4, 0.1
     t0, step = time.time(), 0
-    print(f"{len(train_items)} train items, {len(calib)} calibration, {len(batches)} batches x {epochs} epochs", flush=True)
+    print(f"{len(items)} train items, {len(calib)} calibration, {len(test)} report, "
+          f"{len(batches)} batches x {epochs} epochs, {total} updates ({warm} warm-up)", flush=True)
     for epoch in range(epochs):
         random.Random(42 + epoch).shuffle(batches)
         sigma = S0 + (S1 - S0) * epoch / max(1, epochs - 1)
@@ -304,21 +391,14 @@ def train(items, base_dir, out_dir: Path, *, epochs, micro, accum, time_steps=0)
         save(model, tok, cfg, out_dir / "checkpoint_latest", None)
         print(f"epoch {epoch + 1} done in {(time.time() - t0) / 60:.0f} min; checkpoint saved", flush=True)
 
-    model.eval()
-    preds = []
-    with torch.no_grad():
-        for i in range(0, len(calib), 16):
-            ch = calib[i:i + 16]
-            ids, att, mpos, mmask, target, qtype = (x.to(dev) for x in collate(ch, tok.pad_token_id))
-            with torch.autocast("cuda", dtype=torch.bfloat16):
-                lg, _ = model(ids, att, mpos, mmask, qtype)
-            lg = lg.float().cpu().numpy()
-            for j, it in enumerate(ch):
-                preds.append((lg[j, : len(it["markers"])], it["target"]))
+    temp = fit_temp(logits_of(model, calib, tok, dev), calib)
     temps = list(cfg.get("temperature", [1.0, 1.0, 1.0]))
-    temps[2] = fit_temp(preds)  # every item here is a noul question
+    temps[2] = temp
     save(model, tok, cfg, out_dir, temps)
-    return {"minutes": round((time.time() - t0) / 60, 1), "noul_temperature": temps[2], "updates": step}
+    after = report(logits_of(model, test, tok, dev), test, temp)
+    print("tuned Laya on held-out:", json.dumps(after), flush=True)
+    return {"minutes": round((time.time() - t0) / 60, 1), "noul_temperature": temp, "updates": step,
+            "published": before, "tuned": after}
 
 
 def save(model, tok, cfg, d: Path, temps):
@@ -328,7 +408,7 @@ def save(model, tok, cfg, d: Path, temps):
     save_file({k: v.half().contiguous().cpu() for k, v in model.state_dict().items()}, str(d / "model.safetensors"))
     model.encoder.config.save_pretrained(str(d / "encoder"))
     tok.save_pretrained(str(d / "tokenizer"))
-    c = dict(cfg, fine_tuned=True, model_name="laya-inventio-jev")
+    c = dict(cfg, fine_tuned=True, model_name="laya-inventio-relevance")
     if temps is not None:
         c["temperature"] = temps
         c.pop("temperature_by_options", None)
@@ -340,41 +420,38 @@ def main() -> int:
 
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--out", default=str(Path(os.environ.get("LOCALAPPDATA", Path.home() / ".cache")) / "inventio" / "laya-tuned"))
-    ap.add_argument("--max-items", type=int, default=60_000)
-    ap.add_argument("--epochs", type=int, default=2)
+    ap.add_argument("--max-items", type=int, default=80_000)
+    ap.add_argument("--eval-groups", type=int, default=60, help="held-out groups scored per source (30 candidates each)")
+    ap.add_argument("--epochs", type=int, default=1)
     ap.add_argument("--micro-batch", type=int, default=8)
     ap.add_argument("--accum", type=int, default=8, help="micro-batches per optimiser step (effective batch 64)")
     ap.add_argument("--time-steps", type=int, default=0, help="time this many micro-batches, print the projection, exit")
     args = ap.parse_args()
 
-    maps = [("omp", default_db())] + [(n, data_dir(None) / "beir" / n / "inventio.db") for n in BEIR]
-    maps = [(n, p) for n, p in maps if p.exists()]
-    rows, tests = collect(maps)
-    train_rows, holdout, dropped = split(rows, tests)
-    picked = sample(train_rows, args.max_items)
-    out = Path(args.out)
-    out.mkdir(parents=True, exist_ok=True)
-    with (out / "holdout.jsonl").open("w", encoding="utf-8") as f:
-        for r in holdout:
-            f.write(json.dumps(r, ensure_ascii=False) + "\n")
-    kinds = {}
-    for r in picked:
-        kinds[f"{r['kind']}:{'true' if r['p'] >= 0.5 else 'false'}"] = kinds.get(f"{r['kind']}:{'true' if r['p'] >= 0.5 else 'false'}", 0) + 1
-    meta = {"maps": tests["per_map"], "judgments": len(rows), "dropped": dropped, "holdout": len(holdout),
-            "trainable": len(train_rows), "picked": len(picked), "picked_by_kind": kinds,
-            "epochs": args.epochs, "micro_batch": args.micro_batch, "accum": args.accum}
-    print(json.dumps(meta, indent=1), flush=True)
-
+    rng = random.Random(SEED)
+    rows, held_out, per_source = build(args.max_items, args.eval_groups, rng)
     base = load_base()
     cfg = json.load(open(os.path.join(base, "rl_agent_config.json")))
     tok = AutoTokenizer.from_pretrained(os.path.join(base, "tokenizer"))
-    items = tokenize(picked, tok, cfg)
-    res = train(items, base, out, epochs=args.epochs, micro=args.micro_batch, accum=args.accum,
+    items, cut = tokenize(rows, tok, cfg)
+    evals, cut_eval = tokenize(held_out, tok, cfg)
+    by_query = sorted({it["query"] for it in evals})
+    cal_q = set(by_query[::2])  # half the held-out queries fit the temperature, the other half is the report
+    calib = [it for it in evals if it["query"] in cal_q]
+    test = [it for it in evals if it["query"] not in cal_q]
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    with (out / "holdout.jsonl").open("w", encoding="utf-8") as f:
+        for it in evals:
+            f.write(json.dumps({k: it[k] for k in ("src", "query", "passage", "p", "rank")}, ensure_ascii=False) + "\n")
+    meta = {"per_source": per_source, "train_items": len(items), "cut_truncated": cut, "held_out_items": len(evals),
+            "cut_truncated_held_out": cut_eval, "epochs": args.epochs, "micro_batch": args.micro_batch, "accum": args.accum}
+    print(json.dumps(meta, indent=1), flush=True)
+    res = train(items, calib, test, base, out, epochs=args.epochs, micro=args.micro_batch, accum=args.accum,
                 time_steps=args.time_steps)
     if res is not None:
         meta["result"] = res
         (out / "train_meta.json").write_text(json.dumps(meta, indent=1))
-        print(json.dumps(res), flush=True)
         print(f"tuned Laya in {out}; set INVENTIO_LAYA_MODEL={out}", flush=True)
     return 0
 

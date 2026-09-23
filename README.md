@@ -15,7 +15,6 @@ reorders BM25's short list, and can optionally judge which passages are about th
 - [Laya](https://github.com/NandhaKishorM/laya), on your own GPU or CPU. Nothing leaves the
   machine.
 - [TypeSafe Jev](https://docs.typesafe.ai), in the cloud, only for sources you mark public.
-  Jev is also the teacher: its judgments on public data are the training set for Laya.
 
 ## How it works
 
@@ -131,8 +130,7 @@ defaults with `INVENTIO_RANKER` and `INVENTIO_JUDGE`.
   one for all neighbours; on 100 SciFact pairs the packed call agreed with one call per pair
   on 97% of decisions.
 - **Judgments.** Every model decision is stored with the text it read, its probability, the
-  model name and the source. It is a cache (a rebuilt map pays nothing twice) and the training
-  data for Laya (`inventio labels <file.jsonl>` exports it).
+  model name and the source, so a rebuilt map pays nothing twice.
 
 ## Benchmarks
 
@@ -172,7 +170,7 @@ reported on that benchmark.
   embedder on SciFact. On StackOverflow QA the answer is among the 30 candidates for only 80%
   of questions, so no reordering can pass 0.805: the candidate pool is the limit there.
 - **Laya out of the box** ranks worse than BM25 alone. Its author describes it as "a fast
-  base to specialise", and this agrees; see [Laya learns from Jev](#laya-learns-from-jev).
+  base to specialise", and this agrees; see [Fine-tuning Laya](#fine-tuning-laya).
 - The published figures are single-stage embedders over the whole corpus; Inventio with a
   ranker is two-stage. The BEIR paper's two-stage figure, a cross-encoder reranking the top
   100, is 0.688 on SciFact.
@@ -201,24 +199,39 @@ size). Pools grow from 30 to about 47 candidates.
   On SciFact the improvement is a bigger pool, not a better one, so `--facts` stays opt-in.
 - Zero-shot Laya loses with every bigger pool, because it misranks the added candidates.
 
-## Laya learns from Jev
+## Fine-tuning Laya
 
-Jev judges well but runs in the cloud, so it may only see public sources. Laya runs locally but
-has to learn the judgement first. Every judgment Jev makes on public data (relevance of a
-passage to a query, content categories, same-thing links) is stored in the map and becomes a
-training item for Laya, with Jev's probability as a soft target.
+Laya runs locally, so it is the ranker for private sources, but out of the box it is not
+usable. `benchmarks/finetune_laya.py` trains it on the one question the ranker asks (does this
+passage answer the query?), from labels written by people, never by a model:
+
+- **Relevance.** The train splits of SciFact (English science), StackOverflow QA (English, code)
+  and [Zalo legal text retrieval](https://huggingface.co/datasets/GreenNode/zalo-ai-legal-text-retrieval-vn)
+  (Vietnamese questions over Vietnamese law). Each train query gives its annotated answers as
+  positives and four of BM25's 30 candidates that are not answers as hard negatives.
+- **Titles.** A document's own title as the query and its first passage, heading removed, as
+  the answer, against BM25's candidates for that title from other documents (SciFact paper
+  titles, Zalo article titles).
 
 ```sh
-python benchmarks/beir_bench.py scifact --teach        # Jev relevance labels on SciFact's train split
-python benchmarks/finetune_laya.py --time-steps 60     # time 60 batches, print the projected run
-python benchmarks/finetune_laya.py                     # fine-tune (1.4-1.8 h measured on an RTX 5070 Laptop, 8 GB)
+python benchmarks/data.py zalo                          # Zalo legal, with its train split
+python benchmarks/beir_bench.py zalo-legal --rankers none  # builds its map (and the BM25 score)
+python benchmarks/finetune_laya.py --time-steps 60      # time 60 batches, print the projected run
+python benchmarks/finetune_laya.py                      # fine-tune on the local GPU
 export INVENTIO_LAYA_MODEL=~/.cache/inventio/laya-tuned  # Inventio now loads the tuned Laya
 ```
 
-Every test query of the benchmarks, and every chunk that answers one, is removed from the
-training data, and a fixed 10% of the remaining chunks is held out, so the tuned model is
-measured only on what it never saw. The training loop is the one in the Laya author's
-fine-tuning notebook, ported to a single GPU with the token embeddings frozen.
+Test queries, and the documents that answer them, never enter training. 10% of the train
+queries and titles are held out: half fits the temperature, half is the report (AUC, and nDCG@10
+of their 30 candidates reordered against BM25's order), for the published Laya and the tuned
+one. Half of the training passages lose their path, so file names and document ids are not a
+cue; passages longer than Laya reads are dropped instead of cut, so no label describes text the
+model never saw. The training loop is the one in the Laya author's fine-tuning notebook, ported
+to a single GPU with the token embeddings frozen.
+
+Dataset terms travel with a checkpoint tuned on them: SciFact claims are CC BY 4.0 and its
+abstracts ODC-By 1.0, StackOverflow content is CC BY-SA 4.0, and the Zalo card says MIT. No tuned
+checkpoint is distributed here.
 
 ## Privacy
 
@@ -240,7 +253,8 @@ fine-tuning notebook, ported to a single GPU with the token embeddings frozen.
 - Only the local file system is indexed; there are no connectors for Confluence, Slack or
   mail yet.
 - Zero-shot Laya is not yet a usable judge of fact links: on a Markdown corpus it called
-  2,245 of 2,261 neighbour pairs "the same thing".
+  2,245 of 2,261 neighbour pairs "the same thing". The fine-tuning above teaches only
+  relevance, not categories or links.
 
 ## License
 

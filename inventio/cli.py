@@ -104,7 +104,7 @@ def cmd_query(args) -> int:
 
     con = _db(args)
     try:
-        ranker = make_ranker(args.ranker, con)
+        ranker = make_ranker(args.ranker)
         hits = search(con, args.text, k=args.k, pool=args.pool, ranker=ranker, expand_links=args.links,
                       by_type=args.types, facts=make_judge(args.judge) if args.facts else None,
                       sources=args.source)
@@ -140,7 +140,7 @@ def cmd_bench(args) -> int:
     con = _db(args)
     rows = bench.load(Path(args.file))
     try:
-        ranker = make_ranker(args.ranker, con)
+        ranker = make_ranker(args.ranker)
         if args.arms:
             res = bench.run_arms(con, rows, ranker, make_judge(args.judge), pool=args.pool)
         else:
@@ -167,20 +167,6 @@ def cmd_bench(args) -> int:
               f"pool={args.pool}  n={n}")
         print(f"  in pool {res['in_pool']}/{n}  top-1 {res['top1']}/{n}  top-5 {res['top5']}/{n}  "
               f"top-10 {res['top10']}/{n}  {res['sec_per_query']}s/query")
-    return 0
-
-
-def cmd_labels(args) -> int:
-    con = _db(args)
-    n = 0
-    with open(args.out, "w", encoding="utf-8") as f:
-        for r in con.execute("SELECT query, passage, noul, model, source FROM labels ORDER BY id"):
-            f.write(json.dumps({"kind": "relevance", **dict(r)}, ensure_ascii=False) + "\n")
-            n += 1
-        for r in con.execute("SELECT kind, question, passage, other, p, model, source FROM judgments ORDER BY id"):
-            f.write(json.dumps(dict(r), ensure_ascii=False) + "\n")
-            n += 1
-    print(f"{n} labels -> {args.out}")
     return 0
 
 
@@ -248,10 +234,6 @@ def main(argv=None) -> int:
                    help="compare base BM25, BM25 + --facts, and BM25 with a pool as large as the facts one")
     ranking(s)
     s.set_defaults(fn=cmd_bench)
-
-    s = sub.add_parser("labels", help="export TypeSafe judgments (relevance, categories, fact links) as fine-tuning data for Laya")
-    s.add_argument("out")
-    s.set_defaults(fn=cmd_labels)
 
     args = p.parse_args(argv)
     return args.fn(args)

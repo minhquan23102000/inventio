@@ -13,8 +13,8 @@ this module is the one place a model decides what the map says.
 Jev packs its questions: one call per chunk for the eight types, one call per chunk for all of its
 neighbours. Laya reads one pair per pass, since its context holds two passages, not eleven.
 
-Every judgment is stored in `judgments` with the text it read, the model and the source, which
-makes it both a cache (a rebuilt map pays nothing twice) and the teacher data for fine-tuning Laya.
+Every judgment is stored in `judgments` with the text it read, the model and the source: a cache,
+so a rebuilt map pays nothing twice.
 """
 
 import hashlib
@@ -400,7 +400,7 @@ def build(con, judge, sources: list[str] | None = None, relink: bool = False, lo
 # ------------------------------------------------------------------------------------ query time
 
 def query_categories(con, judge, q: str) -> dict[str, float]:
-    """One p per type for the query itself; cached, and stored as teacher data like the rest."""
+    """One p per type for the query itself; cached like the rest."""
     ks = {c: key("query_category", c, q) for c in CATEGORIES}
     cache = {r["key"]: r["p"] for r in con.execute(
         f"SELECT key, p FROM judgments WHERE model = ? AND key IN ({','.join('?' * len(ks))})", [judge.name, *ks.values()])}
