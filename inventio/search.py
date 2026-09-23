@@ -1,5 +1,5 @@
-"""Query time: BM25 finds seeds, the predicted document types and links widen the pool, a ranker
-orders it.
+"""Query time: BM25 finds seeds; predicted document types, predicted content categories and links
+widen the pool; a ranker orders it. Widening only ever adds candidates, never removes one.
 
 The ranker only ever reads the pool (tens of chunks), never the whole map.
 """
@@ -62,7 +62,7 @@ def _source_filter(sources: list[str] | None) -> tuple[str, list]:
 
 
 def bm25(con, q: str, k: int, sources: list[str] | None = None, head_weight: float = 1.0,
-         types: list[str] | None = None) -> list[Hit]:
+         types: list[str] | None = None, categories: list[str] | None = None) -> list[Hit]:
     match = fts_query(q)
     if not match:
         return []
@@ -70,6 +70,10 @@ def bm25(con, q: str, k: int, sources: list[str] | None = None, head_weight: flo
     if types:
         where += f" AND f.type IN ({','.join('?' * len(types))})"
         args += list(types)
+    if categories:  # chunks that keep one of these content categories (facts.py)
+        where += (" AND c.id IN (SELECT chunk_id FROM chunk_categories WHERE kept = 1 "
+                  f"AND category IN ({','.join('?' * len(categories))}))")
+        args += list(categories)
     rows = con.execute(
         "SELECT c.id, s.name source, s.public, s.root, f.path, f.type, c.start_line, c.end_line, c.heading_path, c.text "
         "FROM chunks_fts JOIN chunks c ON c.id = chunks_fts.rowid "
@@ -129,22 +133,41 @@ def widen_by_type(con, q: str, pool: list[Hit], ranker, per_type: int,
     return out
 
 
-def expand(con, pool: list[Hit], seeds: int, limit: int, sources: list[str] | None = None) -> list[Hit]:
+def widen_by_category(con, q: str, pool: list[Hit], categories: list[str], limit: int,
+                      sources: list[str] | None = None) -> list[Hit]:
+    """BM25's best chunks among those that keep one of the query's predicted categories."""
+    if not categories or limit <= 0:
+        return []
+    have = {h.id for h in pool}
+    out = []
+    for h in bm25(con, q, len(pool) + limit, sources, categories=categories):
+        if h.id not in have:
+            h.bm25_rank, h.via = None, "category:" + ",".join(categories)
+            out.append(h)
+            if len(out) >= limit:
+                break
+    return out
+
+
+def expand(con, pool: list[Hit], seeds: int, limit: int, sources: list[str] | None = None,
+           rels: tuple[str, ...] | None = None) -> list[Hit]:
     """Chunks linked to the top seeds that BM25 did not already put in the pool."""
     seed_ids = [h.id for h in pool[:seeds]]
     if not seed_ids or limit <= 0:
         return []
     have = {h.id for h in pool}
     ph = ",".join("?" * len(seed_ids))
+    only = f" AND rel IN ({','.join('?' * len(rels))})" if rels else ""
+    rel_args = list(rels or ())
     rows = con.execute(
         f"""
         SELECT other, count(DISTINCT seed) n, min(rel) rel, group_concat(DISTINCT via) via FROM (
-            SELECT dst other, src seed, rel, via FROM links WHERE src IN ({ph})
+            SELECT dst other, src seed, rel, via FROM links WHERE src IN ({ph}){only}
             UNION ALL
-            SELECT src other, dst seed, rel, via FROM links WHERE dst IN ({ph})
+            SELECT src other, dst seed, rel, via FROM links WHERE dst IN ({ph}){only}
         ) GROUP BY other ORDER BY n DESC, rel ASC
         """,
-        seed_ids + seed_ids,
+        seed_ids + rel_args + seed_ids + rel_args,
     ).fetchall()
     where, args = _source_filter(sources)
     out = []
@@ -190,14 +213,28 @@ def rank_key(h: Hit) -> tuple[bool, float]:
     return (h.score is None, -(h.score or 0.0))
 
 
+def widen_by_facts(con, q: str, pool: list[Hit], judge, *, limit: int = 10, seeds: int = 5,
+                   sources: list[str] | None = None) -> list[Hit]:
+    """The judge predicts which content categories the query is about; BM25's best chunks of those
+    categories join the pool, then the chunks the top seeds are linked to by judged `about` links."""
+    from .facts import kept_types, query_categories
+
+    cats = kept_types(query_categories(con, judge, q))
+    added = widen_by_category(con, q, pool, cats, limit, sources)
+    return added + expand(con, pool + added, seeds, limit, sources, rels=("about",))
+
+
 def search(con, q: str, *, k: int = 5, pool: int = 30, ranker=None, expand_links: bool = False,
-           by_type: bool = False, type_limit: int | None = None, seeds: int = 5, expand_limit: int = 10,
-           sources: list[str] | None = None) -> list[Hit]:
+           by_type: bool = False, type_limit: int | None = None, facts=None, facts_limit: int = 10,
+           seeds: int = 5, expand_limit: int = 10, sources: list[str] | None = None) -> list[Hit]:
+    """`facts` is a judge (facts.make_judge) that predicts the query's content categories."""
     hits = bm25(con, q, pool, sources)
     if by_type and ranker is not None:
         # as deep inside each predicted type as the pool goes overall: at depth 10, BM25's best
         # chunks of the predicted type were nearly always in the pool already (SWE-bench smoke)
         hits += widen_by_type(con, q, hits, ranker, type_limit or pool, sources)
+    if facts is not None:
+        hits += widen_by_facts(con, q, hits, facts, limit=facts_limit, seeds=seeds, sources=sources)
     if expand_links:
         hits += expand(con, hits, seeds, expand_limit, sources)
     if ranker is not None and hits:

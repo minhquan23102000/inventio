@@ -19,5 +19,158 @@
     "recall@30chunks": 0.8494,
     "sec_per_query": null,
     "timed_queries": 0
+  },
+  "arms": {
+    "facts": {
+      "categories": {
+        "chunks": 0,
+        "asked": 0,
+        "cached": 0,
+        "refused": 0,
+        "failed": 0
+      },
+      "links": {
+        "chunks": 5180,
+        "pairs": 51792,
+        "asked": 0,
+        "cached": 51792,
+        "links": 7384,
+        "refused": 0,
+        "failed": 0
+      },
+      "kept": {
+        "Intangible": 5150,
+        "Action": 4065,
+        "Event": 1524,
+        "Person": 1170,
+        "Product": 810,
+        "Place": 324,
+        "CreativeWork": 276,
+        "Organization": 139
+      }
+    },
+    "none": {
+      "base": {
+        "queries": 300,
+        "ndcg@10": 0.6703,
+        "recall@pool": 0.8494,
+        "mean_pool": 30.0
+      },
+      "facts": {
+        "queries": 300,
+        "ndcg@10": 0.6703,
+        "recall@pool": 0.8763,
+        "mean_pool": 46.7
+      },
+      "control": {
+        "queries": 300,
+        "ndcg@10": 0.6703,
+        "recall@pool": 0.8627,
+        "mean_pool": 46.7
+      },
+      "facts_vs_control": {
+        "wins": 0,
+        "losses": 0,
+        "ties": 300,
+        "mean_diff": 0.0,
+        "ci95": [
+          0.0,
+          0.0
+        ]
+      },
+      "facts_vs_base": {
+        "wins": 0,
+        "losses": 0,
+        "ties": 300,
+        "mean_diff": 0.0,
+        "ci95": [
+          0.0,
+          0.0
+        ]
+      },
+      "unscored_pairs": 0
+    },
+    "typesafe": {
+      "base": {
+        "queries": 300,
+        "ndcg@10": 0.765,
+        "recall@pool": 0.8494,
+        "mean_pool": 30.0
+      },
+      "facts": {
+        "queries": 300,
+        "ndcg@10": 0.7705,
+        "recall@pool": 0.8763,
+        "mean_pool": 46.7
+      },
+      "control": {
+        "queries": 300,
+        "ndcg@10": 0.7687,
+        "recall@pool": 0.8627,
+        "mean_pool": 46.7
+      },
+      "facts_vs_control": {
+        "wins": 7,
+        "losses": 6,
+        "ties": 287,
+        "mean_diff": 0.0018,
+        "ci95": [
+          -0.003,
+          0.0067
+        ]
+      },
+      "facts_vs_base": {
+        "wins": 9,
+        "losses": 10,
+        "ties": 281,
+        "mean_diff": 0.0055,
+        "ci95": [
+          -0.0009,
+          0.0128
+        ]
+      },
+      "unscored_pairs": 0
+    },
+    "laya": {
+      "base": {
+        "queries": 300,
+        "ndcg@10": 0.3017,
+        "recall@pool": 0.8494,
+        "mean_pool": 30.0
+      },
+      "facts": {
+        "queries": 300,
+        "ndcg@10": 0.2486,
+        "recall@pool": 0.8763,
+        "mean_pool": 46.7
+      },
+      "control": {
+        "queries": 300,
+        "ndcg@10": 0.2523,
+        "recall@pool": 0.8627,
+        "mean_pool": 46.7
+      },
+      "facts_vs_control": {
+        "wins": 25,
+        "losses": 39,
+        "ties": 236,
+        "mean_diff": -0.0037,
+        "ci95": [
+          -0.0123,
+          0.0051
+        ]
+      },
+      "facts_vs_base": {
+        "wins": 5,
+        "losses": 104,
+        "ties": 191,
+        "mean_diff": -0.053,
+        "ci95": [
+          -0.0667,
+          -0.0399
+        ]
+      },
+      "unscored_pairs": 0
+    }
   }
 }

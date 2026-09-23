@@ -1,0 +1,45 @@
+$ inventio --db C:\Users\LEGION\AppData\Local\Temp\tmpj2tf479w\map.db init C:/Users/LEGION/.omp/docs --name local --facts --judge laya
+local: 26 files, 273 chunks (+26 new, ~0 edited, -0 removed, 0 unchanged); map links mentions 142; 0.1s -> C:\Users\LEGION\AppData\Local\Temp\tmpj2tf479w\map.db
+  categories 200/267  17s
+  links 200 calls, 200 pairs, 200 links  10s
+  links 400 calls, 400 pairs, 400 links  19s
+  links 600 calls, 600 pairs, 599 links  28s
+  links 800 calls, 807 pairs, 794 links  37s
+  links 1000 calls, 1007 pairs, 994 links  46s
+  links 1200 calls, 1207 pairs, 1193 links  55s
+  links 1400 calls, 1407 pairs, 1392 links  64s
+  links 1600 calls, 1608 pairs, 1591 links  74s
+  links 1800 calls, 1801 pairs, 1790 links  82s
+  links 2000 calls, 2001 pairs, 1985 links  87s
+  links 2200 calls, 2201 pairs, 2184 links  92s
+categories: 267 chunks (267 judged, 0 from earlier judgments, 0 refused, 0 failed); kept Product 147, Place 143, Action 102, Organization 86, Event 59, CreativeWork 49, Person 34, Intangible 26
+fact links: 229 chunks, 2261 pairs (2261 judged, 0 earlier), 2245 about links; 133.5s
+$ inventio --db C:\Users\LEGION\AppData\Local\Temp\tmpj2tf479w\map.db query "khi nào nên gọi judge trong vòng lặp của agent?" --facts --judge laya --ranker laya -k 5
+== Article
+1. local:maps/judgment-routing/map.md:42-52  Bản đồ: lớp phán đoán & định tuyến chi phí (tên chưa chốt) > Hợp đồng định hướng > Vị trí hiện tại  p=0.76
+   Harness (bổ sung từ nghiên cứu phiên hiện tại): - [observed] Hook là `export default function(pi){ pi.on(event, handler) }`, nạp từ `.omp/hooks/pre|post/*.ts`. …
+   -> about local:maps/dynamic-workflow/map.md:5-14  (Action)
+   -> mentions local:maps/dynamic-workflow/map.md:28-47  (omp://extensions.md)
+   -> about local:maps/dynamic-workflow/map.md:155-160  (Product)
+2. local:maps/jev-harness/map.md:63-66  Map: Jev in the omp harness > Câu chuyện Jev (bản để dạy lại) > 11. Ghi chú vận hành  p=0.74  [via about:Event,Product,Place]
+   - `judge` là builtin native của omp; credential **global** (login một lần: `omp auth-broker login typesafe`), không cần `.env` từng project, không cần extension…
+   -> about local:maps/decompose-facts/map.md:200-200  (Place)
+   -> about local:maps/dynamic-workflow/map.md:84-92  (Event)
+   -> about local:maps/judgment-routing/map.md:42-52  (Product)
+3. local:maps/judgment-routing/map.md:279-289  Bản đồ: lớp phán đoán & định tuyến chi phí (tên chưa chốt) > Orientation checkpoint  p=0.68
+   - [user-confirmed] Anh hỏi vì sao agent không tự đọc `review-verification.md` hay tự gọi `judge`: review chưa bao giờ tới (lỗi trên), và agent tự khai "cả năm c…
+   -> about local:maps/decompose-facts/map.md:22-30  (Action)
+   -> about local:maps/decompose-facts/map.md:56-70  (Action)
+   -> about local:maps/decompose-facts/map.md:72-75  (Product)
+4. local:maps/dynamic-workflow/map.md:172-180  Bản đồ: workflow động (plan model vẽ đồ thị, Jev dẫn đường) > Decisions > D3: cơ chế chạy (Zero mở lại)  p=0.64
+   - Alternatives: (a) đổi model phiên: plan model vẽ rồi `setModel` sang smol, extension giữ đồ thị (`omp://extensions.md:124`); (b) main agent giữ phiên, viết đồ…
+   -> about local:maps/jev-harness/map.md:63-66  (Place)
+   -> about local:maps/jev-harness/map.md:81-93  (Action)
+   -> about local:maps/jev-harness/map.md:94-96  (Action)
+5. local:maps/judgment-routing/map.md:290-300  Bản đồ: lớp phán đoán & định tuyến chi phí (tên chưa chốt) > Orientation checkpoint  p=0.57
+   - Phiên cũ của anh vẫn chạy bản trước: nó lặp "user wrote…" với chính chữ của pilot. Bản mới đã sửa (xem trên). - Pilot rút gọn, harness 2026-09-23 (task "order…
+   -> about local:maps/decompose-facts/map.md:56-70  (CreativeWork)
+   -> about local:maps/decompose-facts/map.md:72-75  (Organization)
+   -> about local:maps/dynamic-workflow/map.md:182-191  (Organization)
+non-loopback connections attempted: 0
+typesafe_sdk imported: False

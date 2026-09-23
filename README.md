@@ -17,6 +17,12 @@ person or an agent can open the exact lines.
 There is no vector store and no generation step. The "R" of RAG lives here; the "G" is whoever
 calls it.
 
+Laya is the local path and TypeSafe Jev is the model that teaches and tests it. Jev ranks
+best, so its numbers are the ceiling a local model is measured against; it judges content
+categories and fact links on public sources, and every judgment it makes is kept as training
+data for Laya, which then does the same work on sources that must never leave the machine.
+See [How Jev is used](#how-jev-is-used).
+
 ## Install
 
 ```sh
@@ -31,6 +37,8 @@ pip install -e ".[typesafe]"     # cloud ranker; needs TYPESAFE_API_KEY
 ```sh
 inventio init ~/code/fraud-rules --name rules
 inventio init ~/notes/wiki --name wiki --public --exclude "drafts/*"
+inventio facts --source wiki --judge typesafe   # categories + fact links, judged by Jev (public only)
+inventio facts --source rules                   # the same with Laya, on this machine (the default)
 inventio sources
 
 inventio query "which job recomputes customer risk overnight?"
@@ -38,6 +46,7 @@ inventio query "..." --ranker laya              # local GPU/CPU
 inventio query "..." --ranker typesafe --source wiki
 inventio query "..." --json                     # for agents
 inventio query "..." --ranker typesafe --types  # also search inside the document types it predicts
+inventio query "..." --ranker laya --facts     # also add chunks of its categories and linked chunks
 ```
 
 Results are grouped by document type, groups in the order of their best hit; each result
@@ -85,8 +94,103 @@ Everything the source already knows is read by code, not guessed by a model.
 4. **Ranking.** BM25 (SQLite FTS5, diacritics folded) picks 30 candidates; the ranker asks one
    yes/no question per candidate with explicit criteria ("states the specific answer" versus
    "only on a related topic") and sorts by the probability.
+5. **Content categories and fact links** (`init --facts`, or `facts` later). The one step
+   where a model, not code, decides what the map says. Every chunk of prose is asked one
+   yes/no question per schema.org top-level type (`Event`, `Person`, `Organization`, `Place`,
+   `Product`, `Action`, `Intangible`, `CreativeWork`), whose criteria separate "states
+   something about a specific X" from "only names an X in passing"; it keeps every type with
+   p ≥ 0.5, at most three. Then up to 10 of its BM25 neighbours in other files that share a
+   kept type are asked "do these two passages state something about the same specific
+   thing?", and the pairs judged true become `about` links. Jev packs the eight type questions
+   into one call per chunk and all neighbours into a second one; on 100 SciFact pairs the
+   packed call agreed with one-call-per-pair on 97% of decisions (mean |Δp| 0.04,
+   [pack-check](benchmarks/results/pack-check.json)). `query --facts` asks the query's own
+   categories, then adds BM25's best chunks of those categories and the chunks the top hits
+   are linked to. It only adds candidates, never removes one.
+
+## How Jev is used
+
+```mermaid
+flowchart LR
+    subgraph index ["inventio init --facts"]
+        S["sources"] --> C["chunks, paths,<br/>code-drawn links"]
+        C --> J{"judge"}
+    end
+    J -- "8 category questions<br/>(1 call per chunk)" --> M[("map.db")]
+    J -- "same thing? per neighbour<br/>(1 call per chunk)" --> M
+    subgraph query ["inventio query --facts"]
+        Q["question"] --> B["BM25 top 30"]
+        B --> W["+ chunks of its categories<br/>+ chunks linked to top hits"]
+        W --> R{"ranker"}
+        R --> A["passages with path:lines"]
+    end
+    M --> W
+    M -- "judgments: text, p, model, source" --> F["finetune_laya.py<br/>(overnight, laptop GPU)"]
+    F --> L["tuned Laya"]
+    L -. "judge and ranker<br/>for private sources" .-> J
+    L -.-> R
+    T["bench --arms:<br/>BM25 / + facts / same-size BM25"] -. "scored with Jev" .-> R
+```
+
+Jev has three jobs here, and none of them is to serve private data:
+
+- **Tester.** Every change to the pool is measured three ways on the same questions: plain
+  BM25, BM25 plus categories and links, and BM25 with a pool as large as the second one. Jev
+  ranks all three, because only a good ranker can show whether a better pool pays off; with a
+  weak ranker a bigger pool mostly adds noise.
+- **Teacher.** Every judgment Jev makes (category, same-thing link, relevance of a passage to
+  a query) is stored in the map's `judgments` and `labels` tables with the text it read, the
+  model name and the source. `inventio labels` exports them; `benchmarks/finetune_laya.py`
+  trains Laya on them.
+- **Ceiling.** Jev's score on each benchmark is the mark a tuned Laya is measured against. It
+  runs in the cloud, so Inventio lets it see only sources marked `--public`.
+
+Laya does the same two judgments locally (`--judge laya`, the default), and the whole path,
+ingest, categories, links, query and ranking, then runs without a network connection:
+`python benchmarks/local_proof.py <dir> "<question>"` indexes a directory into a fresh map with
+the TypeSafe key removed and counts outgoing connections; on the .omp design docs it counted
+none ([local-proof.txt](docs/design/evidence/local-proof.txt)). Out of the box Laya is not yet
+usable as a judge there: it called 2,245 of 2,261 neighbour pairs "the same thing". That is
+what the teacher is for.
 
 ## Benchmarks
+
+### Do categories and fact links beat plain BM25?
+
+nDCG@10 on the same questions, three pools, each ranked by Jev and by zero-shot Laya. Jev
+judged the categories of every chunk and every candidate link pair (no sampling).
+
+| Corpus (questions) | Ranker | BM25, 30 | + categories and links | BM25, same pool size | facts vs same size, paired (95% CI) |
+|---|---|---|---|---|---|
+| .omp docs (40) | **Jev** | 0.843 | **0.867** | **0.867** | 0 wins, 0 losses |
+| SciFact (300) | **Jev** | 0.765 | **0.771** | 0.769 | +0.002 (-0.003, +0.007) |
+| StackOverflow QA (1,994) | **Jev** | not finished: TypeSafe credits ran out | | | |
+| .omp docs (40) | Laya zero-shot | **0.515** | 0.507 | 0.475 | +0.031 (+0.005, +0.065) |
+| SciFact (300) | Laya zero-shot | **0.302** | 0.249 | 0.252 | -0.004 (-0.012, +0.005) |
+
+Answer among the candidates (what no ranker can fix): .omp 38 → 39 → 39 of 40; SciFact
+84.9% → **87.6%** → 86.3%. Pools grew from 30 to 49 (.omp) and 47 (SciFact) candidates.
+
+What this says, with Jev as the ranker:
+
+- Categories and links find answers BM25's 30 missed, and more of them than 17 more BM25
+  candidates do (SciFact +2.7 points of recall against +1.3).
+- The ranked result rises a little over plain BM25 30 (+0.024 on .omp, +0.006 on SciFact; both
+  confidence intervals touch zero), and not beyond a plain BM25 pool of the same size (+0.002
+  on SciFact, interval across zero). So far the gain is a bigger pool, not a better one: with
+  Jev as the ranker, the optimisation does not yet beat plain RAG. `--facts` stays opt-in.
+- With zero-shot Laya every bigger pool loses, because it misranks the added candidates. On
+  .omp categories and links lose less than the same-size pool (+0.031, CI above zero); a
+  likely reason, not isolated, is that they bring in passages about the same thing rather
+  than BM25's next-best word matches. The tuned Laya is the next result to measure.
+
+Raw per-question rows: `benchmarks/results/beir-scifact/arms.jsonl` and
+[docs/design/evidence/arms-omp-*.json](docs/design/evidence/). StackOverflow QA has
+categories for all 27,018 chunks and links for 10,000 of them; the command in
+[benchmarks/README.md](benchmarks/README.md#reproduce) resumes from the stored judgments once
+credits are added.
+
+### Against published retrievers
 
 nDCG@10 on three public retrieval benchmarks, every query of each test set, run through
 Inventio's real ingest and query path. 1.0 means every right answer sits at the top.
@@ -127,10 +231,9 @@ What the rows say:
   [benchmarks/README.md](benchmarks/README.md#widening-the-pool-by-document-type-swe-bench-lite-mixed).
 - **Laya** is a small decision model that runs on your own GPU, so private sources never
   leave the machine. Out of the box it ranks worse than no model at all; its author calls it
-  "a fast base to specialise". It is meant to learn from Jev: every TypeSafe ranking on a
-  public source is stored as a (query, passage, probability) label, and those labels are the
-  teacher signal for fine-tuning Laya ([below](#fine-tuning-laya-from-jev)). The fine-tuned
-  student has not been measured yet; this row is its starting point.
+  "a fast base to specialise". This row is its zero-shot starting point. The next result is
+  Laya fine-tuned overnight on Jev's judgments ([below](#fine-tuning-laya-from-jev)), measured
+  on the same test queries, which its training data leaves out.
 - To read the comparison fairly: the published figures are single-stage embedders over the
   whole corpus, while Inventio + TypeSafe is two-stage. The two-stage figure in the BEIR paper,
   a cross-encoder reranking the top 100, is 0.688 on SciFact.
@@ -187,29 +290,41 @@ One question per line; a result counts when it overlaps the lines you name:
   sends nothing. With `--types` it refuses when any source in scope is private, because the
   widened pool can reach any of them. Narrow the query with `--source`, or rank locally with
   `--ranker laya`.
+- `--facts --judge typesafe` (at `init` or `facts`) refuses the same way for a private source
+  and judges nothing. At query time it sends only the query text, to predict its categories.
 - The map file contains source text. It is ignored by this repository's `.gitignore` and is
   written outside the indexed trees; keep it that way.
 
 ## Fine-tuning Laya from Jev
 
 Jev is the teacher and Laya the student. Jev judges well but runs in the cloud, so it may only
-see public sources; Laya runs on your machine but has to learn the judgement first. Every
-TypeSafe ranking stores its (query, passage, probability) triples in the map. Export them:
+see public sources; Laya runs on your machine but has to learn the judgement first. Every Jev
+judgment is stored in the map; `inventio labels jev-labels.jsonl` exports them. The overnight
+run reads them straight from the maps:
 
 ```sh
-inventio labels jev-labels.jsonl
+python benchmarks/finetune_laya.py --time-steps 60   # measure 60 batches, print the projected run time
+python benchmarks/finetune_laya.py                   # the overnight run
+set INVENTIO_LAYA_MODEL=%LOCALAPPDATA%\inventio\laya-tuned   # Inventio then loads the tuned Laya
 ```
 
-These come only from public sources, by construction. Fine-tune Laya on them (see the Laya
-README's fine-tuning section). The student then ranks private sources, which the teacher never
-sees. Not wired yet: `--ranker laya` always loads the published checkpoint, so a tuned one
-cannot be benchmarked through Inventio until it can be selected.
+- **Data.** 464,057 Jev judgments across the .omp map and the SciFact and StackOverflow QA
+  maps: categories of chunks and of queries, same-thing links, and relevance of passages to
+  SciFact training queries (`beir_bench.py scifact --teach`, stopped at 250 of 809 queries
+  when credits ran out). Each becomes one item in the form Laya reads at inference, with Jev's
+  p as a soft target; 60,000 are drawn, balanced by kind and answer.
+- **Kept out.** Every test query of the three benchmarks and every chunk that answers one
+  (46,975 judgments dropped), plus a fixed 10% of all other chunks, written to `holdout.jsonl`
+  so the tuned Laya can be scored against Jev on judgments it never saw.
+- **Run time on this laptop** (RTX 5070 Laptop, 8 GB): 0.33 to 0.44 s per batch of 8, so
+  1.4 to 1.8 hours for 2 epochs, peak 4.4 GB of GPU memory. The loop is the one in the Laya
+  author's fine-tuning notebook, ported to one GPU with the token embeddings frozen.
 
 ## Not yet
 
 - Connectors beyond the local file system (Confluence, Slack, mail).
-- Semantic categories generated at index time. Small local generators and zero-shot
-  classifiers were measured and none beat the structure the source already has.
+- The benchmark of the tuned Laya, and the StackOverflow QA arms with Jev (both need the runs
+  above to finish).
 
 ## License
 

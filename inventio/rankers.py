@@ -7,6 +7,7 @@ fine-tuned Laya can be measured against the Jev labels it learned from.
 """
 
 import os
+import time
 from concurrent.futures import ThreadPoolExecutor
 
 INSTRUCTIONS = "Does the `passage` answer the `query`?"
@@ -23,18 +24,26 @@ class CloudRefused(RuntimeError):
     pass
 
 
+def load_laya():
+    """The Laya agent and its name. INVENTIO_LAYA_MODEL points at a fine-tuned checkpoint
+    directory (benchmarks/finetune_laya.py writes one); without it, the published multilingual one."""
+    import warnings
+
+    import laya
+    import torch
+
+    warnings.filterwarnings("ignore", module="laya")
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    tuned = os.environ.get("INVENTIO_LAYA_MODEL")
+    if tuned:
+        return laya.load(tuned, device=device), f"laya:{tuned}"
+    model, subfolder = "convaiinnovations/laya", "multilingual"
+    return laya.load(model, device=device, subfolder=subfolder), f"laya:{model}/{subfolder}"
+
+
 class LayaRanker:
-    def __init__(self, model: str = "convaiinnovations/laya", subfolder: str | None = "multilingual",
-                 device: str | None = None):
-        import warnings
-
-        import laya
-        import torch
-
-        warnings.filterwarnings("ignore", module="laya")
-        device = device or ("cuda" if torch.cuda.is_available() else "cpu")
-        self.agent = laya.load(model, device=device, subfolder=subfolder)
-        self.name = f"laya:{model}/{subfolder or ''}"
+    def __init__(self):
+        self.agent, self.name = load_laya()
         self.questions = {"rel": {"type": "noul", "instructions": INSTRUCTIONS, "criteria": CRITERIA}}
 
     def score(self, query: str, hits) -> list[float]:
@@ -64,22 +73,29 @@ class TypeSafeRanker:
         self.question = Noul(instructions=INSTRUCTIONS, criteria=NoulCriteria(**CRITERIA))
         self.con = con
         self.workers = workers
+        self.timeouts = 0
 
     def _one(self, query: str, passage: str) -> float | None:
         from typesafe_sdk import TypeSafePermissionDeniedError
+        from typesafe_sdk._core.errors import TypeSafeAPITimeoutError
 
-        try:
-            r = self.client.system_one(
-                state={"query": query, "passage": passage}, questions={"rel": self.question}, model=self.model
-            )
-        except TypeSafePermissionDeniedError as e:
-            # The API's edge firewall rejects some texts outright with an HTML page (403 "Attention
-            # Required", seen on Django source and on issue text quoting it). That pair stays
-            # unscored and keeps its BM25 place; a real permission error (the key) still raises.
-            if "Attention Required" not in str(e):
-                raise
-            return None
-        return float(r.nouls["rel"].noul)
+        for attempt in range(3):  # the SDK's own retries end in a timeout under long runs' load
+            try:
+                r = self.client.system_one(
+                    state={"query": query, "passage": passage}, questions={"rel": self.question}, model=self.model
+                )
+                return float(r.nouls["rel"].noul)
+            except TypeSafePermissionDeniedError as e:
+                # The API's edge firewall rejects some texts outright with an HTML page (403 "Attention
+                # Required", seen on Django source and on issue text quoting it). That pair stays
+                # unscored and keeps its BM25 place; a real permission error (the key) still raises.
+                if "Attention Required" not in str(e):
+                    raise
+                return None
+            except TypeSafeAPITimeoutError:
+                time.sleep(5 * (attempt + 1))
+        self.timeouts += 1  # still timing out: unscored, keeps its BM25 place, counted
+        return None
 
     def types(self, query: str, types: dict[str, str]) -> dict[str, float]:
         from typesafe_sdk import Choice, TypeSafePermissionDeniedError
