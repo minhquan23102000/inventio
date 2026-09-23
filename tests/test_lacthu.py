@@ -3,8 +3,8 @@ import textwrap
 
 import pytest
 
-from laya_atlas import cli
-from laya_atlas.ingest import chunk_file
+from lacthu import cli
+from lacthu.ingest import chunk_file
 
 
 def write(root, rel, text):
@@ -53,7 +53,7 @@ def test_python_method_coordinates(tmp_path):
 
 
 def test_prose_links_to_the_code_that_defines_what_it_names(tmp_path, capsys):
-    db = str(tmp_path / "atlas.db")
+    db = str(tmp_path / "map.db")
     repo, wiki = tmp_path / "repo", tmp_path / "wiki"
     write(repo, "jobs/score.py", """
         def fraud_score_daily(txns):
@@ -72,7 +72,7 @@ def test_prose_links_to_the_code_that_defines_what_it_names(tmp_path, capsys):
 
 
 def test_markdown_link_resolves_to_the_heading(tmp_path, capsys):
-    db = str(tmp_path / "atlas.db")
+    db = str(tmp_path / "map.db")
     write(tmp_path / "d", "a.md", """
         # A
         See [the limits](sub/b.md#known-limits) before tuning thresholds.
@@ -93,7 +93,7 @@ def test_markdown_link_resolves_to_the_heading(tmp_path, capsys):
 def test_cloud_ranker_refuses_private_sources(tmp_path, capsys, monkeypatch):
     pytest.importorskip("typesafe_sdk")
     monkeypatch.setenv("TYPESAFE_API_KEY", "not-a-real-key")
-    db = str(tmp_path / "atlas.db")
+    db = str(tmp_path / "map.db")
     write(tmp_path / "private", "notes.md", "# Notes\ncustomer 4411 flagged for mule activity\n")
     run(capsys, "--db", db, "init", str(tmp_path / "private"), "--name", "bank")
     code, out = run(capsys, "--db", db, "query", "mule activity", "--ranker", "typesafe")

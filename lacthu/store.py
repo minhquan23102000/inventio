@@ -72,11 +72,11 @@ CREATE TABLE IF NOT EXISTS labels (
 
 
 def default_db() -> Path:
-    env = os.environ.get("LAYA_ATLAS_DB")
+    env = os.environ.get("LACTHU_DB")
     if env:
         return Path(env)
     base = os.environ.get("LOCALAPPDATA") or os.environ.get("XDG_CACHE_HOME") or str(Path.home() / ".cache")
-    return Path(base) / "laya-atlas" / "atlas.db"
+    return Path(base) / "lacthu" / "map.db"
 
 
 def connect(path: Path | None = None) -> sqlite3.Connection:

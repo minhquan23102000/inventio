@@ -1,6 +1,13 @@
-# laya-atlas
+# Lạc Thư
 
-Local retrieval without embeddings. `laya-atlas` indexes your repositories and documents into
+> The legend says a turtle rose from the Luo river carrying a pattern on its shell, and the
+> first map of order was read from it. Nobody drew the map. It was already there, on the back
+> of the thing itself.
+
+That is the rule this tool is built on: the structure of a body of knowledge is read from the
+sources (their folders, headings, definitions, the names they share), not invented by a model.
+
+Local retrieval without embeddings. `lacthu` indexes your repositories and documents into
 one SQLite file, finds candidates with BM25, and lets a decision model reorder the short list:
 [Laya](https://github.com/NandhaKishorM/laya) on your own GPU, or
 [TypeSafe Jev](https://docs.typesafe.ai) in the cloud for sources you have marked public.
@@ -21,14 +28,14 @@ pip install -e ".[typesafe]"     # cloud ranker; needs TYPESAFE_API_KEY
 ## Use
 
 ```sh
-laya-atlas init ~/code/fraud-rules --name rules
-laya-atlas init ~/notes/wiki --name wiki --public --exclude "drafts/*"
-laya-atlas sources
+lacthu init ~/code/fraud-rules --name rules
+lacthu init ~/notes/wiki --name wiki --public --exclude "drafts/*"
+lacthu sources
 
-laya-atlas query "which job recomputes customer risk overnight?"
-laya-atlas query "..." --ranker laya              # local GPU/CPU
-laya-atlas query "..." --ranker typesafe --source wiki
-laya-atlas query "..." --json                     # for agents
+lacthu query "which job recomputes customer risk overnight?"
+lacthu query "..." --ranker laya              # local GPU/CPU
+lacthu query "..." --ranker typesafe --source wiki
+lacthu query "..." --json                     # for agents
 ```
 
 Each result shows where it lives and where it leads:
@@ -39,9 +46,9 @@ Each result shows where it lives and where it leads:
    -> mentions rules:jobs/score.py:1-2  (fraud_score_daily)
 ```
 
-The map lives in your user cache (`%LOCALAPPDATA%\laya-atlas\atlas.db`, or `$XDG_CACHE_HOME`,
-or `~/.cache`), never inside an indexed repository. Override it with `--db` or `LAYA_ATLAS_DB`.
-Set a default ranker with `LAYA_ATLAS_RANKER`.
+The map lives in your user cache (`%LOCALAPPDATA%\lacthu\map.db`, or `$XDG_CACHE_HOME`,
+or `~/.cache`), never inside an indexed repository. Override it with `--db` or `LACTHU_DB`.
+Set a default ranker with `LACTHU_RANKER`.
 
 ## How the map is built
 
@@ -92,8 +99,8 @@ What this does and does not say:
 Reproduce with your own questions:
 
 ```sh
-laya-atlas bench my-questions.jsonl --ranker none
-laya-atlas bench my-questions.jsonl --ranker typesafe --links --json
+lacthu bench my-questions.jsonl --ranker none
+lacthu bench my-questions.jsonl --ranker typesafe --links --json
 ```
 
 One question per line; a result counts when it overlaps the lines you name:
@@ -115,7 +122,7 @@ One question per line; a result counts when it overlaps the lines you name:
 Every TypeSafe ranking stores its (query, passage, probability) triples in the map. Export them:
 
 ```sh
-laya-atlas labels jev-labels.jsonl
+lacthu labels jev-labels.jsonl
 ```
 
 These come only from public sources, by construction. They are teacher labels for fine-tuning
