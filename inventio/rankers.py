@@ -77,7 +77,8 @@ class TypeSafeRanker:
 
     def _one(self, query: str, passage: str) -> float | None:
         from typesafe_sdk import TypeSafePermissionDeniedError
-        from typesafe_sdk._core.errors import TypeSafeAPITimeoutError
+        from typesafe_sdk._core.errors import (TypeSafeAPIConnectionError, TypeSafeAPITimeoutError,
+                                               TypeSafeInternalServerError)
 
         for attempt in range(3):  # the SDK's own retries end in a timeout under long runs' load
             try:
@@ -92,7 +93,8 @@ class TypeSafeRanker:
                 if "Attention Required" not in str(e):
                     raise
                 return None
-            except TypeSafeAPITimeoutError:
+            except (TypeSafeAPITimeoutError, TypeSafeAPIConnectionError, TypeSafeInternalServerError):
+                # transient: timeout under load, dropped connection, Cloudflare 520 from the origin
                 time.sleep(5 * (attempt + 1))
         self.timeouts += 1  # still timing out: unscored, keeps its BM25 place, counted
         return None
