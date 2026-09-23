@@ -23,6 +23,7 @@ scored fresh, so a cached rerun does not report itself as fast.
 import argparse
 import json
 import math
+import os
 import sys
 import time
 from pathlib import Path
@@ -76,6 +77,12 @@ def teach(con, args, queries) -> None:
             print(f"  relevance {n}/{len(queries)}  {time.time() - t:.0f}s", flush=True)
 
 
+def tag(rname: str) -> str:
+    """The name results and score caches are kept under: a tuned Laya (INVENTIO_LAYA_MODEL) is
+    another ranker than the published checkpoint, and must not read its cached scores."""
+    return "laya-tuned" if rname == "laya" and os.environ.get("INVENTIO_LAYA_MODEL") else rname
+
+
 def safe_name(doc_id: str) -> str:
     return doc_id.replace("/", "_")
 
@@ -120,7 +127,7 @@ def run_arms(con, args, queries, qrels, safe, out_dir, summary) -> None:
     arms_summary = summary.setdefault("arms", {})
     arms_summary["facts"] = {"categories": res["categories"], "links": res["links"], "kept": res["kept"]}
     for rname in args.rankers.split(","):
-        ranker = make_ranker(rname, None)
+        ranker, rname = make_ranker(rname, None), tag(rname)
         cache_path = out_dir / f"scores-{rname}.jsonl"
         cache = load_cache(cache_path)
         nd = {a: [] for a in ARMS}
@@ -200,9 +207,9 @@ def main() -> int:
         run_arms(con, args, queries, qrels, safe, out_dir, summary)
         return 0
     for rname in args.rankers.split(","):
+        ranker, rname = make_ranker(rname, None), tag(rname)
         cache_path = out_dir / f"scores-{rname}.jsonl"
         cache = load_cache(cache_path)
-        ranker = make_ranker(rname, None)
         nd, rec, fresh_secs, fresh_n = [], [], 0.0, 0
         with cache_path.open("a", encoding="utf-8") as cf:
             for n, (qid, q) in enumerate(queries.items(), 1):
