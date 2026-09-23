@@ -157,8 +157,9 @@ what the teacher is for.
 
 ### Do categories and fact links beat plain BM25?
 
-nDCG@10 on the same questions, three pools, each ranked by Jev and by zero-shot Laya. Jev
-judged the categories of every chunk and every candidate link pair (no sampling).
+nDCG@10 on the same questions, three pools, each ranked by Jev and by zero-shot Laya. On .omp
+and SciFact, Jev judged the categories of every prose chunk and every candidate link pair (no
+sampling).
 
 | Corpus (questions) | Ranker | BM25, 30 | + categories and links | BM25, same pool size | facts vs same size, paired (95% CI) |
 |---|---|---|---|---|---|
@@ -186,7 +187,7 @@ What this says, with Jev as the ranker:
 
 Raw per-question rows: `benchmarks/results/beir-scifact/arms.jsonl` and
 [docs/design/evidence/arms-omp-*.json](docs/design/evidence/). StackOverflow QA has
-categories for all 27,018 chunks and links for 10,000 of them; the command in
+categories for 26,941 of its 27,018 chunks and links for 10,000 of them; the command in
 [benchmarks/README.md](benchmarks/README.md#reproduce) resumes from the stored judgments once
 credits are added.
 
