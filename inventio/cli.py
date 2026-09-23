@@ -25,10 +25,14 @@ def cmd_init(args) -> int:
     con = _db(args)
     t = time.time()
     with con:
-        stats = ingest_source(con, args.name or root.resolve().name, root, args.public, args.exclude or [])
+        stats = ingest_source(
+            con, args.name or root.resolve().name, root, args.public, args.exclude or [], full=args.full
+        )
         links = rebuild_links(con)
     print(
-        f"{stats['source']}: {stats['files']} files, {stats['chunks']} chunks; "
+        f"{stats['source']}: {stats['files']} files, {stats['chunks']} chunks "
+        f"(+{stats['added']} new, ~{stats['changed']} edited, -{stats['removed']} removed, "
+        f"{stats['unchanged']} unchanged); "
         f"map links {', '.join(f'{k} {v}' for k, v in sorted(links.items())) or 'none'}; "
         f"{time.time() - t:.1f}s -> {args.db or default_db()}"
     )
@@ -140,11 +144,12 @@ def main(argv=None) -> int:
     p.add_argument("--db", help=f"map file (default {default_db()}, or $INVENTIO_DB)")
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    s = sub.add_parser("init", help="index a directory as a source (re-running rebuilds it)")
+    s = sub.add_parser("init", help="index a directory as a source; re-running updates only what changed")
     s.add_argument("path")
     s.add_argument("--name", help="source name (default: directory name)")
     s.add_argument("--public", action="store_true", help="allow this source's text to be sent to a cloud ranker")
     s.add_argument("--exclude", action="append", metavar="GLOB", help="skip paths matching GLOB (repeatable)")
+    s.add_argument("--full", action="store_true", help="drop the source and rebuild it from scratch")
     s.set_defaults(fn=cmd_init)
 
     s = sub.add_parser("sources", help="list indexed sources")
