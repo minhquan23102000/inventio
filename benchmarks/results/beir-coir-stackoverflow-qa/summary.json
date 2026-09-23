@@ -26,5 +26,19 @@
     "recall@30chunks": 0.8533,
     "sec_per_query": 1.195,
     "timed_queries": 85
+  },
+  "typesafe": {
+    "queries": 1994,
+    "ndcg@10": 0.791,
+    "recall@30chunks": 0.8049,
+    "sec_per_query": 1.294,
+    "timed_queries": 1694
+  },
+  "laya": {
+    "queries": 1994,
+    "ndcg@10": 0.193,
+    "recall@30chunks": 0.8049,
+    "sec_per_query": null,
+    "timed_queries": 0
   }
 }

@@ -90,6 +90,38 @@ def test_markdown_link_resolves_to_the_heading(tmp_path, capsys):
     assert {"rel": "citation", "dir": "out", "via": "sub/b.md#known-limits", "source": "d", "coord": "sub/b.md:4-5"} in links
 
 
+def test_reindex_touches_only_what_changed(tmp_path, capsys):
+    import sqlite3
+
+    db = str(tmp_path / "map.db")
+    d = tmp_path / "d"
+    keep = write(d, "keep.md", "# Keep\nThe nightly job `fraud_score_daily` recomputes customer risk.\n")
+    write(d, "edit.md", "# Edit\nthresholds are tuned per wombat segment\n")
+    gone = write(d, "jobs/score.py", "def fraud_score_daily(txns):\n    return 0\n")
+    run(capsys, "--db", db, "init", str(d), "--name", "d")
+
+    def keep_ids():
+        con = sqlite3.connect(db)
+        return con.execute(
+            "SELECT c.id FROM chunks c JOIN files f ON f.id = c.file_id WHERE f.path = 'keep.md'"
+        ).fetchall()
+
+    before = keep_ids()
+    keep.write_bytes(keep.read_bytes())  # same bytes, new mtime: must not be re-chunked
+    write(d, "edit.md", "# Edit\nthresholds are now tuned per quokka merchant segment\n")
+    gone.unlink()
+    code, out = run(capsys, "--db", db, "init", str(d), "--name", "d")
+    assert code == 0
+    assert "+0 new, ~1 edited, -1 removed, 1 unchanged" in out.out
+    assert keep_ids() == before
+
+    hits = json.loads(run(capsys, "--db", db, "query", "quokka", "--json")[1].out)
+    assert [h["path"] for h in hits] == ["edit.md"]
+    assert run(capsys, "--db", db, "query", "wombat")[0] == 1
+    hits = json.loads(run(capsys, "--db", db, "query", "nightly customer risk", "--json")[1].out)
+    assert hits[0]["links"] == []  # the definer was deleted, so its link went with it
+
+
 def test_cloud_ranker_refuses_private_sources(tmp_path, capsys, monkeypatch):
     pytest.importorskip("typesafe_sdk")
     monkeypatch.setenv("TYPESAFE_API_KEY", "not-a-real-key")

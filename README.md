@@ -46,6 +46,12 @@ Each result shows where it lives and where it leads:
    -> mentions rules:jobs/score.py:1-2  (fraud_score_daily)
 ```
 
+Re-running `init` on a source updates it in place: files whose size and modification time
+match the map are skipped without being read, files with the same content hash are only
+re-stamped, and only new or edited files are chunked again (deleted ones leave the map). On
+astropy (1,260 files, 22,327 chunks) the first index takes 12.8 s and a re-run after editing
+one file 1.4 s, most of it rebuilding links across the whole map. `--full` rebuilds from scratch.
+
 The map lives in your user cache (`%LOCALAPPDATA%\inventio\map.db`, or `$XDG_CACHE_HOME`,
 or `~/.cache`), never inside an indexed repository. Override it with `--db` or `INVENTIO_DB`.
 Set a default ranker with `INVENTIO_RANKER`.
@@ -70,29 +76,40 @@ Everything the source already knows is read by code, not guessed by a model.
 
 ## Benchmarks
 
-Public retrieval benchmarks, run through Inventio's real ingest and query path. nDCG@10, higher
-is better; every ranker reorders the same 30 BM25 candidates.
+Three public retrieval benchmarks, run through Inventio's real ingest and query path, on every
+query of each test set. nDCG@10: 1.0 means every right answer sits at the top.
 
-| Benchmark | Published BM25 | Inventio BM25 | + Laya zero-shot | + TypeSafe Jev |
+| Benchmark | Inventio, no model | + TypeSafe Jev | + Laya, not yet fine-tuned | Published retrievers, same test set |
 |---|---|---|---|---|
-| [SciFact](https://arxiv.org/abs/2104.08663) (text, 300 queries) | 0.665 | 0.670 | 0.302 | **0.765** |
-| [StackOverflow QA](https://arxiv.org/abs/2407.02883) (prose + code, 300 queries) | 0.568¹ | 0.713 | 0.203 | **0.837** |
-| [SWE-bench Lite](https://arxiv.org/abs/2406.14497), issue → files to fix, code only | 0.430 | 0.540 | 0.391 | **0.696** |
-| SWE-bench Lite, whole repository (code, tests, docs) | | 0.400 | 0.264 | **0.515** |
+| [SWE-bench Lite](https://arxiv.org/abs/2406.14497): GitHub issue → code files to fix (300) | 0.540 | **0.696** | 0.391 | SFR-Mistral 7B 0.627 · Jina-v2-code 0.583 · GIST-large 0.478 · OpenAI embedding-3-small 0.433 |
+| [SciFact](https://arxiv.org/abs/2104.08663): claim → scientific abstract (300) | 0.670 | **0.765** | 0.302 | e5-mistral-7b 0.764 · bge-large-v1.5 0.746 · ColBERT 0.671 |
+| [StackOverflow QA](https://arxiv.org/abs/2407.02883): question → answer, prose + code (1,994) | 0.670 | 0.791 | 0.193 | E5-Mistral 7B 0.915 · Voyage-Code-002 0.877 · E5-base 0.869 · OpenAI Ada-002 0.724 |
 
-¹ On all 1,994 queries; Inventio BM25 scores 0.670 there.
+Per query: 35-140 ms with no model (CPU, standard library), about 1.2 s with TypeSafe,
+0.6-0.9 s with Laya on a laptop RTX 5070.
 
-- The BM25 baseline matches the published one on SciFact, so the measurement is not flattering
-  itself. On repositories Inventio's BM25 is 0.11 above the published one, and above most
-  embedding models in the CodeRAG-Bench table; the likely reason, not yet isolated by an
-  ablation, is chunking by function and indexing each chunk's file path and function name.
-- TypeSafe reranking adds 0.10 to 0.16 everywhere. On SWE-bench Lite (code only) the file to fix
-  is the first result for 56% of issues (38% with BM25 alone) and in the top 5 for 78% (64%).
-- Zero-shot Laya lowers every score; it needs fine-tuning first.
-- On a whole repository, tests and docs push the right files out of the 30 candidates (82% of
-  issues keep one in the pool with code only, 63% with everything). That pool is the next limit.
+- **Inventio alone**, with no model and no embeddings, is above every embedder but the two
+  strongest on SWE-bench Lite. The likely reason, not yet isolated by an ablation: chunks
+  follow functions and carry their file path and name. On text it is level with ColBERT on
+  SciFact and stays below the modern embedders, on SciFact and StackOverflow QA alike.
+- **With TypeSafe Jev** reordering Inventio's 30 candidates, it has the best score in the
+  SWE-bench Lite comparison (the file to fix comes first for 56% of issues, in the top 5 for
+  78%), matches a 7B embedder on SciFact, and gains 0.12 on StackOverflow QA but stays under
+  the strongest embedders there: the answer is among the 30 candidates for only 80% of those
+  questions, so no reordering of them can pass 0.805. The candidate pool is the next limit.
+- **Laya** is a small decision model that runs on your own GPU, so private sources never
+  leave the machine. Out of the box it ranks worse than no model at all; its author calls it
+  "a fast base to specialise". It is meant to learn from Jev: every TypeSafe ranking on a
+  public source is stored as a (query, passage, probability) label, and those labels are the
+  teacher signal for fine-tuning Laya ([below](#fine-tuning-laya-from-jev)). The fine-tuned
+  student has not been measured yet; this column is its starting point.
+- To read the comparison fairly: the published figures are single-stage embedders over the
+  whole corpus (from the BEIR, CoIR and CodeRAG-Bench papers and the models' MTEB cards),
+  while Inventio + TypeSafe is two-stage. The two-stage figure in the BEIR paper, a
+  cross-encoder reranking the top 100, is 0.688 on SciFact.
 
-Method, caveats, and one-command reproduction: [benchmarks/README.md](benchmarks/README.md).
+Method, the whole-repository variant of SWE-bench, caveats and one-command reproduction:
+[benchmarks/README.md](benchmarks/README.md).
 
 ## Measured on an own corpus
 
@@ -146,15 +163,18 @@ One question per line; a result counts when it overlaps the lines you name:
 
 ## Fine-tuning Laya from Jev
 
-Every TypeSafe ranking stores its (query, passage, probability) triples in the map. Export them:
+Jev is the teacher and Laya the student. Jev judges well but runs in the cloud, so it may only
+see public sources; Laya runs on your machine but has to learn the judgement first. Every
+TypeSafe ranking stores its (query, passage, probability) triples in the map. Export them:
 
 ```sh
 inventio labels jev-labels.jsonl
 ```
 
-These come only from public sources, by construction. They are teacher labels for fine-tuning
-Laya on your own retrieval task (see the Laya README's fine-tuning section); `bench` then
-measures the tuned model against the same questions.
+These come only from public sources, by construction. Fine-tune Laya on them (see the Laya
+README's fine-tuning section). The student then ranks private sources, which the teacher never
+sees. Not wired yet: `--ranker laya` always loads the published checkpoint, so a tuned one
+cannot be benchmarked through Inventio until it can be selected.
 
 ## Not yet
 

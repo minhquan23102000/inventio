@@ -48,8 +48,7 @@ nDCG@10 (higher is better, 1.0 = every gold document at the top). Run on 2026-09
 | Benchmark | Published BM25 | Inventio BM25 | + Laya zero-shot | + TypeSafe Jev | ceiling (gold in the 30 candidates) |
 |---|---|---|---|---|---|
 | SciFact (300 queries) | 0.665 | 0.670 | 0.302 | **0.765** | 0.849 |
-| StackOverflow QA, all 1,994 queries | 0.568 | 0.670 | | | 0.805 |
-| StackOverflow QA, first 300 queries | | 0.713 | 0.203 | **0.837** | 0.853 |
+| StackOverflow QA (1,994 queries) | 0.568 | 0.670 | 0.193 | **0.791** | 0.805 |
 | SWE-bench Lite `code` (300 issues) | 0.430 | 0.540 | 0.391 | **0.696** | 0.823 |
 | SWE-bench Lite `mixed` (300 issues) | | 0.400 | 0.264 | **0.515** | 0.633 |
 
@@ -64,6 +63,14 @@ first five:
 Cost per query: BM25 35-140 ms; Laya 0.6-0.9 s on the laptop GPU; TypeSafe 1.0-1.3 s. Indexing
 a repository at one commit takes 6 s (`code`) to 14 s (`mixed`) on average.
 
+Published retrievers on the same test sets (nDCG@10, single-stage, whole corpus):
+
+| Benchmark | Figures | Source |
+|---|---|---|
+| SciFact | e5-mistral-7b-instruct 0.764, bge-large-en-v1.5 0.746, bge-base-en-v1.5 0.740, e5-large-v2 0.722, ColBERT 0.671; cross-encoder reranking BM25's top 100: 0.688 | MTEB results in each model's Hugging Face card; BEIR paper, Table 2 |
+| StackOverflow QA | E5-Mistral 7B 0.915, Voyage-Code-002 0.877, E5-base 0.869, BGE-base 0.736, OpenAI Ada-002 0.724, Contriever 0.661, BGE-M3 0.610 | CoIR paper, Table 3 |
+| SWE-bench Lite | SFR-Mistral 7B 0.627, Jina-v2-code 0.583, GIST-large 0.478, BGE-base 0.449, OpenAI embedding-3-small 0.433, Voyage-code 0.291 | CodeRAG-Bench paper, retrieval table |
+
 What the numbers say:
 
 - The BM25 baseline is sound: on SciFact it lands on the published figure (0.670 against
@@ -72,9 +79,13 @@ What the numbers say:
   published file-level BM25 by 0.11 (0.540 against 0.430), on the same issues, files and gold.
   The likely reason (not isolated by an ablation) is chunking by function and indexing each
   chunk's file path and function name next to its text. In CodeRAG-Bench's table this is above
-  most embedders (BGE-base 0.449, GIST-large 0.478, OpenAI-03 0.433, Voyage-code 0.291) and
-  below the two strongest (Jina-v2-code 0.583, the 7B SFR-Mistral 0.627). With TypeSafe on
-  top (0.696) it is above every retriever in that table.
+  most embedders (BGE-base 0.449, GIST-large 0.478, OpenAI embedding-3-small 0.433, Voyage-code
+  0.291) and below the two strongest (Jina-v2-code 0.583, the 7B SFR-Mistral 0.627). With
+  TypeSafe on top (0.696) it is above every retriever in that table.
+- On text the picture is different. SciFact: TypeSafe on top ties the best embedder listed
+  (0.765 against e5-mistral-7b's 0.764). StackOverflow QA: it stays below the strongest
+  embedders (0.791 against 0.869-0.915), because only 80% of questions have their answer among
+  the 30 candidates; there the pool is the limit, as on whole repositories.
 - TypeSafe Jev reordering the same 30 candidates adds 0.10 to 0.16 everywhere, and on SWE-bench
   `code` turns 38% first-hit into 56%.
 - Zero-shot Laya makes every ranking worse, by a lot. It is not usable as a ranker until it is
@@ -82,13 +93,14 @@ What the numbers say:
 - A whole repository is harder than its code: tests and docs push the fix's files out of the 30
   candidates (ceiling 0.823 falls to 0.633). The ranker cannot recover what BM25 did not hand
   it, so on mixed repositories the candidate pool, not the ranker, is the limit to work on.
-- TypeSafe's firewall refused 73 of 9,000 pairs on StackOverflow QA and 113 on SWE-bench; they
-  kept their BM25 place.
+- TypeSafe's firewall refused 409 of 59,820 pairs on StackOverflow QA and 113 on SWE-bench;
+  they kept their BM25 place.
 
 ## Caveats
 
-- Rankers on StackOverflow QA were run on the first 300 test queries, BM25 on all 1,994 and on
-  those 300, so the comparison is on the same queries.
+- Every configuration was run on every test query (SciFact 300, StackOverflow QA 1,994,
+  SWE-bench Lite 300). An earlier StackOverflow QA run on the first 300 queries gave higher
+  numbers (0.713 / 0.837); those 300 are easier than the full set.
 - Laya reads at most 512 tokens of query plus passage. SWE-bench issues are often longer than
   that on their own, so Laya sees a truncated question there.
 - TypeSafe's edge firewall refuses some texts outright (HTTP 403 "Attention Required"; it

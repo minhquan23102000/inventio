@@ -5,6 +5,7 @@ definitions, links. No model is asked what code can know.
 
 import ast
 import fnmatch
+import hashlib
 import keyword
 import os
 import re
@@ -76,8 +77,7 @@ def list_files(root: Path, excludes: list[str]) -> list[str]:
     return sorted(set(keep))
 
 
-def read_text(path: Path) -> str | None:
-    data = path.read_bytes()
+def decode_text(data: bytes) -> str | None:
     if b"\0" in data[:8192]:
         return None
     return data.decode("utf-8", "replace").replace("\r\n", "\n")
@@ -293,14 +293,21 @@ def chunk_file(text: str, lang: str, rel: str) -> list[Chunk]:
     return chunks
 
 
-def ingest_source(con, name: str, root: Path, public: bool, excludes: list[str]) -> dict:
-    from .store import drop_source
+def ingest_source(con, name: str, root: Path, public: bool, excludes: list[str], full: bool = False) -> dict:
+    """Bring one source's part of the map in line with the files on disk.
+
+    A file whose size and modification time match the map is skipped without being read; one
+    whose bytes hash the same is only re-stamped. Only new and edited files are chunked again,
+    so unchanged chunks keep their ids. `full` drops the source first and rebuilds everything.
+    """
+    from .store import drop_file, drop_source
 
     root = root.resolve()
     row = con.execute("SELECT id FROM sources WHERE name = ?", (name,)).fetchone()
     if row:
         sid = row["id"]
-        drop_source(con, sid)
+        if full:
+            drop_source(con, sid)
         con.execute(
             "UPDATE sources SET root = ?, public = ?, excludes = ?, indexed_at = datetime('now') WHERE id = ?",
             (str(root), int(public), "\n".join(excludes), sid),
@@ -310,32 +317,65 @@ def ingest_source(con, name: str, root: Path, public: bool, excludes: list[str])
             "INSERT INTO sources (name, root, public, excludes, indexed_at) VALUES (?, ?, ?, ?, datetime('now'))",
             (name, str(root), int(public), "\n".join(excludes)),
         ).lastrowid
-    n_files = n_chunks = 0
+    known = {
+        r["path"]: r
+        for r in con.execute("SELECT id, path, size, mtime_ns, sha1 FROM files WHERE source_id = ?", (sid,))
+    }
+    counts = {"added": 0, "changed": 0, "removed": 0, "unchanged": 0}
     for rel in list_files(root, excludes):
-        text = read_text(root / rel)
-        if text is None or not text.strip():
+        path = root / rel
+        st = path.stat()
+        old = known.pop(rel, None)
+        if old is not None and old["size"] == st.st_size and old["mtime_ns"] == st.st_mtime_ns:
+            counts["unchanged"] += 1
             continue
-        lang = LANGS[Path(rel).suffix.lower()]
-        fid = con.execute("INSERT INTO files (source_id, path, lang) VALUES (?, ?, ?)", (sid, rel, lang)).lastrowid
-        n_files += 1
-        ids: list[int] = []
-        for c in chunk_file(text, lang, rel):
-            parent_id = ids[c.parent] if c.parent is not None and c.parent < len(ids) else None
-            cid = con.execute(
-                "INSERT INTO chunks (file_id, parent_id, kind, heading_path, anchor, start_line, end_line, text) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (fid, parent_id, c.kind, c.heading_path, c.anchor, c.start_line, c.end_line, c.text),
-            ).lastrowid
-            ids.append(cid)
-            head = f"{rel} {c.heading_path}".replace("/", " ").replace("_", " ").replace("-", " ")
-            con.execute("INSERT INTO chunks_fts (rowid, head, body) VALUES (?, ?, ?)", (cid, head, c.text))
-            con.executemany(
-                "INSERT INTO idents (chunk_id, ident, role) VALUES (?, ?, ?)",
-                [(cid, x, "defines") for x in c.defines] + [(cid, x, "mentions") for x in c.mentions - c.defines],
-            )
-            con.executemany(
-                "INSERT INTO refs (chunk_id, target_path, target_anchor) VALUES (?, ?, ?)",
-                [(cid, p, a) for p, a in c.refs],
-            )
-            n_chunks += 1
-    return {"source": name, "files": n_files, "chunks": n_chunks}
+        data = path.read_bytes()
+        digest = hashlib.sha1(data).hexdigest()
+        if old is not None and old["sha1"] == digest:
+            con.execute("UPDATE files SET size = ?, mtime_ns = ? WHERE id = ?", (st.st_size, st.st_mtime_ns, old["id"]))
+            counts["unchanged"] += 1
+            continue
+        if old is not None:
+            drop_file(con, old["id"])
+        text = decode_text(data)
+        if text is None or not text.strip():  # binary or empty: not in the map
+            counts["removed"] += old is not None
+            continue
+        counts["changed" if old is not None else "added"] += 1
+        _insert_file(con, sid, rel, text, st.st_size, st.st_mtime_ns, digest)
+    for old in known.values():  # indexed before, gone from disk or now excluded
+        drop_file(con, old["id"])
+        counts["removed"] += 1
+    n_files, n_chunks = con.execute(
+        "SELECT count(DISTINCT f.id), count(c.id) FROM files f LEFT JOIN chunks c ON c.file_id = f.id "
+        "WHERE f.source_id = ?",
+        (sid,),
+    ).fetchone()
+    return {"source": name, "files": n_files, "chunks": n_chunks, **counts}
+
+
+def _insert_file(con, sid: int, rel: str, text: str, size: int, mtime_ns: int, digest: str) -> None:
+    lang = LANGS[Path(rel).suffix.lower()]
+    fid = con.execute(
+        "INSERT INTO files (source_id, path, lang, size, mtime_ns, sha1) VALUES (?, ?, ?, ?, ?, ?)",
+        (sid, rel, lang, size, mtime_ns, digest),
+    ).lastrowid
+    ids: list[int] = []
+    for c in chunk_file(text, lang, rel):
+        parent_id = ids[c.parent] if c.parent is not None and c.parent < len(ids) else None
+        cid = con.execute(
+            "INSERT INTO chunks (file_id, parent_id, kind, heading_path, anchor, start_line, end_line, text) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (fid, parent_id, c.kind, c.heading_path, c.anchor, c.start_line, c.end_line, c.text),
+        ).lastrowid
+        ids.append(cid)
+        head = f"{rel} {c.heading_path}".replace("/", " ").replace("_", " ").replace("-", " ")
+        con.execute("INSERT INTO chunks_fts (rowid, head, body) VALUES (?, ?, ?)", (cid, head, c.text))
+        con.executemany(
+            "INSERT INTO idents (chunk_id, ident, role) VALUES (?, ?, ?)",
+            [(cid, x, "defines") for x in c.defines] + [(cid, x, "mentions") for x in c.mentions - c.defines],
+        )
+        con.executemany(
+            "INSERT INTO refs (chunk_id, target_path, target_anchor) VALUES (?, ?, ?)",
+            [(cid, p, a) for p, a in c.refs],
+        )
