@@ -45,7 +45,7 @@ def cmd_sources(args) -> int:
     for r in rows:
         print(f"{r['name']:<16} {'public ' if r['public'] else 'private'} {r['files']:>5} files {r['chunks']:>6} chunks  {r['root']}  ({r['indexed_at']})")
     if not rows:
-        print("no sources; run `lacthu init <path>`")
+        print("no sources; run `inventio init <path>`")
     return 0
 
 
@@ -135,9 +135,9 @@ def cmd_labels(args) -> int:
 def main(argv=None) -> int:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
-    p = argparse.ArgumentParser(prog="lacthu", description="Local retrieval map: BM25 + structure + links, reranked by Laya or TypeSafe.")
+    p = argparse.ArgumentParser(prog="inventio", description="Local retrieval map: BM25 + structure + links, reranked by Laya or TypeSafe.")
     p.add_argument("--version", action="version", version=__version__)
-    p.add_argument("--db", help=f"map file (default {default_db()}, or $LACTHU_DB)")
+    p.add_argument("--db", help=f"map file (default {default_db()}, or $INVENTIO_DB)")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     s = sub.add_parser("init", help="index a directory as a source (re-running rebuilds it)")
@@ -155,7 +155,7 @@ def main(argv=None) -> int:
     s.set_defaults(fn=cmd_drop)
 
     def ranking(s):
-        s.add_argument("--ranker", choices=RANKERS, default=os.environ.get("LACTHU_RANKER", "none"),
+        s.add_argument("--ranker", choices=RANKERS, default=os.environ.get("INVENTIO_RANKER", "none"),
                        help="reorder the pool: none (BM25 order), laya (local), typesafe (cloud, public sources only)")
         s.add_argument("--pool", type=int, default=30, help="BM25 candidates handed to the ranker")
         s.add_argument("--links", action="store_true",

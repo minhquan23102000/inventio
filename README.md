@@ -1,13 +1,13 @@
-# Lạc Thư
+# Inventio
 
-> The legend says a turtle rose from the Luo river carrying a pattern on its shell, and the
-> first map of order was read from it. Nobody drew the map. It was already there, on the back
-> of the thing itself.
+> *Inventio*, from *invenire*: to come upon. The first of the five canons of rhetoric was not
+> invention in our sense. The orator did not make his material up; he went looking through
+> the *loci*, the places where it already lay, and found it.
 
-That is the rule this tool is built on: the structure of a body of knowledge is read from the
-sources (their folders, headings, definitions, the names they share), not invented by a model.
+That is the rule this tool is built on: the structure of a body of knowledge is found in the
+sources (their folders, headings, definitions, the names they share), not made up by a model.
 
-Local retrieval without embeddings. `lacthu` indexes your repositories and documents into
+Local retrieval without embeddings. `inventio` indexes your repositories and documents into
 one SQLite file, finds candidates with BM25, and lets a decision model reorder the short list:
 [Laya](https://github.com/NandhaKishorM/laya) on your own GPU, or
 [TypeSafe Jev](https://docs.typesafe.ai) in the cloud for sources you have marked public.
@@ -28,14 +28,14 @@ pip install -e ".[typesafe]"     # cloud ranker; needs TYPESAFE_API_KEY
 ## Use
 
 ```sh
-lacthu init ~/code/fraud-rules --name rules
-lacthu init ~/notes/wiki --name wiki --public --exclude "drafts/*"
-lacthu sources
+inventio init ~/code/fraud-rules --name rules
+inventio init ~/notes/wiki --name wiki --public --exclude "drafts/*"
+inventio sources
 
-lacthu query "which job recomputes customer risk overnight?"
-lacthu query "..." --ranker laya              # local GPU/CPU
-lacthu query "..." --ranker typesafe --source wiki
-lacthu query "..." --json                     # for agents
+inventio query "which job recomputes customer risk overnight?"
+inventio query "..." --ranker laya              # local GPU/CPU
+inventio query "..." --ranker typesafe --source wiki
+inventio query "..." --json                     # for agents
 ```
 
 Each result shows where it lives and where it leads:
@@ -46,9 +46,9 @@ Each result shows where it lives and where it leads:
    -> mentions rules:jobs/score.py:1-2  (fraud_score_daily)
 ```
 
-The map lives in your user cache (`%LOCALAPPDATA%\lacthu\map.db`, or `$XDG_CACHE_HOME`,
-or `~/.cache`), never inside an indexed repository. Override it with `--db` or `LACTHU_DB`.
-Set a default ranker with `LACTHU_RANKER`.
+The map lives in your user cache (`%LOCALAPPDATA%\inventio\map.db`, or `$XDG_CACHE_HOME`,
+or `~/.cache`), never inside an indexed repository. Override it with `--db` or `INVENTIO_DB`.
+Set a default ranker with `INVENTIO_RANKER`.
 
 ## How the map is built
 
@@ -99,8 +99,8 @@ What this does and does not say:
 Reproduce with your own questions:
 
 ```sh
-lacthu bench my-questions.jsonl --ranker none
-lacthu bench my-questions.jsonl --ranker typesafe --links --json
+inventio bench my-questions.jsonl --ranker none
+inventio bench my-questions.jsonl --ranker typesafe --links --json
 ```
 
 One question per line; a result counts when it overlaps the lines you name:
@@ -122,7 +122,7 @@ One question per line; a result counts when it overlaps the lines you name:
 Every TypeSafe ranking stores its (query, passage, probability) triples in the map. Export them:
 
 ```sh
-lacthu labels jev-labels.jsonl
+inventio labels jev-labels.jsonl
 ```
 
 These come only from public sources, by construction. They are teacher labels for fine-tuning

@@ -3,8 +3,8 @@ import textwrap
 
 import pytest
 
-from lacthu import cli
-from lacthu.ingest import chunk_file
+from inventio import cli
+from inventio.ingest import chunk_file
 
 
 def write(root, rel, text):
