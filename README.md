@@ -76,22 +76,33 @@ Everything the source already knows is read by code, not guessed by a model.
 
 ## Benchmarks
 
-Three public retrieval benchmarks, run through Inventio's real ingest and query path, on every
-query of each test set. nDCG@10: 1.0 means every right answer sits at the top.
+nDCG@10 on three public retrieval benchmarks, every query of each test set, run through
+Inventio's real ingest and query path. 1.0 means every right answer sits at the top.
 
-| Benchmark | Inventio, no model | + TypeSafe Jev | + Laya, not yet fine-tuned | Published retrievers, same test set |
+| System | Runs on | SWE-bench Lite | SciFact | StackOverflow QA |
 |---|---|---|---|---|
-| [SWE-bench Lite](https://arxiv.org/abs/2406.14497): GitHub issue → code files to fix (300) | 0.540 | **0.696** | 0.391 | SFR-Mistral 7B 0.627 · Jina-v2-code 0.583 · GIST-large 0.478 · OpenAI embedding-3-small 0.433 |
-| [SciFact](https://arxiv.org/abs/2104.08663): claim → scientific abstract (300) | 0.670 | **0.765** | 0.302 | e5-mistral-7b 0.764 · bge-large-v1.5 0.746 · ColBERT 0.671 |
-| [StackOverflow QA](https://arxiv.org/abs/2407.02883): question → answer, prose + code (1,994) | 0.670 | 0.791 | 0.193 | E5-Mistral 7B 0.915 · Voyage-Code-002 0.877 · E5-base 0.869 · OpenAI Ada-002 0.724 |
+| **Inventio + TypeSafe Jev** | CPU + TypeSafe cloud, ~1.2 s/query | **0.696** | **0.765** | 0.791 |
+| **Inventio**, no model | CPU, 35-140 ms/query | 0.540 | 0.670 | 0.670 |
+| **Inventio + Laya**, before fine-tuning | laptop GPU, 0.6-0.9 s/query | 0.391 | 0.302 | 0.193 |
+| E5-Mistral 7B | 7B embedder | – | 0.764 | **0.915** |
+| SFR-Embedding-Mistral 7B | 7B embedder | 0.627 | – | – |
+| Voyage-Code-2 | Voyage cloud | 0.291 | – | 0.877 |
+| Jina-v2-code | 161M embedder | 0.583 | – | – |
+| BGE-base | 110M embedder | 0.449 | 0.740 | 0.736 |
 
-Per query: 35-140 ms with no model (CPU, standard library), about 1.2 s with TypeSafe,
-0.6-0.9 s with Laya on a laptop RTX 5070.
+- [SWE-bench Lite](https://arxiv.org/abs/2406.14497): a GitHub issue, find the code files its
+  fix touches (300 issues). [SciFact](https://arxiv.org/abs/2104.08663): a scientific claim,
+  find the abstract that settles it (300). [StackOverflow QA](https://arxiv.org/abs/2407.02883):
+  a question, find its top-voted answer, prose and code mixed (1,994).
+- Published figures come from CodeRAG-Bench, CoIR and the models' MTEB cards; – means the
+  model was not reported on that benchmark.
 
-- **Inventio alone**, with no model and no embeddings, is above every embedder but the two
-  strongest on SWE-bench Lite. The likely reason, not yet isolated by an ablation: chunks
-  follow functions and carry their file path and name. On text it is level with ColBERT on
-  SciFact and stays below the modern embedders, on SciFact and StackOverflow QA alike.
+What the rows say:
+
+- **Inventio alone**, with no model and no embeddings, is ahead of BGE-base and Voyage-Code-2
+  on SWE-bench Lite; only the code-trained Jina-v2-code and the 7B model are ahead of it. The
+  likely reason, not yet isolated by an ablation: chunks follow functions and carry their file
+  path and name. On text it stays below the embedders.
 - **With TypeSafe Jev** reordering Inventio's 30 candidates, it has the best score in the
   SWE-bench Lite comparison (the file to fix comes first for 56% of issues, in the top 5 for
   78%), matches a 7B embedder on SciFact, and gains 0.12 on StackOverflow QA but stays under
@@ -102,14 +113,13 @@ Per query: 35-140 ms with no model (CPU, standard library), about 1.2 s with Typ
   "a fast base to specialise". It is meant to learn from Jev: every TypeSafe ranking on a
   public source is stored as a (query, passage, probability) label, and those labels are the
   teacher signal for fine-tuning Laya ([below](#fine-tuning-laya-from-jev)). The fine-tuned
-  student has not been measured yet; this column is its starting point.
+  student has not been measured yet; this row is its starting point.
 - To read the comparison fairly: the published figures are single-stage embedders over the
-  whole corpus (from the BEIR, CoIR and CodeRAG-Bench papers and the models' MTEB cards),
-  while Inventio + TypeSafe is two-stage. The two-stage figure in the BEIR paper, a
-  cross-encoder reranking the top 100, is 0.688 on SciFact.
+  whole corpus, while Inventio + TypeSafe is two-stage. The two-stage figure in the BEIR paper,
+  a cross-encoder reranking the top 100, is 0.688 on SciFact.
 
-Method, the whole-repository variant of SWE-bench, caveats and one-command reproduction:
-[benchmarks/README.md](benchmarks/README.md).
+Every published model with its source, the whole-repository variant of SWE-bench, caveats and
+one-command reproduction: [benchmarks/README.md](benchmarks/README.md).
 
 ## Measured on an own corpus
 

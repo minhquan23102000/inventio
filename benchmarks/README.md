@@ -71,6 +71,11 @@ Published retrievers on the same test sets (nDCG@10, single-stage, whole corpus)
 | StackOverflow QA | E5-Mistral 7B 0.915, Voyage-Code-002 0.877, E5-base 0.869, BGE-base 0.736, OpenAI Ada-002 0.724, Contriever 0.661, BGE-M3 0.610 | CoIR paper, Table 3 |
 | SWE-bench Lite | SFR-Mistral 7B 0.627, Jina-v2-code 0.583, GIST-large 0.478, BGE-base 0.449, OpenAI embedding-3-small 0.433, Voyage-code 0.291 | CodeRAG-Bench paper, retrieval table |
 
+The same model across papers: CoIR's E5-Mistral, BGE-Base and E5-base are
+`e5-mistral-7b-instruct`, `bge-base-en-v1.5` and `e5-base-v2` (its model list); Voyage-Code-002
+in CoIR and voyage-code-2 in CodeRAG-Bench are one model. CodeRAG-Bench does not state which
+BGE-base version it ran, so the main README's BGE-base row joins two papers on that name.
+
 What the numbers say:
 
 - The BM25 baseline is sound: on SciFact it lands on the published figure (0.670 against
