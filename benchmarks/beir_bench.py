@@ -67,8 +67,11 @@ def teach(con, args, queries) -> None:
     t = time.time()
     print(f"query categories: {warm_query_categories(con, JevJudge(), list(queries.values()))} asked", flush=True)
     ranker = TypeSafeRanker(con)  # writes every (query, passage, p) into the map's labels table
+    done = {(r[0], r[1]) for r in con.execute("SELECT query, passage FROM labels WHERE model = ?", (ranker.model,))}
     for n, q in enumerate(queries.values(), 1):
-        ranker.score(q, bm25(con, q, args.pool, [args.dataset]))
+        todo = [h for h in bm25(con, q, args.pool, [args.dataset]) if (q, h.passage()) not in done]
+        if todo:  # a rerun after an interruption asks only what was never answered
+            ranker.score(q, todo)
         if n % 50 == 0:
             print(f"  relevance {n}/{len(queries)}  {time.time() - t:.0f}s", flush=True)
 
