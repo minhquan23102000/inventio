@@ -44,7 +44,10 @@ CREATE TABLE IF NOT EXISTS idents (
     ident TEXT NOT NULL,
     role TEXT NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idents_ident ON idents(ident);
+-- (ident, role): the mentions join looks up the few definers of an identifier; on ident alone
+-- it scanned every mention of it too, which is quadratic on common names (26 s -> 0.1 s on astropy).
+DROP INDEX IF EXISTS idents_ident;
+CREATE INDEX IF NOT EXISTS idents_ident_role ON idents(ident, role);
 CREATE TABLE IF NOT EXISTS refs (
     chunk_id INTEGER NOT NULL REFERENCES chunks(id) ON DELETE CASCADE,
     target_path TEXT NOT NULL,
