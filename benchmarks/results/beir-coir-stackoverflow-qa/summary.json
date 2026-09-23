@@ -40,5 +40,76 @@
     "recall@30chunks": 0.8049,
     "sec_per_query": null,
     "timed_queries": 0
+  },
+  "arms": {
+    "facts": {
+      "categories": {
+        "chunks": 77,
+        "asked": 0,
+        "cached": 0,
+        "refused": 77,
+        "failed": 0
+      },
+      "links": {
+        "chunks": 26517,
+        "pairs": 264864,
+        "asked": 164970,
+        "cached": 99894,
+        "links": 19269,
+        "refused": 77,
+        "failed": 0
+      },
+      "kept": {
+        "Action": 25311,
+        "Intangible": 23964,
+        "Product": 14098,
+        "CreativeWork": 5465,
+        "Person": 1253,
+        "Event": 483,
+        "Organization": 383,
+        "Place": 63
+      }
+    },
+    "none": {
+      "base": {
+        "queries": 1994,
+        "ndcg@10": 0.6699,
+        "recall@pool": 0.8049,
+        "mean_pool": 30.0
+      },
+      "facts": {
+        "queries": 1994,
+        "ndcg@10": 0.6699,
+        "recall@pool": 0.8305,
+        "mean_pool": 46.8
+      },
+      "control": {
+        "queries": 1994,
+        "ndcg@10": 0.6699,
+        "recall@pool": 0.8235,
+        "mean_pool": 46.8
+      },
+      "facts_vs_control": {
+        "wins": 0,
+        "losses": 0,
+        "ties": 1994,
+        "mean_diff": 0.0,
+        "ci95": [
+          0.0,
+          0.0
+        ]
+      },
+      "facts_vs_base": {
+        "wins": 0,
+        "losses": 0,
+        "ties": 1994,
+        "mean_diff": 0.0,
+        "ci95": [
+          0.0,
+          0.0
+        ]
+      },
+      "unscored_pairs": 0
+    }
   }
 }

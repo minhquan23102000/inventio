@@ -31,8 +31,6 @@ python benchmarks/swe_bench.py --rankers none,laya,typesafe
 python benchmarks/swe_bench.py --types --variants mixed --rankers none,typesafe
 
 # categories and fact links: Jev judges every chunk and candidate pair, then three arms
-inventio facts --judge typesafe --relink          # .omp map (docs, skills, friction; all --public)
-inventio bench docs/design/evidence/bench-md.jsonl --arms --judge typesafe --ranker typesafe --json
 python benchmarks/beir_bench.py scifact --arms --rankers none,typesafe,laya
 python benchmarks/beir_bench.py coir-stackoverflow-qa --arms --rankers none,typesafe,laya
 python benchmarks/beir_bench.py scifact --teach    # Jev relevance labels on the train split, for fine-tuning
@@ -79,14 +77,14 @@ chunks of the query's predicted categories and the chunks linked to the top hits
 `about` links) and `control` (BM25 with as many candidates as `facts`). Each distinct chunk
 is scored once per query, so the arms differ only in their pools. `facts_vs_control` is a
 paired per-query comparison with a bootstrap 95% interval. Results and what they say are in
-the [main README](../README.md#do-categories-and-fact-links-beat-plain-bm25); SciFact rows are
-in `results/beir-scifact/arms.jsonl`, totals in its `summary.json` under `arms`.
+the [main README](../README.md#do-content-categories-and-fact-links-help); per-query rows are
+in `results/beir-<name>/arms.jsonl`, totals in its `summary.json` under `arms`.
 
 Jev calls: one per chunk for the eight categories, one per chunk for up to ten neighbours.
-SciFact took 5,183 + 5,180 calls (51,792 pairs) in 335 s. On StackOverflow QA the run stopped
-at 10,000 of 27,018 chunks' links: the TypeSafe account ran out of credits (HTTP 402, which
-now stops a run at once instead of retrying). Judgments already made are stored, so the same
-command resumes.
+SciFact took 5,183 + 5,180 calls (51,792 pairs) in 335 s. StackOverflow QA took 26,941 + 26,517
+calls (264,864 pairs); 77 chunks were refused by the API's edge firewall and keep only their
+BM25 place. A run stopped halfway (for example HTTP 402, no credits left, which stops a run at
+once) resumes from the stored judgments.
 
 ### Widening the pool by document type (SWE-bench Lite `mixed`)
 
