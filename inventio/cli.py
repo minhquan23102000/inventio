@@ -107,7 +107,7 @@ def cmd_query(args) -> int:
         ranker = make_ranker(args.ranker)
         hits = search(con, args.text, k=args.k, pool=args.pool, ranker=ranker, expand_links=args.links,
                       by_type=args.types, facts=make_judge(args.judge) if args.facts else None,
-                      sources=args.source)
+                      symbols=not args.no_symbols, neighbours=args.neighbours, sources=args.source)
     except CloudRefused as e:
         print(str(e), file=sys.stderr)
         return 3
@@ -145,7 +145,8 @@ def cmd_bench(args) -> int:
             res = bench.run_arms(con, rows, ranker, make_judge(args.judge), pool=args.pool)
         else:
             res = bench.run(con, rows, ranker, pool=args.pool, expand_links=args.links, by_type=args.types,
-                            facts=make_judge(args.judge) if args.facts else None)
+                            facts=make_judge(args.judge) if args.facts else None,
+                            symbols=not args.no_symbols, neighbours=args.neighbours)
     except CloudRefused as e:
         print(str(e), file=sys.stderr)
         return 3
@@ -210,6 +211,11 @@ def main(argv=None) -> int:
         s.add_argument("--pool", type=int, default=30, help="BM25 candidates handed to the ranker")
         s.add_argument("--links", action="store_true",
                        help="also hand the ranker chunks linked to the top BM25 hits (off: measured no gain yet)")
+        s.add_argument("--no-symbols", action="store_true",
+                       help="do not add the files and definitions the question names (on by default)")
+        s.add_argument("--neighbours", action="store_true",
+                       help="add the chunks of other files that share the most distinctive words of the top "
+                            "BM25 hits (code only, no model; needs --ranker to reorder them)")
         s.add_argument("--types", action="store_true",
                        help="ask the ranker which document types hold the answer and add BM25's best chunks "
                             "of those types to the pool (needs --ranker)")

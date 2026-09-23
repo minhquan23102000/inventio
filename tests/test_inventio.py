@@ -213,6 +213,50 @@ def test_type_widening_only_adds_and_respects_privacy(tmp_path, capsys):
         search(con, "velocity limit", pool=2, ranker=FakeRanker(cloud=True), by_type=True)
 
 
+def test_query_names_bring_their_file_and_definition(tmp_path, capsys):
+    from inventio.search import search
+    from inventio.store import connect
+
+    db = tmp_path / "map.db"
+    repo = tmp_path / "repo"
+    for i in range(6):  # prose that outranks the code on every word of the question
+        write(repo, f"docs/jobs-report-nightly-{i}.md",
+              f"# Nightly jobs report {i}\nnightly job crash: recompute risk fails; see the jobs report, then run it again\n")
+    write(repo, "jobs/nightly.py", "def recompute_risk(rows):\n    return sum(r.score for r in rows)\n")
+    write(repo, "jobs/report.py", "def render(rows):\n    return str(rows)\n")
+    for i in range(4):  # a name defined in many places names nothing in particular
+        write(repo, f"lib/m{i}.py", "def run():\n    return 1\n")
+    run(capsys, "--db", str(db), "init", str(repo), "--name", "repo")
+    con = connect(db)
+
+    q = "the nightly job crash: recompute_risk fails, see jobs/report.py, then run"
+    plain = search(con, q, k=100, pool=2, symbols=False)
+    assert {h.path for h in plain} <= {f"docs/jobs-report-nightly-{i}.md" for i in range(6)}
+    named = [("jobs/report.py", "path"), ("jobs/nightly.py", "defines:recompute_risk")]
+    wide = search(con, q, k=100, pool=2)  # no ranker: the named ones go first, BM25's order after
+    assert [(h.path, h.via) for h in wide] == named + [(h.path, h.via) for h in plain]
+    ranked = search(con, q, k=100, pool=2, ranker=FakeRanker())  # a ranker sees all of them
+    assert {(h.path, h.via) for h in ranked} == set(named) | {(h.path, h.via) for h in plain}
+
+
+def test_vietnamese_query_matches_words_not_scattered_syllables(tmp_path, capsys):
+    from inventio.search import bm25
+    from inventio.store import connect
+
+    db = tmp_path / "map.db"
+    write(tmp_path / "d", "a.md", "# A\nHợp đồng lao động phải lập thành văn bản.\n")
+    # the same four syllables, never adjacent (FTS5 phrases ignore punctuation, so a comma is not a gap)
+    write(tmp_path / "d", "b.md", "# B\nHợp lý, đồng ý, lao xao, động viên; hợp tác, đồng hồ, lao công, động cơ.\n")
+    for i in range(8):  # BM25 needs a corpus in which the words are rare
+        write(tmp_path / "d", f"f{i}.md", f"# F{i}\nNgân hàng mở cửa lúc {i} giờ sáng.\n")
+    run(capsys, "--db", str(db), "init", str(tmp_path / "d"), "--name", "d")
+    con = connect(db)
+
+    q = "hợp đồng lao động là gì"
+    assert bm25(con, q, 2, phrases=False)[0].path == "b.md"  # syllables alone favour the noisy text
+    assert bm25(con, q, 2)[0].path == "a.md"
+
+
 class FakeJudge:
     """Counts calls. Categories: a chunk naming a card is about a Product, one naming a merchant
     about an Organization; every query is about a Product. Two passages are about the same thing
