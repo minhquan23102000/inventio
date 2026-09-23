@@ -68,19 +68,38 @@ Everything the source already knows is read by code, not guessed by a model.
    yes/no question per candidate with explicit criteria ("states the specific answer" versus
    "only on a related topic") and sorts by the probability.
 
-## Measured
+## Benchmarks
 
-On public benchmarks (SciFact, StackOverflow QA, SWE-bench Lite) BM25 through Inventio's
-structure scores 0.540 nDCG@10 on SWE-bench Lite file retrieval against the published BM25's
-0.430, and TypeSafe reranking lifts it to 0.696. Zero-shot Laya lowers every score. Numbers,
-method and one-command reproduction: [benchmarks/](benchmarks/README.md).
+Public retrieval benchmarks, run through Inventio's real ingest and query path. nDCG@10, higher
+is better; every ranker reorders the same 30 BM25 candidates.
 
-The questions and raw results for the own-corpus run below are in
-[docs/design/evidence/](docs/design/evidence/).
+| Benchmark | Published BM25 | Inventio BM25 | + Laya zero-shot | + TypeSafe Jev |
+|---|---|---|---|---|
+| [SciFact](https://arxiv.org/abs/2104.08663) (text, 300 queries) | 0.665 | 0.670 | 0.302 | **0.765** |
+| [StackOverflow QA](https://arxiv.org/abs/2407.02883) (prose + code, 300 queries) | 0.568¹ | 0.713 | 0.203 | **0.837** |
+| [SWE-bench Lite](https://arxiv.org/abs/2406.14497), issue → files to fix, code only | 0.430 | 0.540 | 0.391 | **0.696** |
+| SWE-bench Lite, whole repository (code, tests, docs) | | 0.400 | 0.264 | **0.515** |
 
-On an own corpus: 40 questions over 2,132 chunks of Markdown (126 files: design maps, agent skills, logs, in
+¹ On all 1,994 queries; Inventio BM25 scores 0.670 there.
+
+- The BM25 baseline matches the published one on SciFact, so the measurement is not flattering
+  itself. On repositories Inventio's BM25 is 0.11 above the published one, and above most
+  embedding models in the CodeRAG-Bench table; the likely reason, not yet isolated by an
+  ablation, is chunking by function and indexing each chunk's file path and function name.
+- TypeSafe reranking adds 0.10 to 0.16 everywhere. On SWE-bench Lite (code only) the file to fix
+  is the first result for 56% of issues (38% with BM25 alone) and in the top 5 for 78% (64%).
+- Zero-shot Laya lowers every score; it needs fine-tuning first.
+- On a whole repository, tests and docs push the right files out of the 30 candidates (82% of
+  issues keep one in the pool with code only, 63% with everything). That pool is the next limit.
+
+Method, caveats, and one-command reproduction: [benchmarks/README.md](benchmarks/README.md).
+
+## Measured on an own corpus
+
+40 questions over 2,132 chunks of Markdown (126 files: design maps, agent skills, logs, in
 Vietnamese and English). Each question was written by a small LLM from one passage, picked at
-random from 40 different files; the answer is that passage. The bench file format is below.
+random from 40 different files; the answer is that passage. Questions and raw results:
+[docs/design/evidence/](docs/design/evidence/). The bench file format is below.
 
 | Configuration | answer in top 1 | top 5 | top 10 | time per query |
 |---|---|---|---|---|
