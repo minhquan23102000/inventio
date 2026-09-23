@@ -75,8 +75,8 @@ structure scores 0.540 nDCG@10 on SWE-bench Lite file retrieval against the publ
 0.430, and TypeSafe reranking lifts it to 0.696. Zero-shot Laya lowers every score. Numbers,
 method and one-command reproduction: [benchmarks/](benchmarks/README.md).
 
-The design record behind the tool (why no embeddings, what was measured and dropped) is in
-[docs/design/](docs/design/): `map.md` is the orientation map, `walk.md` the build log.
+The questions and raw results for the own-corpus run below are in
+[docs/design/evidence/](docs/design/evidence/).
 
 On an own corpus: 40 questions over 2,132 chunks of Markdown (126 files: design maps, agent skills, logs, in
 Vietnamese and English). Each question was written by a small LLM from one passage, picked at

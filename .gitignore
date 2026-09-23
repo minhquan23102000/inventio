@@ -12,3 +12,6 @@ dist/
 labels*.jsonl
 # ranker score caches: large, and rebuilt by rerunning
 benchmarks/results/**/scores*.jsonl
+# design map and walk stay local (kept in ~/.omp/docs)
+docs/design/map.md
+docs/design/walk.md
