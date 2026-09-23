@@ -42,15 +42,40 @@ def load_laya():
 
 
 class LayaRanker:
+    BATCH = 16  # pairs per forward pass; pairs are sorted by length so padding stays small
+
     def __init__(self):
         self.agent, self.name = load_laya()
         self.questions = {"rel": {"type": "noul", "instructions": INSTRUCTIONS, "criteria": CRITERIA}}
 
     def score(self, query: str, hits) -> list[float]:
-        return [
-            float(self.agent.predict({"query": query, "passage": h.passage()}, self.questions)["answers"]["rel"]["noul"])
-            for h in hits
-        ]
+        """The same numbers as one `agent.predict` per pair, from a few batched forward passes."""
+        import numpy as np
+        import torch
+        from laya.common import QTYPES, build_sequence, collate_items, temp_bucket
+
+        a = self.agent
+        q = a._to_internal(self.questions["rel"])
+        max_len, head_max_len = a.cfg.get("max_len", 512), a.cfg.get("head_max_len", 192)
+        items = []
+        for h in hits:
+            seq, markers = build_sequence(a.tok, {"query": query, "passage": h.passage()}, q, max_len, head_max_len)
+            items.append({"ids": seq, "markers": markers, "qtype": QTYPES[q["t"]]})
+        t_scale = a.temperature_by_options.get(temp_bucket(QTYPES[q["t"]], 2), a.temperature[QTYPES[q["t"]]])
+        out = [0.0] * len(items)
+        order = sorted(range(len(items)), key=lambda i: len(items[i]["ids"]))
+        with torch.no_grad():
+            for s in range(0, len(order), self.BATCH):
+                idx = order[s:s + self.BATCH]
+                b = collate_items([[items[i]] for i in idx], a.tok.pad_token_id)
+                with torch.autocast(device_type=a.device.type, dtype=a.dtype, enabled=a.device.type == "cuda"):
+                    logits, _ = a.model(*(b[k].to(a.device) for k in
+                                          ("input_ids", "attention_mask", "marker_pos", "marker_mask", "qtype")))
+                z = logits.float().cpu().numpy()[:, :2] / t_scale
+                p = np.exp(z - z.max(-1, keepdims=True))
+                for i, row in zip(idx, p / p.sum(-1, keepdims=True)):
+                    out[i] = round(float(row[1]), 4)
+        return out
 
     def types(self, query: str, types: dict[str, str]) -> dict[str, float]:
         q = {"type": {"type": "choice", "instructions": TYPE_INSTRUCTIONS, "criteria": types}}

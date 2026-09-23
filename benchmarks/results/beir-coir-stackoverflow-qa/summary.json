@@ -89,6 +89,18 @@
         "recall@pool": 0.8235,
         "mean_pool": 46.8
       },
+      "about": {
+        "queries": 1994,
+        "ndcg@10": 0.6699,
+        "recall@pool": 0.8205,
+        "mean_pool": 36.9
+      },
+      "mlt": {
+        "queries": 1994,
+        "ndcg@10": 0.6699,
+        "recall@pool": 0.8119,
+        "mean_pool": 39.9
+      },
       "facts_vs_control": {
         "wins": 0,
         "losses": 0,
@@ -109,7 +121,221 @@
           0.0
         ]
       },
+      "about_vs_mlt": {
+        "wins": 0,
+        "losses": 0,
+        "ties": 1994,
+        "mean_diff": 0.0,
+        "ci95": [
+          0.0,
+          0.0
+        ]
+      },
+      "recall_about_vs_mlt": {
+        "wins": 24,
+        "losses": 7,
+        "ties": 1963,
+        "mean_diff": 0.0085,
+        "ci95": [
+          0.003,
+          0.014
+        ]
+      },
+      "unscored_pairs": 0
+    },
+    "typesafe": {
+      "base": {
+        "queries": 1994,
+        "ndcg@10": 0.791,
+        "recall@pool": 0.8049,
+        "mean_pool": 30.0
+      },
+      "facts": {
+        "queries": 1994,
+        "ndcg@10": 0.8108,
+        "recall@pool": 0.8305,
+        "mean_pool": 46.8
+      },
+      "control": {
+        "queries": 1994,
+        "ndcg@10": 0.8058,
+        "recall@pool": 0.8235,
+        "mean_pool": 46.8
+      },
+      "about": {
+        "queries": 1994,
+        "ndcg@10": 0.8033,
+        "recall@pool": 0.8205,
+        "mean_pool": 36.9
+      },
+      "mlt": {
+        "queries": 1994,
+        "ndcg@10": 0.7963,
+        "recall@pool": 0.8119,
+        "mean_pool": 39.9
+      },
+      "facts_vs_control": {
+        "wins": 34,
+        "losses": 29,
+        "ties": 1931,
+        "mean_diff": 0.0049,
+        "ci95": [
+          -0.0008,
+          0.0112
+        ]
+      },
+      "facts_vs_base": {
+        "wins": 52,
+        "losses": 28,
+        "ties": 1914,
+        "mean_diff": 0.0197,
+        "ci95": [
+          0.0133,
+          0.0267
+        ]
+      },
+      "about_vs_mlt": {
+        "wins": 30,
+        "losses": 21,
+        "ties": 1943,
+        "mean_diff": 0.007,
+        "ci95": [
+          0.0017,
+          0.0124
+        ]
+      },
+      "recall_about_vs_mlt": {
+        "wins": 24,
+        "losses": 7,
+        "ties": 1963,
+        "mean_diff": 0.0085,
+        "ci95": [
+          0.003,
+          0.014
+        ]
+      },
+      "unscored_pairs": 738
+    },
+    "laya": {
+      "base": {
+        "queries": 1994,
+        "ndcg@10": 0.193,
+        "recall@pool": 0.8049,
+        "mean_pool": 30.0
+      },
+      "facts": {
+        "queries": 1994,
+        "ndcg@10": 0.1571,
+        "recall@pool": 0.8305,
+        "mean_pool": 46.8
+      },
+      "control": {
+        "queries": 1994,
+        "ndcg@10": 0.1562,
+        "recall@pool": 0.8235,
+        "mean_pool": 46.8
+      },
+      "facts_vs_control": {
+        "wins": 97,
+        "losses": 98,
+        "ties": 1799,
+        "mean_diff": 0.001,
+        "ci95": [
+          -0.0018,
+          0.0037
+        ]
+      },
+      "facts_vs_base": {
+        "wins": 6,
+        "losses": 416,
+        "ties": 1572,
+        "mean_diff": -0.0359,
+        "ci95": [
+          -0.0403,
+          -0.0314
+        ]
+      },
+      "unscored_pairs": 0
+    },
+    "laya-tuned": {
+      "base": {
+        "queries": 1994,
+        "ndcg@10": 0.6978,
+        "recall@pool": 0.8049,
+        "mean_pool": 30.0
+      },
+      "facts": {
+        "queries": 1994,
+        "ndcg@10": 0.6757,
+        "recall@pool": 0.8305,
+        "mean_pool": 46.8
+      },
+      "control": {
+        "queries": 1994,
+        "ndcg@10": 0.6972,
+        "recall@pool": 0.8235,
+        "mean_pool": 46.8
+      },
+      "about": {
+        "queries": 1994,
+        "ndcg@10": 0.6765,
+        "recall@pool": 0.8205,
+        "mean_pool": 36.9
+      },
+      "mlt": {
+        "queries": 1994,
+        "ndcg@10": 0.6859,
+        "recall@pool": 0.8119,
+        "mean_pool": 39.9
+      },
+      "facts_vs_control": {
+        "wins": 38,
+        "losses": 248,
+        "ties": 1708,
+        "mean_diff": -0.0214,
+        "ci95": [
+          -0.0277,
+          -0.015
+        ]
+      },
+      "facts_vs_base": {
+        "wins": 39,
+        "losses": 298,
+        "ties": 1657,
+        "mean_diff": -0.022,
+        "ci95": [
+          -0.0289,
+          -0.0147
+        ]
+      },
+      "about_vs_mlt": {
+        "wins": 88,
+        "losses": 199,
+        "ties": 1707,
+        "mean_diff": -0.0094,
+        "ci95": [
+          -0.015,
+          -0.0036
+        ]
+      },
+      "recall_about_vs_mlt": {
+        "wins": 24,
+        "losses": 7,
+        "ties": 1963,
+        "mean_diff": 0.0085,
+        "ci95": [
+          0.003,
+          0.014
+        ]
+      },
       "unscored_pairs": 0
     }
+  },
+  "laya-tuned": {
+    "queries": 1994,
+    "ndcg@10": 0.6978,
+    "recall@30chunks": 0.8049,
+    "sec_per_query": 0.743,
+    "timed_queries": 1994
   }
 }

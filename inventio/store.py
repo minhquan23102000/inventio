@@ -44,6 +44,8 @@ CREATE INDEX IF NOT EXISTS chunks_file ON chunks(file_id);
 CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
     head, body, tokenize = 'unicode61 remove_diacritics 2'
 );
+-- document frequency per term and column, read by the query-time neighbour search (search.py)
+CREATE VIRTUAL TABLE IF NOT EXISTS chunks_vocab USING fts5vocab(chunks_fts, 'col');
 CREATE TABLE IF NOT EXISTS idents (
     chunk_id INTEGER NOT NULL REFERENCES chunks(id) ON DELETE CASCADE,
     ident TEXT NOT NULL,

@@ -96,6 +96,7 @@ def load_cache(path: Path) -> dict:
 
 def run_arms(con, args, queries, qrels, safe, out_dir, summary) -> None:
     from inventio.facts import JevJudge, build, warm_query_categories
+    from inventio.search import expand, widen_by_neighbours
 
     judge = JevJudge()
     t = time.time()
@@ -105,6 +106,13 @@ def run_arms(con, args, queries, qrels, safe, out_dir, summary) -> None:
     warm_query_categories(con, judge, list(queries.values()))
     print(f"query categories in {time.time() - t:.0f}s", flush=True)
     pools = {qid: arm_pools(con, q, judge, args.pool, [args.dataset]) for qid, q in queries.items()}
+    arms = ARMS
+    if args.mlt:
+        arms += ("about", "mlt")
+        # about: the judged links only; mlt: the candidates those links are judged from, unjudged
+        for qid, p in pools.items():
+            p["about"] = p["base"] + expand(con, p["base"], 5, 10, [args.dataset], rels=("about",))
+            p["mlt"] = p["base"] + widen_by_neighbours(con, p["base"], 5, 10, [args.dataset])
     rows_path = out_dir / "arms.jsonl"
     arms_summary = summary.setdefault("arms", {})
     arms_summary["facts"] = {"categories": res["categories"], "links": res["links"], "kept": res["kept"]}
@@ -112,9 +120,9 @@ def run_arms(con, args, queries, qrels, safe, out_dir, summary) -> None:
         ranker, rname = make_ranker(rname), tag(rname)
         cache_path = out_dir / f"scores-{rname}.jsonl"
         cache = load_cache(cache_path)
-        nd = {a: [] for a in ARMS}
-        rec = {a: [] for a in ARMS}
-        size = {a: [] for a in ARMS}
+        nd = {a: [] for a in arms}
+        rec = {a: [] for a in arms}
+        size = {a: [] for a in arms}
         unscored = 0
         with cache_path.open("a", encoding="utf-8") as cf, rows_path.open("a", encoding="utf-8") as rf:
             for n, (qid, q) in enumerate(queries.items(), 1):
@@ -139,13 +147,15 @@ def run_arms(con, args, queries, qrels, safe, out_dir, summary) -> None:
                                          "via": sorted({h.via.split(":")[0] for h in hits if h.via})}) + "\n")
                 if n % 100 == 0:
                     print(f"  {rname} {n}/{len(queries)} " + " ".join(
-                        f"{a} {sum(nd[a]) / len(nd[a]):.3f}" for a in ARMS), flush=True)
+                        f"{a} {sum(nd[a]) / len(nd[a]):.3f}" for a in arms), flush=True)
         arms_summary[rname] = {
             **{a: {"queries": len(queries), "ndcg@10": round(sum(nd[a]) / len(nd[a]), 4),
                    "recall@pool": round(sum(rec[a]) / len(rec[a]), 4),
-                   "mean_pool": round(sum(size[a]) / len(size[a]), 1)} for a in ARMS},
+                   "mean_pool": round(sum(size[a]) / len(size[a]), 1)} for a in arms},
             "facts_vs_control": paired(nd["control"], nd["facts"]),
             "facts_vs_base": paired(nd["base"], nd["facts"]),
+            **({"about_vs_mlt": paired(nd["mlt"], nd["about"]),
+                "recall_about_vs_mlt": paired(rec["mlt"], rec["about"])} if args.mlt else {}),
             "unscored_pairs": unscored,  # firewall refusals and repeated timeouts: keep their BM25 place
         }
         print(rname, json.dumps(arms_summary[rname]), flush=True)
@@ -160,6 +170,10 @@ def main() -> int:
     ap.add_argument("--limit", type=int, default=0, help="first N test queries only")
     ap.add_argument("--data", help="data directory (default: user cache)")
     ap.add_argument("--arms", action="store_true", help="base / facts / control pools (see module docstring)")
+    ap.add_argument("--phrases", choices=("auto", "on", "off"), default="auto",
+                    help="adjacent-word phrases in the BM25 query (auto: Vietnamese queries only)")
+    ap.add_argument("--mlt", action="store_true",
+                    help="with --arms: also `about` (judged links only) and `mlt` (the same candidates unjudged)")
     args = ap.parse_args()
     ds = data_dir(args.data) / "beir" / args.dataset
     out_dir = RESULTS / f"beir-{args.dataset}"
@@ -192,7 +206,7 @@ def main() -> int:
         with cache_path.open("a", encoding="utf-8") as cf:
             for n, (qid, q) in enumerate(queries.items(), 1):
                 t = time.time()
-                hits = bm25(con, q, args.pool, [args.dataset])
+                hits = bm25(con, q, args.pool, [args.dataset], phrases={"on": True, "off": False}.get(args.phrases))
                 fresh = True
                 if ranker is not None:
                     todo = [h for h in hits if (qid, h.id) not in cache]
@@ -212,7 +226,9 @@ def main() -> int:
                 rec.append(len(set(ranked) & set(qrels[qid])) / len(qrels[qid]))
                 if n % 50 == 0:
                     print(f"  {rname} {n}/{len(queries)} nDCG@10 so far {sum(nd) / len(nd):.3f}", flush=True)
-        key = f"{rname}" + (f"@first{args.limit}" if args.limit else "")
+        key = (rname + {"on": "+phrases", "off": "-phrases"}.get(args.phrases, "")
+               + (f"@pool{args.pool}" if args.pool != 30 else "")
+               + (f"@first{args.limit}" if args.limit else ""))
         summary[key] = {
             "queries": len(queries),
             "ndcg@10": round(sum(nd) / len(nd), 4),

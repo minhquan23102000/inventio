@@ -43,17 +43,20 @@ touches only what changed: on astropy (1,260 files, 22,327 chunks) the first ind
 
 ```mermaid
 flowchart TD
-    Q["question"] --> B["BM25 over the map<br/>top 30 chunks"]
-    B --> W{"widen the pool?<br/>(only ever adds)"}
+    Q["question"] --> B["BM25 over the map, top 30 chunks<br/>(Vietnamese: adjacent syllables also as phrases)"]
+    B --> S["+ files and definitions the question names<br/>(paths, identifiers; on unless --no-symbols)"]
+    S --> W{"widen the pool further?<br/>(only ever adds)"}
     W -- "--types" --> T["+ best chunks of the document types<br/>the ranker predicts for the question"]
     W -- "--facts" --> F["+ best chunks of the question's content categories<br/>+ chunks the top hits have about links to"]
+    W -- "--neighbours" --> M["+ chunks of other files that share<br/>the top hits' most distinctive words"]
     W -- "--links" --> L["+ chunks the top hits cite or mention"]
     W -- "none" --> P
     T --> P["candidate pool"]
     F --> P
+    M --> P
     L --> P
     P --> G{"ranker"}
-    G -- "none" --> O["BM25 order"]
+    G -- "none" --> O["named files first, then BM25 order"]
     G -- "laya (local)" --> R["one yes/no question per candidate:<br/>does this passage answer the query?<br/>sort by probability"]
     G -- "typesafe (cloud)" --> X{"every candidate<br/>from a public source?"}
     X -- "no" --> N["refuse, send nothing"]
@@ -62,8 +65,14 @@ flowchart TD
     R --> A
 ```
 
-The widening steps are opt-in. A wrong guess costs extra candidates, never an answer BM25 had
-already found.
+Looking up the names a question contains costs a few index lookups and needs no model, so it is on
+by default. The other widening steps are opt-in. None of them removes a candidate: a wrong
+guess costs extra candidates, never an answer BM25 had already found.
+
+Vietnamese writes a word as several space-separated syllables (*hợp đồng*, contract), and a
+syllable alone matches many unrelated words. When the question is Vietnamese, each pair of
+adjacent syllables is also searched as a phrase; on Zalo legal retrieval that lifts BM25 from
+0.543 to 0.756 nDCG@10.
 
 ## Install
 
@@ -134,7 +143,7 @@ defaults with `INVENTIO_RANKER` and `INVENTIO_JUDGE`.
 
 ## Benchmarks
 
-All numbers are nDCG@10 on every test query of three public benchmarks, run through Inventio's
+All numbers are nDCG@10 on every test query of public benchmarks, run through Inventio's
 real ingest and query path. 1.0 means every right answer is at the top. Method, per-model
 sources and one-command reproduction: [benchmarks/README.md](benchmarks/README.md).
 
@@ -150,6 +159,7 @@ sources and one-command reproduction: [benchmarks/README.md](benchmarks/README.m
 | System | Runs on | SWE-bench Lite | SciFact | StackOverflow QA |
 |---|---|---|---|---|
 | **Inventio + Jev** | CPU + TypeSafe cloud, ~1.2 s/query | **0.696** | **0.765** | 0.791 |
+| **Inventio + Laya**, fine-tuned | laptop GPU, 0.4-0.9 s/query | 0.602 | 0.684 | 0.698 |
 | **Inventio**, no model | CPU, 35-140 ms/query | 0.540 | 0.670 | 0.670 |
 | **Inventio + Laya**, zero-shot | laptop GPU, 0.6-0.9 s/query | 0.391 | 0.302 | 0.193 |
 | E5-Mistral 7B | 7B embedder | – | 0.764 | **0.915** |
@@ -170,13 +180,19 @@ reported on that benchmark.
   embedder on SciFact. On StackOverflow QA the answer is among the 30 candidates for only 80%
   of questions, so no reordering can pass 0.805: the candidate pool is the limit there.
 - **Laya out of the box** ranks worse than BM25 alone. Its author describes it as "a fast
-  base to specialise", and this agrees; see [Fine-tuning Laya](#fine-tuning-laya).
+  base to specialise", and this agrees. Fine-tuned on human labels it moves ahead of BM25,
+  including on SWE-bench code it never trained on, and stays about 0.09 behind Jev; see
+  [Fine-tuning Laya](#fine-tuning-laya).
 - The published figures are single-stage embedders over the whole corpus; Inventio with a
   ranker is two-stage. The BEIR paper's two-stage figure, a cross-encoder reranking the top
   100, is 0.688 on SciFact.
 - On whole repositories (code, tests, docs and configs indexed together) SWE-bench Lite drops
   to 0.511 with Jev, because tests and docs crowd the files to fix out of the 30 candidates.
-  `--types` recovers 0.627, against 0.560 for a plain BM25 pool of the same size.
+  `--types` recovers 0.627, against 0.560 for a plain BM25 pool of the same size. Looking up
+  the files and definitions the issue names puts the file to fix among the candidates for 73%
+  of issues instead of 63%, for three more candidates on average. Ranked by the fine-tuned
+  Laya that gives 0.495 against 0.430 for a BM25 pool of the same size (95% CI of the gain
+  +0.037 to +0.097); with no ranker, the named files first, 0.456 against 0.401.
 
 ### Do content categories and fact links help?
 
@@ -188,16 +204,40 @@ candidate link pair.
 | Benchmark | Ranker | BM25 30 | + facts | BM25, same size | facts vs same size (95% CI) |
 |---|---|---|---|---|---|
 | SciFact | Jev | 0.765 | **0.771** | 0.769 | +0.002 (−0.003, +0.007) |
+| SciFact | Laya fine-tuned | **0.684** | 0.677 | 0.675 | +0.001 (−0.003, +0.006) |
 | SciFact | Laya zero-shot | **0.302** | 0.249 | 0.252 | −0.004 (−0.012, +0.005) |
+| StackOverflow QA | Jev | 0.791 | **0.811** | 0.806 | +0.005 (−0.001, +0.011) |
+| StackOverflow QA | Laya fine-tuned | **0.698** | 0.676 | 0.697 | −0.021 (−0.028, −0.015) |
+| StackOverflow QA | Laya zero-shot | **0.193** | 0.157 | 0.156 | +0.001 (−0.002, +0.004) |
 
-Answer among the candidates on SciFact: 84.9% (BM25 30), **87.6%** (+ facts), 86.3% (same
-size). Pools grow from 30 to about 47 candidates.
+Answer among the candidates: SciFact 84.9% (BM25 30), **87.6%** (+ facts), 86.3% (same size);
+StackOverflow QA 80.5%, **83.1%**, 82.4%. Pools grow from 30 to about 47 candidates.
 
 - Categories and links do find answers BM25 missed, more than the same number of extra BM25
   candidates.
-- Ranked by Jev, the gain over a same-size BM25 pool is +0.002 with an interval across zero.
-  On SciFact the improvement is a bigger pool, not a better one, so `--facts` stays opt-in.
-- Zero-shot Laya loses with every bigger pool, because it misranks the added candidates.
+- Ranked by Jev, the gain over a same-size BM25 pool is +0.002 on SciFact and +0.005 on
+  StackOverflow QA, both with an interval across zero. The improvement is a bigger pool, not
+  a better one, so `--facts` stays opt-in.
+- Laya, zero-shot or fine-tuned, does no better with the bigger pools: it misranks the added
+  candidates. The likely reason is that its training negatives were all BM25 candidates, never
+  passages reached through a category or a link.
+
+Fact links start from a candidate generator that needs no model: for each top hit, BM25 over
+its most distinctive words finds chunks of other files. Jev then keeps the pairs it judges to
+be about the same thing. Ranking the unjudged candidates (`--neighbours`) against the judged
+ones (`about` links) asks whether the judgment earns its calls:
+
+| Benchmark | Ranker | about links (judged) | neighbours (unjudged) | neighbours − about (95% CI) |
+|---|---|---|---|---|
+| SciFact | Jev | 0.769 | **0.785** | +0.015 (+0.004, +0.030) |
+| SciFact | Laya fine-tuned | 0.681 | **0.690** | +0.009 (−0.001, +0.023) |
+| StackOverflow QA | Jev | **0.803** | 0.796 | −0.007 (−0.012, −0.002) |
+| StackOverflow QA | Laya fine-tuned | 0.677 | **0.686** | +0.009 (+0.004, +0.015) |
+
+Pools: about 37 candidates with judged links, 40 with neighbours. In three of the four cells
+the ranker does better choosing among the raw neighbours than among the ones Jev kept, so the
+judgment is not paying for itself yet. `--neighbours` is opt-in because it only helps with a
+ranker to reorder what it adds.
 
 ## Fine-tuning Laya
 
@@ -229,6 +269,28 @@ cue; passages longer than Laya reads are dropped instead of cut, so no label des
 model never saw. The training loop is the one in the Laya author's fine-tuning notebook, ported
 to a single GPU with the token embeddings frozen.
 
+One epoch over 70,994 items (9,006 more were dropped as too long) took 48 minutes on an RTX
+5070 laptop GPU. On the test sets, every query, Laya reordering the same BM25 30:
+
+| Benchmark | BM25 | Laya zero-shot | Laya fine-tuned | fine-tuned − BM25 (95% CI) | Jev |
+|---|---|---|---|---|---|
+| Zalo legal, Vietnamese (788) | 0.756 | 0.512 | **0.817** | +0.061 (+0.042, +0.082) | not run |
+| StackOverflow QA (1,994) | 0.670 | 0.193 | 0.698 | +0.028 (+0.015, +0.042) | **0.791** |
+| SciFact (300) | 0.670 | 0.302 | 0.684 | +0.013 (−0.022, +0.049) | **0.765** |
+| SWE-bench Lite `code` (300), not trained on | 0.540 | 0.391 | 0.602 | +0.062 (+0.025, +0.098) | **0.696** |
+| SWE-bench Lite `mixed` (300), not trained on | 0.401 | 0.264 | 0.426 | +0.025 (−0.004, +0.055) | **0.515** |
+
+- The fine-tune turns Laya from worse than BM25 into better than BM25 on every set. The gain
+  is clear on Zalo, StackOverflow QA and SWE-bench `code`; on SciFact and whole repositories
+  it is within the noise.
+- SWE-bench was not in the training data at all, and there the file to fix is first for 44% of
+  issues instead of BM25's 38%, so the gain is not a memory of the training sets' topics.
+- On the held-out train queries, telling an answer from a non-answer (AUC) rose from 0.60-0.79
+  to 0.90-0.96, and to 1.00 on titles.
+- Jev stays about 0.09 ahead on the English sets. For private sources, where Jev cannot be
+  used, the fine-tuned Laya is the ranker to use: 0.4-0.9 s per query, nothing leaves the
+  machine.
+
 Dataset terms travel with a checkpoint tuned on them: SciFact claims are CC BY 4.0 and its
 abstracts ODC-By 1.0, StackOverflow content is CC BY-SA 4.0, and the Zalo card says MIT. No tuned
 checkpoint is distributed here.
@@ -254,7 +316,11 @@ checkpoint is distributed here.
   mail yet.
 - Zero-shot Laya is not yet a usable judge of fact links: on a Markdown corpus it called
   2,245 of 2,261 neighbour pairs "the same thing". The fine-tuning above teaches only
-  relevance, not categories or links.
+  relevance, not categories or links, and the tuned ranker still misranks passages that a
+  category or link brought in.
+- The fine-tuned Laya is about 0.09 nDCG@10 behind Jev on the English benchmarks. It has seen
+  one epoch of public data: science, programming and Vietnamese law. How well it carries to a
+  team's own documents has not been measured.
 
 ## License
 

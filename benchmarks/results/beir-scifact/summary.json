@@ -68,6 +68,18 @@
         "recall@pool": 0.8627,
         "mean_pool": 46.7
       },
+      "about": {
+        "queries": 300,
+        "ndcg@10": 0.6703,
+        "recall@pool": 0.8713,
+        "mean_pool": 37.4
+      },
+      "mlt": {
+        "queries": 300,
+        "ndcg@10": 0.6703,
+        "recall@pool": 0.8863,
+        "mean_pool": 39.9
+      },
       "facts_vs_control": {
         "wins": 0,
         "losses": 0,
@@ -86,6 +98,26 @@
         "ci95": [
           0.0,
           0.0
+        ]
+      },
+      "about_vs_mlt": {
+        "wins": 0,
+        "losses": 0,
+        "ties": 300,
+        "mean_diff": 0.0,
+        "ci95": [
+          0.0,
+          0.0
+        ]
+      },
+      "recall_about_vs_mlt": {
+        "wins": 2,
+        "losses": 6,
+        "ties": 292,
+        "mean_diff": -0.015,
+        "ci95": [
+          -0.0333,
+          0.0017
         ]
       },
       "unscored_pairs": 0
@@ -109,6 +141,18 @@
         "recall@pool": 0.8627,
         "mean_pool": 46.7
       },
+      "about": {
+        "queries": 300,
+        "ndcg@10": 0.7692,
+        "recall@pool": 0.8713,
+        "mean_pool": 37.4
+      },
+      "mlt": {
+        "queries": 300,
+        "ndcg@10": 0.7846,
+        "recall@pool": 0.8863,
+        "mean_pool": 39.9
+      },
       "facts_vs_control": {
         "wins": 7,
         "losses": 6,
@@ -127,6 +171,26 @@
         "ci95": [
           -0.0009,
           0.0128
+        ]
+      },
+      "about_vs_mlt": {
+        "wins": 3,
+        "losses": 11,
+        "ties": 286,
+        "mean_diff": -0.0154,
+        "ci95": [
+          -0.0299,
+          -0.0043
+        ]
+      },
+      "recall_about_vs_mlt": {
+        "wins": 2,
+        "losses": 6,
+        "ties": 292,
+        "mean_diff": -0.015,
+        "ci95": [
+          -0.0333,
+          0.0017
         ]
       },
       "unscored_pairs": 0
@@ -171,6 +235,93 @@
         ]
       },
       "unscored_pairs": 0
+    },
+    "laya-tuned": {
+      "base": {
+        "queries": 300,
+        "ndcg@10": 0.6836,
+        "recall@pool": 0.8494,
+        "mean_pool": 30.0
+      },
+      "facts": {
+        "queries": 300,
+        "ndcg@10": 0.6767,
+        "recall@pool": 0.8763,
+        "mean_pool": 46.7
+      },
+      "control": {
+        "queries": 300,
+        "ndcg@10": 0.6754,
+        "recall@pool": 0.8627,
+        "mean_pool": 46.7
+      },
+      "about": {
+        "queries": 300,
+        "ndcg@10": 0.6806,
+        "recall@pool": 0.8713,
+        "mean_pool": 37.4
+      },
+      "mlt": {
+        "queries": 300,
+        "ndcg@10": 0.69,
+        "recall@pool": 0.8863,
+        "mean_pool": 39.9
+      },
+      "facts_vs_control": {
+        "wins": 7,
+        "losses": 6,
+        "ties": 287,
+        "mean_diff": 0.0013,
+        "ci95": [
+          -0.0029,
+          0.0055
+        ]
+      },
+      "facts_vs_base": {
+        "wins": 3,
+        "losses": 24,
+        "ties": 273,
+        "mean_diff": -0.0069,
+        "ci95": [
+          -0.0147,
+          0.0007
+        ]
+      },
+      "about_vs_mlt": {
+        "wins": 8,
+        "losses": 9,
+        "ties": 283,
+        "mean_diff": -0.0094,
+        "ci95": [
+          -0.0225,
+          0.0007
+        ]
+      },
+      "recall_about_vs_mlt": {
+        "wins": 2,
+        "losses": 6,
+        "ties": 292,
+        "mean_diff": -0.015,
+        "ci95": [
+          -0.0333,
+          0.0017
+        ]
+      },
+      "unscored_pairs": 0
     }
+  },
+  "none+phrases": {
+    "queries": 300,
+    "ndcg@10": 0.618,
+    "recall@30chunks": 0.8384,
+    "sec_per_query": 0.018,
+    "timed_queries": 300
+  },
+  "laya-tuned": {
+    "queries": 300,
+    "ndcg@10": 0.6836,
+    "recall@30chunks": 0.8494,
+    "sec_per_query": 0.393,
+    "timed_queries": 300
   }
 }
