@@ -1,4 +1,5 @@
-"""Rankers read (query, passage) pairs from the pool and return one probability per pair.
+"""Rankers read (query, passage) pairs from the pool and return one probability per pair
+(None for a pair the ranker refused to score; it keeps its BM25 place after the scored ones).
 
 The question carries explicit true/false criteria: a bare "does this answer the query?" lets the
 model reward passages that are merely on topic. Both rankers ask the same question, so a
@@ -57,10 +58,20 @@ class TypeSafeRanker:
         self.con = con
         self.workers = workers
 
-    def _one(self, query: str, passage: str) -> float:
-        r = self.client.system_one(
-            state={"query": query, "passage": passage}, questions={"rel": self.question}, model=self.model
-        )
+    def _one(self, query: str, passage: str) -> float | None:
+        from typesafe_sdk import TypeSafePermissionDeniedError
+
+        try:
+            r = self.client.system_one(
+                state={"query": query, "passage": passage}, questions={"rel": self.question}, model=self.model
+            )
+        except TypeSafePermissionDeniedError as e:
+            # The API's edge firewall rejects some texts outright with an HTML page (403 "Attention
+            # Required", seen on Django source and on issue text quoting it). That pair stays
+            # unscored and keeps its BM25 place; a real permission error (the key) still raises.
+            if "Attention Required" not in str(e):
+                raise
+            return None
         return float(r.nouls["rel"].noul)
 
     def score(self, query: str, hits) -> list[float]:
@@ -76,7 +87,7 @@ class TypeSafeRanker:
         if self.con is not None:  # teacher labels for fine-tuning Laya later
             self.con.executemany(
                 "INSERT OR REPLACE INTO labels (query, passage, noul, model, source) VALUES (?, ?, ?, ?, ?)",
-                [(query, p, s, self.model, h.source) for p, s, h in zip(passages, scores, hits)],
+                [(query, p, s, self.model, h.source) for p, s, h in zip(passages, scores, hits) if s is not None],
             )
             self.con.commit()
         return scores

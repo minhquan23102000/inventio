@@ -10,3 +10,5 @@ dist/
 *.db-wal
 *.db-shm
 labels*.jsonl
+# ranker score caches: large, and rebuilt by rerunning
+benchmarks/results/**/scores*.jsonl

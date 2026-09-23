@@ -131,6 +131,10 @@ def attach_links(con, hits: list[Hit], per_hit: int = 5) -> None:
                 break
 
 
+def rank_key(h: Hit) -> tuple[bool, float]:
+    return (h.score is None, -(h.score or 0.0))
+
+
 def search(con, q: str, *, k: int = 5, pool: int = 30, ranker=None, expand_links: bool = False,
            seeds: int = 5, expand_limit: int = 10, sources: list[str] | None = None) -> list[Hit]:
     hits = bm25(con, q, pool, sources)
@@ -140,8 +144,8 @@ def search(con, q: str, *, k: int = 5, pool: int = 30, ranker=None, expand_links
         scores = ranker.score(q, hits)
         for h, s in zip(hits, scores):
             h.score = s
-        # stable sort: ties keep BM25 order, linked chunks after BM25 hits
-        hits.sort(key=lambda h: -h.score)
+        # stable sort: ties keep BM25 order, linked chunks after BM25 hits, unscored chunks last
+        hits.sort(key=rank_key)
     top = hits[:k]
     attach_links(con, top)
     return top
