@@ -53,9 +53,9 @@
       "links": {
         "chunks": 26517,
         "pairs": 264864,
-        "asked": 164970,
-        "cached": 99894,
-        "links": 19269,
+        "asked": 0,
+        "cached": 264864,
+        "links": 19271,
         "refused": 77,
         "failed": 0
       },

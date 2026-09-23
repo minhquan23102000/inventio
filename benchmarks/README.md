@@ -33,7 +33,7 @@ python benchmarks/swe_bench.py --types --variants mixed --rankers none,typesafe
 # categories and fact links: Jev judges every chunk and candidate pair, then three arms
 python benchmarks/beir_bench.py scifact --arms --rankers none,typesafe,laya
 python benchmarks/beir_bench.py coir-stackoverflow-qa --arms --rankers none,typesafe,laya
-python benchmarks/beir_bench.py scifact --teach    # Jev relevance labels on the train split, for fine-tuning
+python benchmarks/data.py zalo && python benchmarks/beir_bench.py zalo-legal --rankers none,laya
 python benchmarks/pack_check.py                    # packed neighbour call vs one call per pair
 ```
 
@@ -148,7 +148,7 @@ What the numbers say:
 - TypeSafe Jev reordering the same 30 candidates adds 0.10 to 0.16 everywhere, and on SWE-bench
   `code` turns 38% first-hit into 56%.
 - Zero-shot Laya makes every ranking worse, by a lot. It is not usable as a ranker until it is
-  fine-tuned on this question (the Jev labels are the intended teacher).
+  fine-tuned on this question (`finetune_laya.py`, from the benchmarks' human-labelled train splits).
 - A whole repository is harder than its code: tests and docs push the fix's files out of the 30
   candidates (ceiling 0.823 falls to 0.633). The ranker cannot recover what BM25 did not hand
   it, so on mixed repositories the candidate pool, not the ranker, is the limit to work on.

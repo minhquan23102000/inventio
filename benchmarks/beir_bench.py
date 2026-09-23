@@ -2,6 +2,7 @@
 
     python benchmarks/beir_bench.py scifact --rankers none,laya,typesafe
     python benchmarks/beir_bench.py coir-stackoverflow-qa --rankers laya --limit 300
+    python benchmarks/beir_bench.py zalo-legal --rankers none,laya   # Vietnamese law (data.py zalo)
     python benchmarks/beir_bench.py scifact --arms --rankers none,typesafe
 
 `--arms` first has Jev judge the content categories and fact links of every chunk (facts.py;
@@ -58,25 +59,6 @@ def load_beir(d: Path, split: str = "test"):
     return corpus, {q: queries[q] for q in qrels}, qrels
 
 
-def teach(con, args, queries) -> None:
-    """Teacher labels on the train split, for fine-tuning Laya (benchmarks/finetune_laya.py):
-    Jev's query categories and its relevance p for BM25's 30 candidates of every train query,
-    stored in the dataset's map. Test queries are never asked here."""
-    from inventio.facts import JevJudge, warm_query_categories
-    from inventio.rankers import TypeSafeRanker
-
-    t = time.time()
-    print(f"query categories: {warm_query_categories(con, JevJudge(), list(queries.values()))} asked", flush=True)
-    ranker = TypeSafeRanker(con)  # writes every (query, passage, p) into the map's labels table
-    done = {(r[0], r[1]) for r in con.execute("SELECT query, passage FROM labels WHERE model = ?", (ranker.model,))}
-    for n, q in enumerate(queries.values(), 1):
-        todo = [h for h in bm25(con, q, args.pool, [args.dataset]) if (q, h.passage()) not in done]
-        if todo:  # a rerun after an interruption asks only what was never answered
-            ranker.score(q, todo)
-        if n % 50 == 0:
-            print(f"  relevance {n}/{len(queries)}  {time.time() - t:.0f}s", flush=True)
-
-
 def tag(rname: str) -> str:
     """The name results and score caches are kept under: a tuned Laya (INVENTIO_LAYA_MODEL) is
     another ranker than the published checkpoint, and must not read its cached scores."""
@@ -127,7 +109,7 @@ def run_arms(con, args, queries, qrels, safe, out_dir, summary) -> None:
     arms_summary = summary.setdefault("arms", {})
     arms_summary["facts"] = {"categories": res["categories"], "links": res["links"], "kept": res["kept"]}
     for rname in args.rankers.split(","):
-        ranker, rname = make_ranker(rname, None), tag(rname)
+        ranker, rname = make_ranker(rname), tag(rname)
         cache_path = out_dir / f"scores-{rname}.jsonl"
         cache = load_cache(cache_path)
         nd = {a: [] for a in ARMS}
@@ -178,13 +160,12 @@ def main() -> int:
     ap.add_argument("--limit", type=int, default=0, help="first N test queries only")
     ap.add_argument("--data", help="data directory (default: user cache)")
     ap.add_argument("--arms", action="store_true", help="base / facts / control pools (see module docstring)")
-    ap.add_argument("--teach", action="store_true", help="Jev labels on the train split (see teach())")
     args = ap.parse_args()
     ds = data_dir(args.data) / "beir" / args.dataset
     out_dir = RESULTS / f"beir-{args.dataset}"
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    corpus, queries, qrels = load_beir(ds, "train" if args.teach else "test")
+    corpus, queries, qrels = load_beir(ds)
     safe = {safe_name(d): d for d in corpus}
     if args.limit:
         queries = dict(list(queries.items())[: args.limit])
@@ -199,15 +180,12 @@ def main() -> int:
 
     summary_path = out_dir / "summary.json"
     summary = json.loads(summary_path.read_text()) if summary_path.exists() else {}
-    if args.teach:
-        teach(con, args, queries)
-        return 0
     if args.arms:
         (out_dir / "arms.jsonl").unlink(missing_ok=True)
         run_arms(con, args, queries, qrels, safe, out_dir, summary)
         return 0
     for rname in args.rankers.split(","):
-        ranker, rname = make_ranker(rname, None), tag(rname)
+        ranker, rname = make_ranker(rname), tag(rname)
         cache_path = out_dir / f"scores-{rname}.jsonl"
         cache = load_cache(cache_path)
         nd, rec, fresh_secs, fresh_n = [], [], 0.0, 0

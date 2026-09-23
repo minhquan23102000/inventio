@@ -2,8 +2,8 @@
 (None for a pair the ranker refused to score; it keeps its BM25 place after the scored ones).
 
 The question carries explicit true/false criteria: a bare "does this answer the query?" lets the
-model reward passages that are merely on topic. Both rankers ask the same question, so a
-fine-tuned Laya can be measured against the Jev labels it learned from.
+model reward passages that are merely on topic. Both rankers ask the same question, and the
+tuned Laya (benchmarks/finetune_laya.py) learns this question from human-labelled benchmarks.
 """
 
 import os
@@ -62,7 +62,7 @@ class TypeSafeRanker:
 
     cloud = True
 
-    def __init__(self, con=None, model: str | None = None, workers: int = 12):
+    def __init__(self, model: str | None = None, workers: int = 12):
         from typesafe_sdk import Noul, NoulCriteria, TypeSafeClient
 
         if not os.environ.get("TYPESAFE_API_KEY"):
@@ -71,7 +71,6 @@ class TypeSafeRanker:
         self.model = model or os.environ.get("TYPESAFE_DEFAULT_MODEL", "jev-latest")
         self.name = f"typesafe:{self.model}"
         self.question = Noul(instructions=INSTRUCTIONS, criteria=NoulCriteria(**CRITERIA))
-        self.con = con
         self.workers = workers
         self.timeouts = 0
 
@@ -123,21 +122,14 @@ class TypeSafeRanker:
             )
         passages = [h.passage() for h in hits]
         with ThreadPoolExecutor(max_workers=self.workers) as pool:
-            scores = list(pool.map(lambda p: self._one(query, p), passages))
-        if self.con is not None:  # teacher labels for fine-tuning Laya later
-            self.con.executemany(
-                "INSERT OR REPLACE INTO labels (query, passage, noul, model, source) VALUES (?, ?, ?, ?, ?)",
-                [(query, p, s, self.model, h.source) for p, s, h in zip(passages, scores, hits) if s is not None],
-            )
-            self.con.commit()
-        return scores
+            return list(pool.map(lambda p: self._one(query, p), passages))
 
 
-def make_ranker(name: str, con=None):
+def make_ranker(name: str):
     if name == "none":
         return None
     if name == "laya":
         return LayaRanker()
     if name == "typesafe":
-        return TypeSafeRanker(con)
+        return TypeSafeRanker()
     raise ValueError(f"unknown ranker {name!r}; choose from {', '.join(RANKERS)}")

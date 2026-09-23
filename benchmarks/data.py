@@ -2,6 +2,7 @@
 
     python benchmarks/data.py beir scifact           # BEIR zip from UKP
     python benchmarks/data.py coir stackoverflow-qa  # CoIR, from the Hugging Face hub
+    python benchmarks/data.py zalo                   # Zalo AI legal text retrieval (Vietnamese)
     python benchmarks/data.py swe-lite               # SWE-bench Lite + one clone per repo
 
 Everything lands under the data directory (default `<user cache>/inventio/bench`, override with
@@ -9,8 +10,9 @@ Everything lands under the data directory (default `<user cache>/inventio/bench`
 about 2 GB. `coir` and `swe-lite` need the `datasets` package (`pip install -e ".[bench]"`).
 
 Layouts:
-  beir/<name>/            corpus.jsonl, queries.jsonl, qrels/test.tsv   (BEIR format)
+  beir/<name>/            corpus.jsonl, queries.jsonl, qrels/{train,test}.tsv   (BEIR format)
   beir/coir-<name>/       the same format, converted from CoIR's parquet splits
+  beir/zalo-legal/        the same format, from GreenNode/zalo-ai-legal-text-retrieval-vn
   swe-lite/lite.jsonl     instance_id, repo, base_commit, patch, problem_statement
   swe-lite/<owner>__<repo>/  bare-enough clone of the github.com/swe-bench mirror
 """
@@ -45,25 +47,57 @@ def fetch_beir(name: str, root: Path) -> Path:
     return dest / name
 
 
+def write_qrels(path: Path, rows) -> None:
+    with path.open("w", encoding="utf-8") as f:
+        f.write("query-id\tcorpus-id\tscore\n")
+        for q, d, s in rows:
+            f.write(f"{q}\t{d}\t{int(s)}\n")
+
+
 def fetch_coir(name: str, root: Path) -> Path:
     from datasets import load_dataset
 
     dest = root / "beir" / f"coir-{name}"
+    (dest / "qrels").mkdir(parents=True, exist_ok=True)
+    for split in ("train", "test"):  # a copy fetched before train qrels were kept gains them here
+        if not (dest / "qrels" / f"{split}.tsv").exists():
+            qrels = load_dataset(f"CoIR-Retrieval/{name}-qrels")[split]
+            write_qrels(dest / "qrels" / f"{split}.tsv", ((r["query_id"], r["corpus_id"], r["score"]) for r in qrels))
     if (dest / "corpus.jsonl").exists():
         return dest
-    (dest / "qrels").mkdir(parents=True, exist_ok=True)
     qc = load_dataset(f"CoIR-Retrieval/{name}-queries-corpus")
-    qrels = load_dataset(f"CoIR-Retrieval/{name}-qrels")["test"]
     with (dest / "corpus.jsonl").open("w", encoding="utf-8") as f:
         for r in qc["corpus"]:
             f.write(json.dumps({"_id": r["_id"], "title": r["title"] or "", "text": r["text"]}) + "\n")
     with (dest / "queries.jsonl").open("w", encoding="utf-8") as f:
         for r in qc["queries"]:
             f.write(json.dumps({"_id": r["_id"], "text": r["text"]}) + "\n")
-    with (dest / "qrels" / "test.tsv").open("w", encoding="utf-8") as f:
-        f.write("query-id\tcorpus-id\tscore\n")
-        for r in qrels:
-            f.write(f"{r['query_id']}\t{r['corpus_id']}\t{r['score']}\n")
+    return dest
+
+
+def fetch_zalo(root: Path) -> Path:
+    """Zalo AI 2021 legal text retrieval: Vietnamese questions over articles of Vietnamese law,
+    human-annotated (MIT on the dataset card). Train and test qrels share 24 queries; the
+    fine-tuning script drops every test query from training, so the overlap never trains."""
+    from huggingface_hub import hf_hub_download
+
+    dest = root / "beir" / "zalo-legal"
+    if (dest / "qrels" / "test.tsv").exists():
+        return dest
+    (dest / "qrels").mkdir(parents=True, exist_ok=True)
+    get = lambda f: hf_hub_download("GreenNode/zalo-ai-legal-text-retrieval-vn", f, repo_type="dataset")  # noqa: E731
+    with open(get("corpus.jsonl"), encoding="utf-8") as src, (dest / "corpus.jsonl").open("w", encoding="utf-8") as f:
+        for line in src:
+            r = json.loads(line)
+            f.write(json.dumps({"_id": r["_id"], "title": r.get("title") or "", "text": r.get("text") or ""},
+                               ensure_ascii=False) + "\n")
+    with open(get("queries.jsonl"), encoding="utf-8") as src, (dest / "queries.jsonl").open("w", encoding="utf-8") as f:
+        for line in src:
+            r = json.loads(line)
+            f.write(json.dumps({"_id": r["_id"], "text": r["text"]}, ensure_ascii=False) + "\n")
+    for split in ("train", "test"):
+        rows = [json.loads(line) for line in open(get(f"qrels/{split}.jsonl"), encoding="utf-8")]
+        write_qrels(dest / "qrels" / f"{split}.tsv", ((r["query-id"], r["corpus-id"], r["score"]) for r in rows))
     return dest
 
 
@@ -90,7 +124,7 @@ def fetch_swe_lite(root: Path) -> Path:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("kind", choices=["beir", "coir", "swe-lite"])
+    ap.add_argument("kind", choices=["beir", "coir", "zalo", "swe-lite"])
     ap.add_argument("name", nargs="?", help="dataset name for beir / coir")
     ap.add_argument("--data", help="data directory (default: user cache)")
     args = ap.parse_args()
@@ -98,7 +132,7 @@ def main() -> int:
     if args.kind in ("beir", "coir") and not args.name:
         ap.error(f"{args.kind} needs a dataset name")
     out = {"beir": lambda: fetch_beir(args.name, root), "coir": lambda: fetch_coir(args.name, root),
-           "swe-lite": lambda: fetch_swe_lite(root)}[args.kind]()
+           "zalo": lambda: fetch_zalo(root), "swe-lite": lambda: fetch_swe_lite(root)}[args.kind]()
     print(out)
     return 0
 

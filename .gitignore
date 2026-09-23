@@ -9,7 +9,6 @@ dist/
 *.db
 *.db-wal
 *.db-shm
-labels*.jsonl
 # ranker score caches: large, and rebuilt by rerunning
 benchmarks/results/**/scores*.jsonl
 # design map and walk stay local (kept in ~/.omp/docs)

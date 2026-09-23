@@ -1,5 +1,5 @@
-"""One SQLite file holds the whole map: sources, files, chunks, the BM25 index, links, labels,
-content categories and every model judgment behind them.
+"""One SQLite file holds the whole map: sources, files, chunks, the BM25 index, links, content
+categories and every model judgment behind them.
 
 The file lives in the user's cache directory, never inside an indexed repository: every derived
 table carries source text, and a map built over private sources must not be committed anywhere.
@@ -70,19 +70,9 @@ CREATE TABLE IF NOT EXISTS links (
     PRIMARY KEY (src, dst, rel)
 );
 CREATE INDEX IF NOT EXISTS links_dst ON links(dst);
-CREATE TABLE IF NOT EXISTS labels (
-    id INTEGER PRIMARY KEY,
-    query TEXT NOT NULL,
-    passage TEXT NOT NULL,
-    noul REAL NOT NULL,
-    model TEXT NOT NULL,
-    source TEXT NOT NULL,
-    at TEXT NOT NULL DEFAULT (datetime('now')),
-    UNIQUE (query, passage, model)
-);
--- Every judgment a decision model made at index or query time, with the text it read: the
--- teacher data for fine-tuning Laya. `key` is the sha1 of (kind, question, passage, other), so a
--- rebuilt map or a rerun reuses a judgment instead of paying for it again.
+-- Every judgment a decision model made at index or query time, with the text it read. `key` is
+-- the sha1 of (kind, question, passage, other), so a rebuilt map or a rerun reuses a judgment
+-- instead of paying for it again.
 --   kind 'category'        passage = a chunk, question = a schema.org type
 --   kind 'query_category'  passage = a query, question = a schema.org type
 --   kind 'same_thing'      passage = a chunk, other = a neighbour chunk

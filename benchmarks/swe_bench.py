@@ -102,9 +102,9 @@ def main() -> int:
         rows = rows[: args.limit]
     # a tuned Laya (INVENTIO_LAYA_MODEL) is kept apart from the published checkpoint's rows and cache
     tag = lambda n: "laya-tuned" if n == "laya" and os.environ.get("INVENTIO_LAYA_MODEL") else n
-    rankers = {tag(n): make_ranker(n, None) for n in args.rankers.split(",")}
+    rankers = {tag(n): make_ranker(n) for n in args.rankers.split(",")}
     rnames = list(rankers)
-    predictor = (rankers.get("typesafe") or make_ranker("typesafe", None)) if args.types else None
+    predictor = (rankers.get("typesafe") or make_ranker("typesafe")) if args.types else None
     work = swe / "work"
     resf, cachef = res_path.open("a", encoding="utf-8"), cache_path.open("a", encoding="utf-8")
     for n, inst in enumerate(rows, 1):
