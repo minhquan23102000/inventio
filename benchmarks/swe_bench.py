@@ -14,6 +14,13 @@ The query is the issue text; the gold documents are the files the fix patch touc
 chunks are collapsed to files (first occurrence wins) and scored with binary nDCG@10.
 Per-instance results are appended to benchmarks/results/swe-lite/results.jsonl, so an
 interrupted run resumes where it stopped.
+
+    python benchmarks/swe_bench.py --types --variants mixed --rankers none,typesafe
+
+measures document-type widening instead, in three arms over the same instances: `base` (BM25
+pool), `types` (base plus BM25's best chunks of the types TypeSafe predicts, as `query --types`
+does) and `control` (plain BM25 with a pool as large as the widened one, so a gain from types is
+not just a gain from more candidates). Results go to benchmarks/results/swe-lite-types/.
 """
 
 import argparse
@@ -31,12 +38,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from data import data_dir  # noqa: E402
-from inventio.ingest import ingest_source  # noqa: E402
+from inventio.ingest import DOC_TYPES, ingest_source  # noqa: E402
 from inventio.rankers import make_ranker  # noqa: E402
-from inventio.search import bm25, rank_key  # noqa: E402
+from inventio.search import bm25, rank_key, scope_types, widen_by_type  # noqa: E402
 from inventio.store import connect  # noqa: E402
 
 RESULTS = Path(__file__).resolve().parent / "results" / "swe-lite"
+TYPES_RESULTS = Path(__file__).resolve().parent / "results" / "swe-lite-types"
 
 
 def is_test(name: str) -> bool:  # CodeRAG-Bench's rule, create/swebench.py
@@ -74,26 +82,32 @@ def main() -> int:
     ap.add_argument("--variants", default="code,mixed")
     ap.add_argument("--pool", type=int, default=30)
     ap.add_argument("--limit", type=int, default=0)
+    ap.add_argument("--types", action="store_true", help="measure type widening: arms base, types, control")
+    ap.add_argument("--type-limit", type=int, default=None, help="chunks added per predicted type (default: --pool)")
     args = ap.parse_args()
     swe = data_dir(args.data) / "swe-lite"
-    out_dir = RESULTS
+    out_dir = TYPES_RESULTS if args.types else RESULTS
     out_dir.mkdir(parents=True, exist_ok=True)
+    arms = ("base", "types", "control") if args.types else ("base",)
     res_path, cache_path = out_dir / "results.jsonl", out_dir / "scores.jsonl"
-    done = {(r["iid"], r["variant"], r["ranker"]) for r in map(json.loads, res_path.open(encoding="utf-8"))} \
-        if res_path.exists() else set()
-    cache = {r["k"]: r["p"] for r in map(json.loads, cache_path.open(encoding="utf-8"))} \
-        if cache_path.exists() else {}
+    done = {(r["iid"], r["variant"], r["ranker"], r.get("arm", "base"))
+            for r in map(json.loads, res_path.open(encoding="utf-8"))} if res_path.exists() else set()
+    # one score cache for every mode: a pair scored once is never paid for again
+    caches = [RESULTS / "scores.jsonl", cache_path]
+    cache = {r["k"]: r["p"] for c in dict.fromkeys(caches) if c.exists()
+             for r in map(json.loads, c.open(encoding="utf-8"))}
     rows = [json.loads(l) for l in (swe / "lite.jsonl").open(encoding="utf-8")]
     if args.limit:
         rows = rows[: args.limit]
     rnames = args.rankers.split(",")
     rankers = {n: make_ranker(n, None) for n in rnames}
+    predictor = (rankers.get("typesafe") or make_ranker("typesafe", None)) if args.types else None
     work = swe / "work"
     resf, cachef = res_path.open("a", encoding="utf-8"), cache_path.open("a", encoding="utf-8")
     for n, inst in enumerate(rows, 1):
         iid, gold = inst["instance_id"], gold_files(inst["patch"])
         for variant in args.variants.split(","):
-            todo = [r for r in rnames if (iid, variant, r) not in done]
+            todo = [(r, a) for r in rnames for a in arms if (iid, variant, r, a) not in done]
             if not todo:
                 continue
             shutil.rmtree(work, ignore_errors=True)
@@ -107,14 +121,24 @@ def main() -> int:
             t_index = time.time() - t
             q = inst["problem_statement"]
             t = time.time()
-            base = bm25(con, q, args.pool, [iid])
-            t_bm25 = time.time() - t
-            for rname in todo:
-                hits, t = list(base), time.time()
+            pools = {"base": bm25(con, q, args.pool, [iid])}
+            t_bm25, added, probs = time.time() - t, [], {}
+            if args.types:
+                t = time.time()
+                probs = predictor.types(q, {k: DOC_TYPES[k] for k in scope_types(con, [iid])})
+                fixed = type("Fixed", (), {"cloud": True, "types": lambda self, q, types: probs})()
+                added = widen_by_type(con, q, pools["base"], fixed, args.type_limit or args.pool, [iid])
+                pools["types"] = pools["base"] + added
+                t_types = time.time() - t
+                pools["control"] = bm25(con, q, len(pools["types"]), [iid])
+            for rname, arm in todo:
+                hits, t = [h for h in pools[arm]], time.time()
+                for h in hits:
+                    h.score = None
                 ranker = rankers[rname]
                 if ranker is not None:
                     key = lambda h: hashlib.sha1(f"{rname}|{iid}|{h.coord}|{h.text}".encode()).hexdigest()
-                    miss = [h for h in hits if key(h) not in cache]
+                    miss = list({key(h): h for h in hits if key(h) not in cache}.values())
                     if miss:
                         for h, p in zip(miss, ranker.score(q, miss)):
                             cache[key(h)] = p
@@ -129,8 +153,12 @@ def main() -> int:
                     "gold": sorted(gold), "ranked": ranked[:10], "ndcg10": ndcg10(ranked, gold),
                     "top1": bool(ranked[:1] and ranked[0] in gold), "top5": bool(gold & set(ranked[:5])),
                     "in_pool": bool(gold & set(ranked)),
-                    "sec_index": round(t_index, 2), "sec_query": round(t_bm25 + time.time() - t, 3),
+                    "sec_index": round(t_index, 2),
+                    "sec_query": round(t_bm25 + (t_types if arm == "types" else 0) + time.time() - t, 3),
                 }
+                if args.types:
+                    r |= {"arm": arm, "pool": len(hits), "type_probs": {k: round(v, 3) for k, v in probs.items()},
+                          "types_added": sorted({h.via[len("type:"):] for h in added})}
                 resf.write(json.dumps(r) + "\n")
                 resf.flush()
             con.close()
@@ -141,15 +169,19 @@ def main() -> int:
     summary = {}
     for variant in args.variants.split(","):
         for rname in rnames:
-            rs = [r for r in allr if r["variant"] == variant and r["ranker"] == rname]
-            if not rs:
-                continue
-            m = lambda k: round(sum(r[k] for r in rs) / len(rs), 4)
-            summary[f"{variant}/{rname}"] = {
-                "n": len(rs), "ndcg@10": m("ndcg10"), "top1": m("top1"), "top5": m("top5"),
-                f"in_pool@{args.pool}chunks": m("in_pool"), "sec_query": m("sec_query"), "sec_index": m("sec_index"),
-            }
-            print(variant, rname, summary[f"{variant}/{rname}"], flush=True)
+            for arm in arms:
+                rs = [r for r in allr if r["variant"] == variant and r["ranker"] == rname and r.get("arm", "base") == arm]
+                if not rs:
+                    continue
+                m = lambda k: round(sum(r[k] for r in rs) / len(rs), 4)
+                name = f"{variant}/{rname}" + (f"/{arm}" if args.types else "")
+                summary[name] = {
+                    "n": len(rs), "ndcg@10": m("ndcg10"), "top1": m("top1"), "top5": m("top5"), "in_pool": m("in_pool"),
+                    "sec_query": m("sec_query"), "sec_index": m("sec_index"),
+                }
+                if args.types:
+                    summary[name]["mean_pool"] = m("pool")
+                print(name, summary[name], flush=True)
     (out_dir / "summary.json").write_text(json.dumps(summary, indent=2))
     return 0
 

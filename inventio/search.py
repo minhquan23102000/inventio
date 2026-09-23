@@ -1,4 +1,5 @@
-"""Query time: BM25 finds seeds, links widen the pool, a ranker orders it.
+"""Query time: BM25 finds seeds, the predicted document types and links widen the pool, a ranker
+orders it.
 
 The ranker only ever reads the pool (tens of chunks), never the whole map.
 """
@@ -20,8 +21,9 @@ class Hit:
     end_line: int
     heading_path: str
     text: str
+    type: str | None = None        # document type of the file (DOC_TYPES in ingest)
     bm25_rank: int | None = None   # 1-based; None when the chunk entered through a link
-    via: str = ""                  # how a linked chunk entered the pool
+    via: str = ""                  # how a chunk entered the pool beyond plain BM25: type:..., rel:ident
     score: float | None = None
     links: list[dict] = field(default_factory=list)
 
@@ -37,7 +39,7 @@ class Hit:
         return {
             "source": self.source, "path": self.path, "root": self.root,
             "start_line": self.start_line, "end_line": self.end_line,
-            "heading_path": self.heading_path, "score": self.score,
+            "heading_path": self.heading_path, "type": self.type, "score": self.score,
             "bm25_rank": self.bm25_rank, "via": self.via, "text": self.text, "links": self.links,
         }
 
@@ -48,7 +50,7 @@ def fts_query(q: str) -> str:
 
 
 HIT_SQL = """
-SELECT c.id, s.name source, s.public, s.root, f.path, c.start_line, c.end_line, c.heading_path, c.text
+SELECT c.id, s.name source, s.public, s.root, f.path, f.type, c.start_line, c.end_line, c.heading_path, c.text
 FROM chunks c JOIN files f ON f.id = c.file_id JOIN sources s ON s.id = f.source_id
 """
 
@@ -59,19 +61,72 @@ def _source_filter(sources: list[str] | None) -> tuple[str, list]:
     return f" AND s.name IN ({','.join('?' * len(sources))})", list(sources)
 
 
-def bm25(con, q: str, k: int, sources: list[str] | None = None, head_weight: float = 1.0) -> list[Hit]:
+def bm25(con, q: str, k: int, sources: list[str] | None = None, head_weight: float = 1.0,
+         types: list[str] | None = None) -> list[Hit]:
     match = fts_query(q)
     if not match:
         return []
     where, args = _source_filter(sources)
+    if types:
+        where += f" AND f.type IN ({','.join('?' * len(types))})"
+        args += list(types)
     rows = con.execute(
-        "SELECT c.id, s.name source, s.public, s.root, f.path, c.start_line, c.end_line, c.heading_path, c.text "
+        "SELECT c.id, s.name source, s.public, s.root, f.path, f.type, c.start_line, c.end_line, c.heading_path, c.text "
         "FROM chunks_fts JOIN chunks c ON c.id = chunks_fts.rowid "
         "JOIN files f ON f.id = c.file_id JOIN sources s ON s.id = f.source_id "
         f"WHERE chunks_fts MATCH ?{where} ORDER BY bm25(chunks_fts, ?, 1.0) LIMIT ?",
         [match, *args, head_weight, k],
     ).fetchall()
     return [Hit(**{**dict(r), "public": bool(r["public"])}, bm25_rank=i + 1) for i, r in enumerate(rows)]
+
+
+TYPE_MIN_P = 0.25  # a type the ranker gives at least this probability widens the pool
+
+
+def scope_types(con, sources: list[str] | None = None) -> list[str]:
+    where, args = _source_filter(sources)
+    rows = con.execute(
+        "SELECT DISTINCT f.type FROM files f JOIN sources s ON s.id = f.source_id "
+        f"WHERE f.type IS NOT NULL{where} ORDER BY f.type",
+        args,
+    ).fetchall()
+    return [r["type"] for r in rows]
+
+
+def widen_by_type(con, q: str, pool: list[Hit], ranker, per_type: int,
+                  sources: list[str] | None = None) -> list[Hit]:
+    """BM25's best chunks inside each document type the ranker thinks the answer is.
+
+    Only ever adds to the pool: a wrong guess costs a few extra candidates, never an answer
+    plain BM25 had already found.
+    """
+    from .ingest import DOC_TYPES
+    from .rankers import CloudRefused
+
+    present = scope_types(con, sources)
+    if len(present) < 2:
+        return []
+    if getattr(ranker, "cloud", False):  # widening may add any chunk in scope, so all of it must be public
+        where, args = _source_filter(sources)
+        private = [r["name"] for r in con.execute(f"SELECT name FROM sources s WHERE public = 0{where}", args)]
+        if private:
+            raise CloudRefused(
+                f"--types with ranker 'typesafe' could send text from non-public source(s) {', '.join(private)}; "
+                "restrict with --source, re-init them with --public, or use --ranker laya"
+            )
+    probs = ranker.types(q, {t: DOC_TYPES.get(t, t) for t in present})
+    if not probs:
+        return []
+    chosen = [t for t, p in sorted(probs.items(), key=lambda kv: -kv[1]) if p >= TYPE_MIN_P] or [max(probs, key=probs.get)]
+    have = {h.id for h in pool}
+    out = []
+    for t in chosen:
+        for h in bm25(con, q, per_type, sources, types=[t]):
+            if h.id not in have:
+                have.add(h.id)
+                h.via = f"type:{t}"
+                out.append(h)
+    return out
 
 
 def expand(con, pool: list[Hit], seeds: int, limit: int, sources: list[str] | None = None) -> list[Hit]:
@@ -136,8 +191,13 @@ def rank_key(h: Hit) -> tuple[bool, float]:
 
 
 def search(con, q: str, *, k: int = 5, pool: int = 30, ranker=None, expand_links: bool = False,
-           seeds: int = 5, expand_limit: int = 10, sources: list[str] | None = None) -> list[Hit]:
+           by_type: bool = False, type_limit: int | None = None, seeds: int = 5, expand_limit: int = 10,
+           sources: list[str] | None = None) -> list[Hit]:
     hits = bm25(con, q, pool, sources)
+    if by_type and ranker is not None:
+        # as deep inside each predicted type as the pool goes overall: at depth 10, BM25's best
+        # chunks of the predicted type were nearly always in the pool already (SWE-bench smoke)
+        hits += widen_by_type(con, q, hits, ranker, type_limit or pool, sources)
     if expand_links:
         hits += expand(con, hits, seeds, expand_limit, sources)
     if ranker is not None and hits:

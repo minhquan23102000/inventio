@@ -83,7 +83,7 @@ def cmd_query(args) -> int:
     try:
         ranker = make_ranker(args.ranker, con)
         hits = search(con, args.text, k=args.k, pool=args.pool, ranker=ranker,
-                      expand_links=args.links, sources=args.source)
+                      expand_links=args.links, by_type=args.types, sources=args.source)
     except CloudRefused as e:
         print(str(e), file=sys.stderr)
         return 3
@@ -93,14 +93,20 @@ def cmd_query(args) -> int:
     if not hits:
         print("no match")
         return 1
+    # grouped by document type, groups in order of their best hit; the number is the overall rank
+    groups: dict[str, list] = {}
     for i, h in enumerate(hits, 1):
-        score = f"  p={h.score:.2f}" if h.score is not None else ""
-        entered = f"  [via {h.via}]" if h.via else ""
-        print(f"{i}. {h.source}:{h.coord}  {h.heading_path}{score}{entered}")
-        print(f"   {_snippet(h.text)}")
-        for l in h.links[:3]:
-            arrow = "->" if l["dir"] == "out" else "<-"
-            print(f"   {arrow} {l['rel']} {l['source']}:{l['coord']}  ({l['via']})")
+        groups.setdefault(h.type or "(untyped)", []).append((i, h))
+    for t, members in groups.items():
+        print(f"== {t}")
+        for i, h in members:
+            score = f"  p={h.score:.2f}" if h.score is not None else ""
+            entered = f"  [via {h.via}]" if h.via else ""
+            print(f"{i}. {h.source}:{h.coord}  {h.heading_path}{score}{entered}")
+            print(f"   {_snippet(h.text)}")
+            for l in h.links[:3]:
+                arrow = "->" if l["dir"] == "out" else "<-"
+                print(f"   {arrow} {l['rel']} {l['source']}:{l['coord']}  ({l['via']})")
     return 0
 
 
@@ -110,16 +116,18 @@ def cmd_bench(args) -> int:
     con = _db(args)
     rows = bench.load(Path(args.file))
     try:
-        res = bench.run(con, rows, make_ranker(args.ranker, con), pool=args.pool, expand_links=args.links)
+        res = bench.run(con, rows, make_ranker(args.ranker, con), pool=args.pool, expand_links=args.links,
+                        by_type=args.types)
     except CloudRefused as e:
         print(str(e), file=sys.stderr)
         return 3
-    res["config"] = {"ranker": args.ranker, "links": args.links, "pool": args.pool}
+    res["config"] = {"ranker": args.ranker, "links": args.links, "types": args.types, "pool": args.pool}
     if args.json:
         print(json.dumps(res))
     else:
         n = res["n"]
-        print(f"ranker={args.ranker} links={'on' if args.links else 'off'} pool={args.pool}  n={n}")
+        print(f"ranker={args.ranker} links={'on' if args.links else 'off'} types={'on' if args.types else 'off'} "
+              f"pool={args.pool}  n={n}")
         print(f"  in pool {res['in_pool']}/{n}  top-1 {res['top1']}/{n}  top-5 {res['top5']}/{n}  "
               f"top-10 {res['top10']}/{n}  {res['sec_per_query']}s/query")
     return 0
@@ -165,6 +173,9 @@ def main(argv=None) -> int:
         s.add_argument("--pool", type=int, default=30, help="BM25 candidates handed to the ranker")
         s.add_argument("--links", action="store_true",
                        help="also hand the ranker chunks linked to the top BM25 hits (off: measured no gain yet)")
+        s.add_argument("--types", action="store_true",
+                       help="ask the ranker which document types hold the answer and add BM25's best chunks "
+                            "of those types to the pool (needs --ranker)")
 
     s = sub.add_parser("query", help="find the passages that answer a question")
     s.add_argument("text")

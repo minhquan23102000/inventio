@@ -14,6 +14,7 @@ CRITERIA = {
     "true": "The passage states the specific answer, rule, or instruction the query asks for.",
     "false": "The passage is only on a related topic, or uses the same words without answering the query.",
 }
+TYPE_INSTRUCTIONS = "Which kind of document would contain the answer to the `query`?"
 
 RANKERS = ("none", "laya", "typesafe")
 
@@ -42,9 +43,15 @@ class LayaRanker:
             for h in hits
         ]
 
+    def types(self, query: str, types: dict[str, str]) -> dict[str, float]:
+        q = {"type": {"type": "choice", "instructions": TYPE_INSTRUCTIONS, "criteria": types}}
+        return dict(self.agent.predict({"query": query}, q)["answers"]["type"]["probabilities"])
+
 
 class TypeSafeRanker:
     """Sends passages to the TypeSafe API. Refuses any chunk from a source not marked public."""
+
+    cloud = True
 
     def __init__(self, con=None, model: str | None = None, workers: int = 12):
         from typesafe_sdk import Noul, NoulCriteria, TypeSafeClient
@@ -73,6 +80,21 @@ class TypeSafeRanker:
                 raise
             return None
         return float(r.nouls["rel"].noul)
+
+    def types(self, query: str, types: dict[str, str]) -> dict[str, float]:
+        from typesafe_sdk import Choice, TypeSafePermissionDeniedError
+
+        try:
+            r = self.client.system_one(
+                state={"query": query},
+                questions={"type": Choice(instructions=TYPE_INSTRUCTIONS, criteria=types)},
+                model=self.model,
+            )
+        except TypeSafePermissionDeniedError as e:  # edge firewall, as in _one: no widening for this query
+            if "Attention Required" not in str(e):
+                raise
+            return {}
+        return dict(r.choices["type"].probabilities)
 
     def score(self, query: str, hits) -> list[float]:
         private = sorted({h.source for h in hits if not h.public})
