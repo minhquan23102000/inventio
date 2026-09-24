@@ -48,14 +48,15 @@ def checkpoint(name: str) -> str:
 
 
 def load_laya(name: str):
-    """The agent for a local model name (`dispositio` or `laya`), and the name its judgments are stored under."""
+    """The agent for a local model name (`dispositio` or `laya`), and the name its judgments are
+    stored under. The device is Laya's choice, CUDA, then Apple's MPS, then CPU, unless
+    INVENTIO_DEVICE names one (`cpu` when the GPU is busy)."""
     import warnings
 
     import laya
-    import torch
 
     warnings.filterwarnings("ignore", module="laya")
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = os.environ.get("INVENTIO_DEVICE") or None
     model = checkpoint(name)
     if model == LAYA:
         return laya.load(model, device=device, subfolder="multilingual"), f"laya:{model}/multilingual"
