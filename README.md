@@ -7,62 +7,79 @@ Inventio finds the passage that answers a question in your code, documents, Conf
 and Jira tickets, and tells you where it lives (`path:start-end`), so a person or an agent can
 open the exact lines. It is the "R" of RAG; the "G" is whoever calls it.
 
-It uses no embeddings. The structure comes from the sources themselves (folders, headings,
-function and table definitions, the names files share), BM25 finds candidates, and a small
-decision model reorders them: [dispositio](https://huggingface.co/minhquan2310/dispositio) on
-your own machine, or [TypeSafe Jev](https://docs.typesafe.ai) in the cloud for sources you mark
-public. Everything lives in one SQLite file.
+It uses no embeddings. The structure comes from the sources themselves (headings, functions,
+tables, the names files share), BM25 finds candidates, and a small decision model reorders them:
+[dispositio](https://huggingface.co/minhquan2310/dispositio) on your own machine, or
+[TypeSafe Jev](https://docs.typesafe.ai) in the cloud for sources you mark public. Everything
+lives in one SQLite file.
 
 ## Quick start
 
+The repository carries a small example: the code of an online shop's nightly database backup,
+and the wiki around it, a runbook, a retention policy and an incident report.
+
 ```sh
 uv tool install "inventio[laya] @ git+https://github.com/minhquan23102000/inventio"
+git clone https://github.com/minhquan23102000/inventio && cd inventio
 
-inventio init ~/code/webshop --name app                            # a folder
-export ATLASSIAN_EMAIL=you@example.com ATLASSIAN_API_TOKEN=...       # your own token: you index what you may read
-inventio init https://<site>.atlassian.net/wiki/spaces/OPS            # a Confluence space -> wiki-OPS
-inventio init https://<site>.atlassian.net/browse/SHOP --jql "updated >= -365d"   # Jira -> jira-SHOP
-
-inventio query "the nightly backup has not finished, what do I do?"   # ranked by dispositio
+inventio init examples/webshop/app --name app --public     # --public: may be sent to a cloud judge
+inventio init examples/webshop/wiki --name wiki --public
+inventio query "the nightly backup has not finished, what do I do?" -k 3
 ```
 
 ```
 == Article
-1. wiki-OPS:Nightly-backup-runbook.md:8-13  Nightly backup runbook > When the nightly backup has not finished  p=0.91
-   1. Check the scheduler at 07:00. If `nightly_backup` is still running or has failed, stop it. 2. Take a...
-   https://<site>.atlassian.net/wiki/spaces/OPS/pages/1234/Nightly+backup+runbook#When-the-nightly-backup-has-not-finished
-   -> mentions app:app/jobs/backup.py:4-9  (nightly_backup)
-   <- mentions jira-SHOP:SHOP/SHOP-812.md:1-9  (nightly_backup)
+1. wiki:runbook.md:8-13  Nightly backup runbook > When the nightly backup has not finished  p=0.98
+   1. Check the scheduler at 07:00. If `nightly_backup` is still running or has failed, stop it. 2. Take a fresh backup from the replica, not the primary: `make ba…
+   -> mentions app:jobs/backup.py:4-9  (nightly_backup)
+3. wiki:runbook.md:3-6  Nightly backup runbook > Nightly backup  p=0.88
+   The job `nightly_backup` copies the orders database to off-site storage. It starts at 01:00 and must finish before the morning order peak at 08:00.
+   -> mentions app:jobs/backup.py:4-9  (nightly_backup)
+== SoftwareSourceCode
+2. app:jobs/backup.py:4-9  nightly_backup  p=0.92
+   def nightly_backup(db, storage, now): """Copy the orders database to off-site storage every night, before the morning order peak.""" snapshot = db.snapshot(as_o…
+   -> mentions wiki:policy.md:3-8  (backup_retention_days)
+   <- mentions wiki:incidents/2026-03-14.md:3-8  (nightly_backup)
+   <- mentions wiki:runbook.md:3-6  (nightly_backup)
 ```
 
-Then open what a result points at, by coordinate or by the URL someone pasted in chat; look
-further when a ranked few is not enough; keep the map current:
+The runbook's steps come first; `p` is dispositio's probability that the passage answers, and
+results are grouped by document type, numbered by rank. The line under each was drawn by code,
+not by a model: the runbook names `nightly_backup` and `jobs/backup.py` defines it, so the
+answer arrives with the code of the job it is about, from another source.
+
+A list of steps says what to do, not why. `inventio facts` has a model read every prose chunk
+once: what it does for its reader (its category), and which chunks of other kinds speak about
+the same thing (`about` links).
 
 ```sh
-inventio read app:app/jobs/backup.py:4-9          # the lines
-inventio read https://<site>.atlassian.net/browse/SHOP-812
-inventio show app:app/jobs/backup.py:4-9          # what the map knows: type, category, links, sections around
-inventio grep "nightly_backup"                    # every line that says it: code, pages, tickets
-inventio ls wiki-OPS:Operations/                  # browse a source like a folder; a file lists its sections
-inventio sync                                     # folders re-read, pages and tickets: only what changed
+inventio facts --judge typesafe     # Jev: TYPESAFE_API_KEY, public sources only
+inventio query "why do we check the backup scheduler at 07:00?" -k 2 --facts
 ```
 
-`query` is for a question, `show` for where a result leads, `grep` for an exact name (every
-caller, every page citing a ticket), `ls` for seeing what is there. Each prints coordinates that
-`read` and `show` open; `inventio -h` shows the same walk. `show` labels every fact with what
-decided it: the path or a link (code), or a model with its probability (category, `about`).
+```
+== Article
+1. wiki:runbook.md:8-13  Nightly backup runbook > When the nightly backup has not finished  p=0.96
+   1. Check the scheduler at 07:00. If `nightly_backup` is still running or has failed, stop it. 2. Take a fresh backup from the replica, not the primary: `make ba…
+   -> mentions app:jobs/backup.py:4-9  (nightly_backup)
+   -> about wiki:incidents/2026-03-14.md:10-13  (Procedure~Record)
+   -> about wiki:policy.md:3-8  (Procedure~Rule)
+2. wiki:incidents/2026-03-14.md:10-13  Incident 2026-03-14: no backup to restore > What changed  p=0.93
+   The 07:00 scheduler check was added to the runbook, and the job now pages the on-call engineer when it has not finished by 06:30 or when the bucket is more than…
+   <- about wiki:runbook.md:8-13  (Procedure~Record)
+   <- about wiki:runbook.md:3-6  (Record~Rule)
+```
 
-Without `[laya]` it installs in seconds and ranks by BM25 alone; `[laya]` adds dispositio (and
-PyTorch, CPU build unless you install a CUDA one). `uv tool install` puts `inventio` on your PATH
-for every terminal; `uvx --from "inventio[laya] @ git+https://github.com/minhquan23102000/inventio" inventio ...`
-runs it once without installing.
+The why is in the incident report: the check was added after the night a backup filled its
+bucket at 03:40 and stopped without an error. From one step of a runbook the map reaches the
+code it runs, the rule it serves and the failure that put it there. Without `--judge`,
+dispositio judges offline: here it gives five of the six chunks the category Jev gives, but it
+links every pair it is asked about (see [Limitations](#limitations)).
 
-`--json` gives the same for agents. All sources share one map, so a query and the links reach
-across them (the job in `app`, the runbook in `wiki-OPS`, the incident ticket in `jira-SHOP`);
-`--source` narrows a query to some of them, and `--db` or `INVENTIO_DB` keeps a separate map.
-It lives in your user data directory (`%LOCALAPPDATA%\inventio`,
-`~/Library/Application Support/inventio`, or `~/.local/share/inventio`), never inside an
-indexed repository.
+`uv tool install` puts `inventio` on your PATH for every terminal; `uvx --from "inventio[laya] @
+git+https://github.com/minhquan23102000/inventio" inventio ...` runs it once without installing.
+Without `[laya]` it installs in seconds and ranks by BM25 alone; `[laya]` adds dispositio,
+downloaded once from Hugging Face, and PyTorch (the CPU build unless you install a CUDA one).
 
 ## How it works
 
@@ -70,31 +87,62 @@ indexed repository.
 
 ```mermaid
 flowchart LR
-    D["folder"] --> C["chunks, cut where the source<br/>already has a boundary:<br/>heading, function, class, table"]
+    S["a source<br/>folder · Confluence space · Jira project<br/>database · Kafka · S3"] --> C["chunks, cut where the source<br/>already has a boundary:<br/>heading, function, class, table"]
     C --> M[("map.db<br/>BM25 over text, path, heading")]
-    C --> T["document type<br/>from the path"] --> M
-    C --> L["links drawn by code:<br/>a Markdown link,<br/>a name another chunk defines"] --> M
-    M -. "inventio facts" .-> F["one category per prose chunk:<br/>Rule, Procedure, Reference, ..."] -.-> M
+    C --> T["document type from the path<br/>Article · SoftwareSourceCode<br/>Test · Configuration · Dataset"] --> M
+    C --> L["links drawn by code<br/>citation: a Markdown link<br/>mentions: a name another<br/>chunk defines or shares"] --> M
+    M -. "inventio facts" .-> F["a model reads each prose chunk:<br/>its category (Rule, Procedure, Record, ...)<br/>and about links to chunks<br/>of other categories on the same thing"] -.-> M
 ```
 
-Nothing above the dotted line is guessed by a model. A re-run reads only the files that changed:
-astropy (22,327 chunks) indexes in 12.8 s, and again after one edit in 1.4 s.
+Everything on a solid arrow is decided by code from what the source says; the dotted step is
+the only one a model takes, only when asked, and it adds labels and links without changing a
+chunk. A re-run reads only the files that changed: astropy (22,327 chunks) indexes in 12.8 s,
+and again after one edit in 1.4 s. On `examples/webshop` the map is this graph:
+
+```mermaid
+flowchart LR
+    R8["runbook<br/>When the nightly backup has not finished<br/>Procedure"]
+    R3["runbook<br/>Nightly backup<br/>Rule"]
+    P3["policy<br/>Backup retention<br/>Rule"]
+    P10["policy<br/>Who may delete a backup<br/>Rule"]
+    I3["incident 2026-03-14<br/>What happened<br/>Record"]
+    I10["incident 2026-03-14<br/>What changed<br/>Record"]
+    B4["jobs/backup.py<br/>nightly_backup()"]
+    B1["jobs/backup.py<br/>BACKUP_RETENTION_DAYS"]
+    R8 -- "nightly_backup" --> B4
+    R3 -- "nightly_backup" --> B4
+    I3 -- "nightly_backup" --> B4
+    P3 -- "backup_retention_days" --- B1
+    P3 -- "backup_retention_days" --- B4
+    R8 -. "about" .- P3
+    R8 -. "about" .- I3
+    R8 -. "about" .- I10
+    I3 -. "about" .- P3
+    R3 -. "about" .- I3
+    R3 -. "about" .- I10
+```
+
+Solid lines are names, found by code. Dotted lines are the `about` links Jev judged true, 6 of
+the 10 pairs it was asked about; "Who may delete a backup" is linked to nothing, since it is
+about a different act. The categories are Jev's too; it calls the runbook's opening section a
+Rule, with p=0.38.
 
 ### Query
 
 ```mermaid
 flowchart LR
-    Q["question"] --> B["BM25:<br/>top 30 chunks"] --> P["candidates"]
-    Q --> N["files and definitions<br/>the question names"] --> P
-    P --> R["ranker: does this passage<br/>answer the question?"] --> A["passages with<br/>path:lines"]
+    Q["question"] --> B["BM25:<br/>30 best chunks"] --> P["pool"]
+    Q --> N["names it contains<br/>nightly_backup, jobs/backup.py:<br/>the chunk that defines each"] --> P
+    Q -. "--types --facts<br/>--neighbours --links" .-> W["more candidates:<br/>the document types it asks for,<br/>chunks of its categories and their links,<br/>other files sharing the top hits' rare words,<br/>what the top hits cite or mention"] -.-> P
+    P --> R["ranker: does this passage<br/>answer the question?<br/>dispositio · Jev · none"] --> O["passages with path:lines,<br/>grouped by type,<br/>each with its links"]
 ```
 
-Looking up the names a question contains needs no model, so it is on by default. Four opt-in
-flags add candidates before ranking and never remove one: `--types` (the document types the
-question asks for), `--facts` (its categories, and linked chunks), `--neighbours` (chunks of
-other files sharing the top hits' rarest words), `--links` (what the top hits cite or mention).
-A Vietnamese question is also searched as pairs of adjacent syllables, since *hợp đồng*
-(contract) is two words to BM25.
+The pool only grows and the ranker only orders it: a passage that neither BM25 nor the names
+brought in cannot come out. Looking up names needs no model and is on by default
+(`--no-symbols` turns it off); on whole SWE-bench repositories it puts a file to fix among the
+candidates for 73% of issues instead of 63%. The four dotted options are off by default;
+[benchmarks/README.md](benchmarks/README.md) measures what each adds. A Vietnamese question is
+also searched as pairs of adjacent syllables, since *hợp đồng* (contract) is two words to BM25.
 
 ## What the map holds
 
@@ -124,9 +172,58 @@ A Vietnamese question is also searched as pairs of adjacent syllables, since *h�
 - **Judgments.** Every model decision is stored with the text it read, so a rebuilt map pays
   nothing twice.
 
-## Confluence and Jira
+## Working with a result
 
-Token and commands: [Quick start](#quick-start).
+```sh
+inventio read app:jobs/backup.py:4-9          # the lines
+inventio show wiki:runbook.md:8-13            # what the map knows: type, category, links, sections around
+inventio grep "nightly_backup"                # every line that says it: code, pages, tickets
+inventio ls wiki                              # a source like a folder; a file lists its sections
+inventio sync                                 # folders re-read, pages and tickets: only what changed
+```
+
+```
+$ inventio show wiki:runbook.md:8-13
+wiki:runbook.md:8-13  Nightly backup runbook > When the nightly backup has not finished
+  Article (by path) · markdown · public
+  section 8-13 · Procedure p=1.00 (jev-latest) · mentions 1 name
+links
+  -> mentions app:jobs/backup.py:4-9  nightly_backup  · SoftwareSourceCode  (nightly_backup)
+  ~  about    wiki:incidents/2026-03-14.md:10-13  Incident 2026-03-14: no backup to restore > What changed  · Article · Record p=1.00 (jev-latest)  p=0.93 (jev-latest)
+  ~  about    wiki:policy.md:3-8  Data retention policy > Backup retention  · Article · Rule p=1.00 (jev-latest)  p=0.65 (jev-latest)
+  ~  about    wiki:incidents/2026-03-14.md:3-8  Incident 2026-03-14: no backup to restore > What happened  · Article · Record p=1.00 (jev-latest)  p=0.84 (jev-latest)
+structure
+  < wiki:runbook.md:3-6  Nightly backup runbook > Nightly backup  · Article · Rule p=0.38 (jev-latest)
+```
+
+`query` is for a question, `show` for where a result leads, `grep` for an exact name (every
+caller, every page citing a ticket), `ls` for seeing what is there. Each prints coordinates
+that `read` and `show` open, and `read` also takes a page or ticket URL someone pasted in chat;
+`inventio -h` shows the same walk. `show` labels every fact with what decided it: the path or a
+link (code), or a model with its probability (category, `about`). `--json` gives the same for
+agents.
+
+All sources share one map, so a query and the links reach across them (the job in `app`, the
+runbook in `wiki`, a ticket in Jira); `--source` narrows a query to some of them, and `--db` or
+`INVENTIO_DB` keeps a separate map. It lives in your user data directory
+(`%LOCALAPPDATA%\inventio`, `~/Library/Application Support/inventio`, or
+`~/.local/share/inventio`), never inside an indexed repository.
+
+## Sources
+
+### Folders
+
+`inventio init <dir>` indexes a directory; code is cut at its functions and classes
+(tree-sitter), Markdown and text at their headings. `sync` or another `init` re-reads only the
+files whose size, time or content changed.
+
+### Confluence and Jira
+
+```sh
+export ATLASSIAN_EMAIL=you@example.com ATLASSIAN_API_TOKEN=...       # your own token: you index what you may read
+inventio init https://<site>.atlassian.net/wiki/spaces/OPS            # a Confluence space -> wiki-OPS
+inventio init https://<site>.atlassian.net/browse/SHOP --jql "updated >= -365d"   # Jira -> jira-SHOP
+```
 
 A remote source is mirrored as Markdown under the data directory, one file per page or ticket,
 and indexed like a folder: the same chunks, links and judgments.
@@ -149,7 +246,7 @@ Connectors live in `inventio/connectors/`: one module per kind lists items with 
 turns one item into Markdown; mirroring, indexing and `read` are shared, so mail or chat is
 one more module.
 
-## Where the data lives
+### Where the data lives
 
 ```sh
 pip install "inventio[data]" psycopg2-binary       # DuckDB, SQLAlchemy, Kafka, boto3; plus your database's driver
