@@ -1,0 +1,51 @@
+{
+  "none": {
+    "queries": 119,
+    "ndcg@10": 0.37,
+    "recall@30chunks": 0.8151,
+    "sec_per_query": 0.007,
+    "timed_queries": 119
+  },
+  "laya": {
+    "queries": 119,
+    "ndcg@10": 0.1712,
+    "recall@30chunks": 0.8151,
+    "sec_per_query": 0.387,
+    "timed_queries": 119
+  },
+  "dispositio-v1": {
+    "queries": 119,
+    "ndcg@10": 0.4392,
+    "recall@30chunks": 0.8151,
+    "sec_per_query": 0.396,
+    "timed_queries": 119
+  },
+  "typesafe": {
+    "queries": 119,
+    "ndcg@10": 0.6553,
+    "recall@30chunks": 0.8151,
+    "sec_per_query": 0.911,
+    "timed_queries": 119
+  },
+  "dispositio-run2": {
+    "queries": 119,
+    "ndcg@10": 0.4052,
+    "recall@30chunks": 0.8151,
+    "sec_per_query": 0.373,
+    "timed_queries": 119
+  },
+  "dispositio-run3": {
+    "queries": 119,
+    "ndcg@10": 0.3957,
+    "recall@30chunks": 0.8151,
+    "sec_per_query": 0.389,
+    "timed_queries": 119
+  },
+  "dispositio": {
+    "queries": 119,
+    "ndcg@10": 0.444,
+    "recall@30chunks": 0.8151,
+    "sec_per_query": 0.374,
+    "timed_queries": 119
+  }
+}

@@ -27,11 +27,25 @@
     "sec_per_query": 0.86,
     "timed_queries": 788
   },
-  "dispositio": {
+  "dispositio-v1": {
     "queries": 788,
     "ndcg@10": 0.8311,
     "recall@30chunks": 0.9454,
     "sec_per_query": 0.899,
+    "timed_queries": 788
+  },
+  "dispositio-run3": {
+    "queries": 788,
+    "ndcg@10": 0.8402,
+    "recall@30chunks": 0.9454,
+    "sec_per_query": 0.938,
+    "timed_queries": 788
+  },
+  "dispositio": {
+    "queries": 788,
+    "ndcg@10": 0.8296,
+    "recall@30chunks": 0.9454,
+    "sec_per_query": 0.874,
     "timed_queries": 788
   }
 }

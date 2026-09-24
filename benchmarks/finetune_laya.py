@@ -1,38 +1,46 @@
 """Fine-tune Laya as Inventio's local ranker and category judge, on this machine's GPU.
 
     python benchmarks/finetune_laya.py --time-steps 40      # measure, print the projected run time, exit
-    python benchmarks/finetune_laya.py                      # the full run
-    python benchmarks/finetune_laya.py --init <checkpoint> --sources category,swe --replay 12000 --name dispositio
-    set INVENTIO_DISPOSITIO_MODEL=%LOCALAPPDATA%\\inventio\\dispositio   # then --ranker dispositio loads it
+    python benchmarks/finetune_laya.py --out <dir>          # stage 1: from the published Laya, the default MIX
+    python benchmarks/finetune_laya.py --init <dir> --out <dir2> \\
+        --mix coir-stackoverflow-qa=16000,multidoc2dial=4000,swe=3000,scifact=2000,zalo-legal=2000,category=2000
+    set INVENTIO_DISPOSITIO_MODEL=<dir2>                    # then --ranker dispositio loads it
+
+The released dispositio is those two stages: the second puts back the programming Q&A the first,
+starting from the published model, had too little of (StackOverflow QA fell below BM25).
 
 Laya learns the questions Inventio asks, in the exact form it reads them: the ranker's (rankers.
 INSTRUCTIONS / CRITERIA: does the passage answer the query?) over the query and a passage rendered
 as `[path > heading]` + text, and the category judge's (facts.category_question). Relevance labels
 are written by people; category labels, for which no human set exists, by a small general model
-(benchmarks/category_data.py). Four kinds of item:
+(benchmarks/category_data.py). `--mix` sets how many training items each source gives:
 
-- relevance: the train split of three public benchmarks with human-annotated answers, SciFact
-  (English science), StackOverflow QA (English, code) and Zalo legal (Vietnamese law). Each train
-  query gives its answer chunks as positives and four of BM25's 30 candidates that are not
-  answers as hard negatives (two from ranks 1-10, two from 11-30), the candidates the ranker
-  actually has to separate.
-- title: a document's own title as the query and its first chunk, heading removed, as the
-  positive; BM25's candidates for that title from other documents as negatives, with their
-  headings removed too, so a missing heading is not a cue. Titles are kept only when they have at
-  least four words and occur once in the corpus. SciFact paper titles and Zalo article titles.
+- relevance: the train split of four public benchmarks with human-annotated answers, SciFact
+  (English science), StackOverflow QA (English, code), Zalo legal (Vietnamese law) and
+  MultiDoc2Dial (US public-service pages: rules, eligibility, procedures). Each train query gives
+  its answer chunks as positives and BM25 candidates from other documents that are not answers as
+  hard negatives, half from ranks 1-10 and half from 11-30. MultiDoc2Dial also gives, when the
+  question is grounded in its answer, the answer page's own section BM25 ranks highest as a
+  negative at SIB: the passage that shares the question's words and topic and does not answer it.
 - swe: a SWE-bench train issue and the code its fix changed (benchmarks/swe_train.py); none of
   the 35 repositories is among SWE-bench Lite's 12.
 - category: a passage alone and the choice question over CATEGORIES, the label as a soft target.
+- title (`scifact:title`, `zalo-legal:title`, not in the released mix): a document's own title as
+  the query and its first chunk as the answer. Kept for experiments only: it teaches that the
+  passage repeating the query's words is the answer, which BM25 already knows, and a model
+  trained on many of them ranks a section restating a question above the one that answers it.
 
 Targets are 0.95 / 0.05, not 1 / 0: qrels are incomplete and a BM25 negative can be an unmarked
 answer. On half of the groups the path is dropped from the passage (`[heading]` + text), so the
 model cannot lean on file names or document ids.
 
-Kept out of training: every test query of the three benchmarks, and every document that answers
-one (no title item is built from it). 10% of the train queries and of the titles (sha1) are held
-out; for them all 30 BM25 candidates are scored, in their natural proportion of answers, and split
-in two: one half fits the temperature, the other is the report (AUC, Brier, and nDCG@10 of the 30
-candidates reordered, against BM25's own order), for the published Laya and the tuned one.
+Kept out of training: every test query of the benchmarks (and any train query with the same
+text), MultiDoc2Dial's validation split and its whole studentaid domain (new pages of the same
+genre, the check that the model learnt the genre and not the pages). 10% of the other train
+queries (sha1) are held out; for them all 30 BM25 candidates are scored, in their natural
+proportion of answers, and split in two: one half fits the temperature, the other is the report
+(AUC, Brier, and nDCG@10 of the 30 candidates reordered, against BM25's own order), for the
+starting model and the tuned one.
 
 The loop is the one in the Laya author's fine-tuning notebook
 (notebooks/laya_finetune_typed_decisions_2xT4_kaggle.ipynb in NandhaKishorM/laya): policy
@@ -62,14 +70,21 @@ from inventio.rankers import CRITERIA, INSTRUCTIONS, cap_query, passage_room, wi
 from inventio.search import bm25  # noqa: E402
 from inventio.store import connect  # noqa: E402
 
-DATASETS = ("scifact", "coir-stackoverflow-qa", "zalo-legal")
+DATASETS = ("scifact", "coir-stackoverflow-qa", "zalo-legal", "multidoc2dial")
 TITLES = ("scifact", "zalo-legal")  # corpora whose documents carry a real title
-SOURCES = DATASETS + ("swe", "category")  # swe: benchmarks/swe_train.py; category: benchmarks/category_data.py
+SOURCES = (*DATASETS, *(f"{t}:title" for t in TITLES), "swe", "category")
+MIX = "multidoc2dial=18000,zalo-legal=10000,coir-stackoverflow-qa=12000,scifact=3700,swe=10000,category=4400"
 HOLDOUT = 0.10
 POOL = 30
 POS, NEG = 0.95, 0.05
+SIB = 0.25  # another section of the answer's own page: the same topic and words, most likely not the answer
 CAT_ON, CAT_OFF = 0.94, 0.01  # a category's soft target: the label is a small model's, not a gold one
 SEED = 20260923
+# MultiDoc2Dial: the page a section belongs to (dmv-3-1 is section 1 of page dmv-3), and one other
+# section of it as a negative, when the question is tightly grounded in its answer.
+SIBLINGS = {"multidoc2dial": (lambda doc: doc.rsplit("-", 1)[0], 1)}
+BM25_NEGS = {"multidoc2dial": 2}  # BM25 negatives per group from other documents (default 4)
+HELD_DOMAIN = {"multidoc2dial": "studentaid"}  # held out whole: new pages of the same genre
 
 
 def sha(s: str) -> str:
@@ -95,22 +110,51 @@ def doc_of(h) -> str:
 
 def relevance_groups(name: str, ds: Path, con, rng):
     """One group per train query: (held out?, a function building the group). BM25 runs only
-    when the group is built, so a source whose share is full skips its remaining queries cheaply."""
-    _, train_q, train_rel = load_beir(ds, "train")
-    _, test_q, _ = load_beir(ds, "test")
-    qids = [q for q in train_rel if q in train_q and q not in test_q]
-    rng.shuffle(qids)
-    for qid in qids:
-        q, gold = train_q[qid], {safe_name(d) for d, s in train_rel[qid].items() if s > 0}
+    when the group is built, so a source whose share is full skips its remaining queries cheaply.
 
-        def make(q=q, gold=gold):
+    Gold is per document; every chunk of an answer document in the pool is an answer, and one
+    BM25 missed is added only when the document is a single chunk (which chunk of a longer one
+    answers is not known). MultiDoc2Dial trains on its topic groups (data.py `train_groups.jsonl`)
+    instead of its first turns: the sections the topic went on to use (`near`) are `skip`, other
+    sections of the answer's page are never negatives from BM25, and when the question was
+    grounded in the answer itself (`tight`) the page's section BM25 ranks highest is a negative at
+    SIB: a passage that shares the question's words and topic and does not answer it."""
+    _, test_q, _ = load_beir(ds, "test")
+    tests = {" ".join(q.lower().split()) for q in test_q.values()}  # MultiDoc2Dial repeats some openings
+    if (ds / "train_groups.jsonl").exists():
+        rows = [json.loads(l) for l in (ds / "train_groups.jsonl").open(encoding="utf-8")]
+        entries = [(r["query"], set(r["gold"]), set(r["near"]), r["tight"], r["domain"] == HELD_DOMAIN.get(name))
+                   for r in rows]
+    else:
+        _, train_q, train_rel = load_beir(ds, "train")
+        entries = [(train_q[q], {safe_name(d) for d, s in train_rel[q].items() if s > 0}, set(), False,
+                    held(f"{name}\t{train_q[q]}")) for q in train_rel if q in train_q and q not in test_q]
+    entries = [e for e in entries if " ".join(e[0].lower().split()) not in tests]
+    rng.shuffle(entries)
+    files = con.execute("SELECT f.id, f.path, count(c.id) n FROM files f JOIN sources s ON s.id = f.source_id "
+                        "JOIN chunks c ON c.file_id = f.id WHERE s.name = ? GROUP BY f.id", (name,)).fetchall()
+    chunks = {Path(r["path"]).stem: r["n"] for r in files}
+    family, n_sib = SIBLINGS.get(name, (None, 0))
+    members: dict[str, list[tuple[int, str]]] = {}
+    for r in files if family else ():
+        members.setdefault(family(Path(r["path"]).stem), []).append((r["id"], Path(r["path"]).stem))
+    for q, gold, near, tight, is_held in entries:
+
+        def make(q=q, gold=gold, near=near, tight=tight):
             hits = bm25(con, q, POOL, [name])
             got = {doc_of(h) for h in hits}
-            extra = [c for c in (gold_chunk(con, name, d) for d in sorted(gold - got)[:1]) if c]
+            extra = [c for c in (gold_chunk(con, name, d) for d in sorted(gold - got) if chunks.get(d) == 1) if c][:1]
+            fams = {family(d) for d in gold} if family else set()
+            sibling = lambda d: d not in gold and d not in near and family(d) in fams  # noqa: E731
+            sib_files = [fid for f in fams for fid, d in members.get(f, ()) if sibling(d)] if tight else []
             return {"src": f"{name}:relevance", "query": q, "heading": True, "hits": hits,
-                    "gold": [i for i, h in enumerate(hits) if doc_of(h) in gold], "extra": extra}
+                    "gold": [i for i, h in enumerate(hits) if doc_of(h) in gold],
+                    "skip": [i for i, h in enumerate(hits) if doc_of(h) in near],
+                    "sib_idx": [i for i, h in enumerate(hits) if family and sibling(doc_of(h))],
+                    "sib": bm25(con, q, n_sib, [name], files=sib_files) if sib_files else [],
+                    "n_neg": BM25_NEGS.get(name, 4), "extra": extra}
 
-        yield held(f"{name}\t{q}"), make
+        yield is_held, make
 
 
 def title_groups(name: str, ds: Path, con, rng):
@@ -172,15 +216,19 @@ def gold_chunk(con, name: str, doc: str):
 
 
 def train_items(g, rng) -> list[dict]:
-    """Answers and four hard negatives of a group, in one rendering (path dropped half the time)."""
+    """Answers, BM25 hard negatives from other documents (half from ranks 1-10, half from 11-30)
+    and the group's same-document negatives, in one rendering (path dropped half the time)."""
     path = rng.random() < 0.5
     rend = lambda h: render(h, heading=g["heading"], path=path)  # noqa: E731
     pos = [g["hits"][i] for i in g["gold"][:2]] or g["extra"]
-    neg_idx = [i for i in range(len(g["hits"])) if i not in g["gold"] and i not in g.get("skip", ())]
+    out = {*g["gold"], *g.get("skip", ()), *g.get("sib_idx", ())}
+    neg_idx = [i for i in range(len(g["hits"])) if i not in out]
     top, rest = [i for i in neg_idx if i < 10], [i for i in neg_idx if i >= 10]
-    negs = rng.sample(top, min(2, len(top))) + rng.sample(rest, min(2, len(rest)))
+    k = g.get("n_neg", 4) // 2
+    negs = rng.sample(top, min(k, len(top))) + rng.sample(rest, min(k, len(rest)))
     return ([{"src": g["src"], "query": g["query"], **rend(h), "p": POS} for h in pos]
-            + [{"src": g["src"], "query": g["query"], **rend(g["hits"][i]), "p": NEG} for i in negs])
+            + [{"src": g["src"], "query": g["query"], **rend(g["hits"][i]), "p": NEG} for i in negs]
+            + [{"src": g["src"], "query": g["query"], **rend(h), "p": SIB} for h in g.get("sib", ())])
 
 
 def eval_items(g) -> list[dict]:
@@ -207,35 +255,33 @@ def category_rows(rng) -> tuple[list[dict], list[dict]]:
     return train, test
 
 
-def build(max_items: int, eval_groups: int, rng, names=DATASETS) -> tuple[list[dict], list[dict], dict]:
-    """Equal shares of the item budget per source; what a source cannot fill passes to the ones
-    after it. Held-out groups are scored whole and never trained on."""
+def build(mix: dict[str, int], eval_groups: int, rng) -> tuple[list[dict], list[dict], dict]:
+    """Up to `mix[source]` training items from each source (a source short of its quota just gives
+    what it has). Held-out groups are scored whole and never trained on."""
     sources = []
-    for name in names:
+    for name, quota in mix.items():
         if name == "swe":
-            sources.append(("swe:relevance", swe_groups(rng)))
+            sources.append(("swe:relevance", swe_groups(rng), quota))
             continue
         if name == "category":
-            sources.append(("category", category_rows(rng)))
+            sources.append(("category", category_rows(rng), quota))
             continue
-        ds = data_dir(None) / "beir" / name
+        corpus, _, kind = name.partition(":")
+        ds = data_dir(None) / "beir" / corpus
         db = ds / "inventio.db"
         if not db.exists():
-            print(f"skip {name}: no map at {db} (run benchmarks/beir_bench.py {name} first)", flush=True)
+            print(f"skip {name}: no map at {db} (run benchmarks/beir_bench.py {corpus} first)", flush=True)
             continue
         con = connect(db)
-        sources.append((f"{name}:relevance", relevance_groups(name, ds, con, rng)))
-        if name in TITLES:
-            sources.append((f"{name}:title", title_groups(name, ds, con, rng)))
+        groups = title_groups(corpus, ds, con, rng) if kind == "title" else relevance_groups(corpus, ds, con, rng)
+        sources.append((f"{corpus}:{kind or 'relevance'}", groups, quota))
     train, held_out, report = [], [], {}
-    left = max_items
-    for i, (src, groups) in enumerate(sources):
-        share, n_train, n_eval, n_groups = left // (len(sources) - i), 0, 0, 0
+    for src, groups, share in sources:
+        n_train, n_eval, n_groups = 0, 0, 0
         if src == "category":
             rows, test = groups
             train += rows[:share]
             held_out += test
-            left -= min(share, len(rows))
             report[src] = {"train_items": min(share, len(rows)), "eval_items": len(test)}
             print(src, report[src], flush=True)
             continue
@@ -254,8 +300,8 @@ def build(max_items: int, eval_groups: int, rng, names=DATASETS) -> tuple[list[d
                     train += items
                     n_train += len(items)
                     n_groups += 1
-        left -= n_train
-        report[src] = {"train_items": n_train, "train_groups": n_groups, "eval_groups": n_eval}
+        report[src] = {"train_items": n_train, "train_groups": n_groups, "eval_groups": n_eval,
+                       "same_document_negatives": sum(it["p"] == SIB for it in train if it["src"] == src)}
         print(src, report[src], flush=True)
     rng.shuffle(train)
     return train, held_out, report
@@ -560,10 +606,7 @@ def main() -> int:
     ap.add_argument("--name", default="dispositio", help="model name, and the checkpoint directory's")
     ap.add_argument("--out", help="checkpoint directory (default: <user cache>/inventio/<name>)")
     ap.add_argument("--init", help="start from this checkpoint directory instead of the published Laya")
-    ap.add_argument("--sources", default=",".join(DATASETS), help=f"comma list of {', '.join(SOURCES)}")
-    ap.add_argument("--replay", type=int, default=0,
-                    help="items from the other sources mixed in, so a continued run keeps what the start knew")
-    ap.add_argument("--max-items", type=int, default=80_000)
+    ap.add_argument("--mix", default=MIX, help=f"training items per source, source=N,... from {', '.join(SOURCES)}")
     ap.add_argument("--eval-groups", type=int, default=60, help="held-out groups scored per source (30 candidates each)")
     ap.add_argument("--epochs", type=int, default=1)
     ap.add_argument("--micro-batch", type=int, default=8)
@@ -572,14 +615,11 @@ def main() -> int:
     args = ap.parse_args()
 
     rng = random.Random(SEED)
-    names = args.sources.split(",")
-    rows, held_out, per_source = build(args.max_items, args.eval_groups, rng, names)
-    if args.replay:
-        rest = [n for n in SOURCES if n not in names and n != "category"]
-        r_rows, r_held, r_src = build(args.replay, min(args.eval_groups, 20), rng, rest)
-        rows, held_out = rows + r_rows, held_out + r_held
-        per_source.update({f"replay {k}": v for k, v in r_src.items()})
-        rng.shuffle(rows)
+    mix = {k: int(v) for k, v in (p.split("=") for p in args.mix.split(","))}
+    unknown = set(mix) - set(SOURCES)
+    if unknown:
+        ap.error(f"unknown sources {sorted(unknown)}; choose from {', '.join(SOURCES)}")
+    rows, held_out, per_source = build(mix, args.eval_groups, rng)
     base = args.init or load_base()
     cfg = json.load(open(os.path.join(base, "rl_agent_config.json")))
     tok = AutoTokenizer.from_pretrained(os.path.join(base, "tokenizer"))
@@ -595,7 +635,7 @@ def main() -> int:
     with (out / "holdout.jsonl").open("w", encoding="utf-8") as f:
         for it in evals:
             f.write(json.dumps({k: it[k] for k in ("src", "query", "key", "passage", "p", "rank")}, ensure_ascii=False) + "\n")
-    meta = {"name": args.name, "start": str(base), "sources": names, "replay": args.replay, "per_source": per_source,
+    meta = {"name": args.name, "start": str(base), "mix": mix, "per_source": per_source,
             "train_items": len(items), "cut": cut, "held_out_items": len(evals),
             "cut_held_out": cut_eval, "epochs": args.epochs, "micro_batch": args.micro_batch, "accum": args.accum}
     print(json.dumps(meta, indent=1), flush=True)

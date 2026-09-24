@@ -31,6 +31,9 @@ python benchmarks/beir_bench.py scifact --rankers none,laya,dispositio,typesafe
 python benchmarks/beir_bench.py coir-stackoverflow-qa --rankers none,laya,dispositio,typesafe
 python benchmarks/swe_bench.py --rankers none,laya,dispositio,typesafe
 python benchmarks/data.py zalo && python benchmarks/beir_bench.py zalo-legal --rankers none,laya,dispositio
+python benchmarks/data.py multidoc2dial && python benchmarks/beir_bench.py multidoc2dial --rankers none,laya,dispositio,typesafe
+python benchmarks/data.py techqa && python benchmarks/beir_bench.py techqa --rankers none,laya,dispositio,typesafe
+python benchmarks/example_bench.py none laya dispositio typesafe    # examples/webshop, 13 on-call questions
 python benchmarks/swe_bench.py --types --variants mixed --rankers none,typesafe
 
 # categories and fact links: Jev judges every chunk and candidate pair, then the arms
@@ -39,11 +42,12 @@ python benchmarks/beir_bench.py coir-stackoverflow-qa --arms --mlt --rankers non
 python benchmarks/swe_bench.py --strat --variants mixed --rankers none,dispositio   # names and code-decided widening
 python benchmarks/pack_check.py                    # packed neighbour call vs one call per pair
 
-# dispositio: SWE-bench train groups, category passages (labelled by a small LLM), fine-tune
+# dispositio: SWE-bench train groups, category passages (labelled by a small LLM), two stages
 python benchmarks/swe_train.py --per-repo 150 --workers 12
 python benchmarks/category_data.py
-python benchmarks/finetune_laya.py --init <a relevance fine-tune> --sources category,swe,coir-stackoverflow-qa \
-    --max-items 17100 --replay 12000 --name dispositio
+python benchmarks/finetune_laya.py --out <stage 1>
+python benchmarks/finetune_laya.py --init <stage 1> --out <stage 2> \
+    --mix coir-stackoverflow-qa=16000,multidoc2dial=4000,swe=3000,scifact=2000,zalo-legal=2000,category=2000
 ```
 
 Data goes to `<user cache>/inventio/bench` (`--data` or `INVENTIO_BENCH_DATA` to move it), never
@@ -64,28 +68,42 @@ nDCG@10 (higher is better, 1.0 = every gold document at the top). Run on 2026-09
 
 | Benchmark | Published BM25 | Inventio BM25 | + Laya as published | + dispositio | + TypeSafe Jev | ceiling (gold in the 30 candidates) |
 |---|---|---|---|---|---|---|
-| SciFact (300 queries) | 0.665 | 0.670 | 0.302 | 0.722 | **0.765** | 0.849 |
-| StackOverflow QA (1,994 queries) | 0.568 | 0.670 | 0.193 | 0.699 | **0.791** | 0.805 |
-| SWE-bench Lite `code` (300 issues) | 0.430 | 0.540 | 0.391 | 0.655 | **0.696** | 0.823 |
-| SWE-bench Lite `mixed` (300 issues) | | 0.400 | 0.264 | 0.493 | **0.515** | 0.633 |
-| Zalo legal (788 queries) | | 0.756 | 0.512 | **0.831** | not run | 0.945 |
+| SciFact (300 queries) | 0.665 | 0.670 | 0.302 | 0.728 | **0.765** | 0.849 |
+| StackOverflow QA (1,994 queries) | 0.568 | 0.670 | 0.193 | 0.590 | **0.791** | 0.805 |
+| SWE-bench Lite `code` (300 issues) | 0.430 | 0.540 | 0.391 | 0.661 | **0.696** | 0.823 |
+| SWE-bench Lite `mixed` (300 issues) | | 0.400 | 0.264 | 0.486 | **0.515** | 0.633 |
+| Zalo legal (788 queries) | | 0.756 | 0.512 | **0.830** | not run | 0.945 |
+| MultiDoc2Dial (615 queries) | | 0.470 | 0.389 | **0.643** | 0.486 | 0.811 |
+| TechQA (119 queries) | | 0.370 | 0.171 | 0.444 | **0.655** | 0.815 |
 
 Zalo's BM25 searches adjacent syllables as phrases, which Inventio does for every Vietnamese
 question; over single syllables it is 0.543, ceiling 0.815. Jev was not run on Zalo.
+MultiDoc2Dial and TechQA are built by `data.py`: one document per section of a page (titled by
+the page and its headings) and one per passage of a technote (titled by the technote), so both
+ask for the part of a document that answers, not the document.
 
-dispositio against BM25, per query, paired bootstrap 95% interval: SWE-bench `code` +0.114
-(+0.078, +0.152), `mixed` +0.093 (+0.061, +0.127), Zalo +0.075 (+0.056, +0.094), SciFact +0.052
-(+0.020, +0.083), StackOverflow QA +0.029 (+0.015, +0.043). Jev against dispositio: +0.041
-(+0.014, +0.069) on `code`, +0.022 (−0.007, +0.050) on `mixed`, +0.043 on SciFact, +0.092 on
-StackOverflow QA.
+dispositio against BM25, per query, paired bootstrap 95% interval: MultiDoc2Dial +0.172
+(+0.146, +0.199), SWE-bench `code` +0.121 (+0.080, +0.159), `mixed` +0.086 (+0.055, +0.118),
+Zalo +0.074 (+0.053, +0.094), TechQA +0.074 (+0.024, +0.124), SciFact +0.058 (+0.026, +0.089),
+StackOverflow QA −0.079 (−0.095, −0.064). Jev against dispositio: +0.035 (+0.006, +0.064) on
+`code`, +0.029 (+0.001, +0.056) on `mixed`, +0.037 on SciFact, +0.201 on StackOverflow QA,
++0.211 on TechQA, −0.157 on MultiDoc2Dial.
+
+StackOverflow QA's train and test answers share one corpus, and 70% of the wrong candidates a
+test question sees are answers to train questions, which dispositio learned as answers. It
+ranks them too high: p > 0.5 for 3.1% of them against 0.6% of other documents, and 90% of its
+wrong first results are one of them (77% for the first release, the base rate being 70%). With
+the train answers removed from every question's candidates (the gold kept), BM25 is 0.729,
+dispositio 0.752 (+0.024, +0.014 to +0.033), the first release 0.765, Jev 0.799. The model card
+reports both.
 
 For SWE-bench, the share of issues where a file the fix touches is the first result, or in the
 first five:
 
 | Variant | BM25 top 1 | top 5 | + dispositio top 1 | top 5 | + TypeSafe top 1 | top 5 |
 |---|---|---|---|---|---|---|
-| `code` | 38% | 64% | 49% | 76% | 56% | 78% |
-| `mixed` | 24% | 48% | 37% | 56% | 40% | 58% |
+| `code` | 38% | 64% | 51% | 75% | 56% | 78% |
+| `mixed` | 24% | 48% | 34% | 58% | 40% | 58% |
 
 Cost per query: BM25 35-140 ms; dispositio 0.4-1.2 s on the laptop GPU (a long SWE-bench issue
 has more windows to read); TypeSafe 1.0-1.3 s. Indexing a repository at one commit takes 6 s
@@ -93,24 +111,38 @@ has more windows to read); TypeSafe 1.0-1.3 s. Indexing a repository at one comm
 
 ### Training dispositio
 
-Relevance labels come from people: SciFact, StackOverflow QA and Zalo train splits, and 3,923
-SWE-bench train issues (35 repositories, none in Lite) with the chunks their merged fix changed
-as answers. Category labels come from a small LLM, since no human set exists. Two runs that
-did not ship say what the data teaches:
+Relevance labels come from people: the MultiDoc2Dial, StackOverflow QA, SciFact and Zalo train
+splits, and 3,923 SWE-bench train issues (35 repositories, none in Lite) with the chunks their
+merged fix changed as answers. Category labels come from a small LLM, since no human set
+exists. MultiDoc2Dial's student aid domain is held out of training whole. The released model is
+two stages from Laya as published: stage 1 (55,786 items, MultiDoc2Dial first) and stage 2
+(28,513 items, StackOverflow QA first). The runs that did not ship say what the data teaches:
 
-| SWE-bench negatives | StackOverflow QA share | StackOverflow QA | SWE `mixed` | SWE `code` |
+| Run | MultiDoc2Dial, student aid (held out) | StackOverflow QA | SWE `code` | webshop questions first |
 |---|---|---|---|---|
-| any other chunk, docs included | 2,400 items | 0.612 | **0.526** | 0.645 |
-| source code only | 2,400 items | 0.652 | | |
-| source code only (released) | 6,364 items | **0.699** | 0.493 | **0.655** |
+| first release: relevance fine-tune, then SWE-bench and categories | 0.569 | **0.699** | 0.655 | 8 / 13 |
+| + MultiDoc2Dial, continued from the first release | 0.653 | | | |
+| stage 1 only: from Laya, no title items | 0.707 | 0.649 | 0.646 | |
+| stage 1 + stage 2 (released) | **0.718** | 0.590 | **0.661** | **9 / 13** |
 
-With docs as negatives the model learns that an issue-shaped question wants code: where the
-gold StackOverflow answer lost two or more places, its median probability fell from 0.63 to
-0.06, and the passages lifted over it were twice as code-heavy. A patch says which code was
-changed, not that a doc is a wrong answer, so those chunks are now neither answer nor negative.
-The cost is on whole repositories, where the docs-as-negatives run ranks code over docs better
-(−0.033, 95% CI −0.051 to −0.018). Results, data and terms: the
-[model card](https://huggingface.co/minhquan2310/dispositio).
+- **Title items** (a document's title as the query, its first chunk as the answer) were 65% of
+  the first release's lineage. They teach that the passage repeating the question's words is
+  the answer: the first release put a section restating the question above the section that
+  answered it. Continuing from it kept the habit (the second row, trained without titles,
+  still fell on TechQA from 0.439 to 0.405), so stage 1 starts again from Laya without them.
+- **Same-page negatives.** A MultiDoc2Dial question grounded in one section also gets that
+  page's other section BM25 ranks highest as a negative, at 0.25: the passage that shares the
+  topic and the words and does not answer. On the held-out domain the answer then beats every
+  other section of its page for 80% of questions, against 57%.
+- **SWE-bench negatives are source code only.** With docs as negatives the model learned that
+  an issue-shaped question wants code, and StackOverflow QA fell to 0.612. A patch says which
+  code was changed, not that a doc is a wrong answer.
+- **Stage 2** is there because after stage 1 StackOverflow QA was below BM25. On the held-out
+  StackOverflow questions it rose from 0.873 to 0.931; on the test it fell further, the
+  memorisation described under Results.
+
+Results, data and terms: the [model card](https://huggingface.co/minhquan2310/dispositio). The
+first release stays on Hugging Face as the revision `v1`.
 
 ### Categories and fact links (`--arms`)
 
@@ -250,11 +282,14 @@ What the numbers say:
   (0.765 against e5-mistral-7b's 0.764). StackOverflow QA: it stays below the strongest
   embedders (0.791 against 0.869-0.915), because only 80% of questions have their answer among
   the 30 candidates; there the pool is the limit, as on whole repositories.
-- TypeSafe Jev reordering the same 30 candidates adds 0.10 to 0.16 everywhere, and on SWE-bench
-  `code` turns 38% first-hit into 56%.
+- TypeSafe Jev reordering the same 30 candidates adds 0.10 to 0.16 on SciFact, StackOverflow QA
+  and SWE-bench, and on SWE-bench `code` turns 38% first-hit into 56%. On MultiDoc2Dial it adds
+  only 0.016: telling the section that answers from its page's other sections is not what a
+  general judge does best.
 - Laya as published makes every ranking worse, by a lot. dispositio, fine-tuned on human
-  relevance labels, is ahead of BM25 on every test set with every interval above zero,
-  including SWE-bench Lite, whose 12 repositories are not among the 35 it trained on.
+  relevance labels, is ahead of BM25 with the interval above zero on every test set but
+  StackOverflow QA as published (see Results for why), including SWE-bench Lite, whose 12
+  repositories are not among the 35 it trained on.
 - A whole repository is harder than its code: tests and docs push the fix's files out of the 30
   candidates (ceiling 0.823 falls to 0.633). The ranker cannot recover what BM25 did not hand
   it, so on mixed repositories the candidate pool, not the ranker, is the limit to work on.

@@ -3,6 +3,8 @@
     python benchmarks/data.py beir scifact           # BEIR zip from UKP
     python benchmarks/data.py coir stackoverflow-qa  # CoIR, from the Hugging Face hub
     python benchmarks/data.py zalo                   # Zalo AI legal text retrieval (Vietnamese)
+    python benchmarks/data.py multidoc2dial          # US public-service pages: rules and procedures
+    python benchmarks/data.py techqa                 # IBM technotes: support questions, fixes and procedures
     python benchmarks/data.py swe-lite               # SWE-bench Lite + one clone per repo
 
 Everything lands under the data directory (default `<user cache>/inventio/bench`, override with
@@ -13,12 +15,15 @@ Layouts:
   beir/<name>/            corpus.jsonl, queries.jsonl, qrels/{train,test}.tsv   (BEIR format)
   beir/coir-<name>/       the same format, converted from CoIR's parquet splits
   beir/zalo-legal/        the same format, from GreenNode/zalo-ai-legal-text-retrieval-vn
+  beir/multidoc2dial/     the same format, one document per section of a MultiDoc2Dial page
+  beir/techqa/            the same format, from illuin-conteb/tech-qa (test only)
   swe-lite/lite.jsonl     instance_id, repo, base_commit, patch, problem_statement
   swe-lite/<owner>__<repo>/  bare-enough clone of the github.com/swe-bench mirror
 """
 
 import argparse
 import io
+import re
 import json
 import os
 import subprocess
@@ -101,6 +106,138 @@ def fetch_zalo(root: Path) -> Path:
     return dest
 
 
+MULTIDOC2DIAL_URL = "https://doc2dial.github.io/multidoc2dial/file/multidoc2dial.zip"
+
+
+def fetch_multidoc2dial(root: Path) -> Path:
+    """MultiDoc2Dial (IBM, Apache-2.0): people asking about the pages of four US public services
+    (Social Security, Veterans Affairs, DMV, student aid), which state rules, eligibility and
+    procedures. The query is the first user turn of a dialogue, a question that stands on its
+    own ("What can I do if I forgot to update my address?"); the answers are the page sections
+    the agent's reply was grounded in, marked by the annotators. A document is one section,
+    titled by its page and headings, so the benchmark asks for the part of a page that answers.
+
+    `dialogues.jsonl` gives each query's split and domain. `train_groups.jsonl` is what the
+    fine-tune (benchmarks/finetune_laya.py) learns from, cleaner than the first turns: every user
+    turn of a train dialogue that opens a topic (its first, or one grounded in another page than
+    the turn before), kept when it is a question that stands on its own and the agent's reply
+    gives a solution; the gold is that reply's `solution` sections, `near` every other section
+    the topic went on to use (they may answer part of it), and `tight` says the user's own turn
+    was grounded in the gold section itself. The validation split is kept for choosing between
+    fine-tunes, never for training or the reported test."""
+    dest = root / "beir" / "multidoc2dial"
+    if (dest / "qrels" / "test.tsv").exists():
+        return dest
+    raw = root / "raw" / "multidoc2dial"
+    if not (raw / "multidoc2dial" / "multidoc2dial_doc.json").exists():
+        raw.mkdir(parents=True, exist_ok=True)
+        with urllib.request.urlopen(MULTIDOC2DIAL_URL, timeout=600) as r:
+            zipfile.ZipFile(io.BytesIO(r.read())).extractall(raw)
+    src = raw / "multidoc2dial"
+    (dest / "qrels").mkdir(parents=True, exist_ok=True)
+    pages = json.load((src / "multidoc2dial_doc.json").open(encoding="utf-8"))["doc_data"]
+    section = {}  # (page id, span id) -> section document id
+    clean = lambda t: re.sub(r"(#\d+(_\d+)?|\[\d+\])$", "", t.split(" | ")[0]).strip()  # noqa: E731
+    with (dest / "corpus.jsonl").open("w", encoding="utf-8") as f:
+        for dname, domain in pages.items():
+            for pi, (pid, page) in enumerate(domain.items()):
+                title, parts = clean(page["title"]), {}  # heading path -> its paragraphs, in page order
+                for sid, sp in page["spans"].items():
+                    heads = [clean(t) for t in [*(p["text"] for p in sp["parent_titles"]), sp["title"]]]
+                    path = tuple(dict.fromkeys(h for h in heads if h and h != title))
+                    section[pid, sid] = path
+                    paras = parts.setdefault(path, {})
+                    if sp["tag"] == "u":  # h1..h6 spans are the headings, already in the title
+                        paras.setdefault(sp["id_sec"], sp["text_sec"].strip())
+                parts = {path: "\n\n".join(p for p in paras.values() if p) for path, paras in parts.items()}
+                parts = {path: text for path, text in parts.items() if text}
+                ids = {path: f"{dname}-{pi}-{si}" for si, path in enumerate(parts)}  # safe as file names
+                section.update({k: ids.get(v) for k, v in section.items() if k[0] == pid})
+                for path, text in parts.items():
+                    f.write(json.dumps({"_id": ids[path], "title": " > ".join([title, *path]), "text": text},
+                                       ensure_ascii=False) + "\n")
+    vague = re.compile(r"\b(i have (a )?questions?|can you help|tell me about)\b", re.I)
+    with (dest / "queries.jsonl").open("w", encoding="utf-8") as fq, \
+            (dest / "dialogues.jsonl").open("w", encoding="utf-8") as fd, \
+            (dest / "train_groups.jsonl").open("w", encoding="utf-8") as fg:
+        for split in ("train", "validation", "test"):
+            dials = json.load((src / f"multidoc2dial_dial_{split}.json").open(encoding="utf-8"))["dial_data"]
+            rows = []
+            for dname, domain in dials.items():
+                for d in domain:
+                    turns = d["turns"]
+                    secs = lambda t, label=None: {section.get((r["doc_id"], r["id_sp"])) for r in t["references"]  # noqa: E731
+                                                  if label in (None, r["label"])} - {None}
+                    if split == "train":
+                        fg.writelines(json.dumps(g) + "\n" for g in topic_groups(d, dname, secs, vague))
+                    if len(turns) < 2 or turns[0]["role"] != "user" or turns[1]["role"] != "agent":
+                        continue
+                    gold = secs(turns[1])
+                    if not gold:
+                        continue
+                    fq.write(json.dumps({"_id": d["dial_id"], "text": turns[0]["utterance"].strip()}) + "\n")
+                    fd.write(json.dumps({"_id": d["dial_id"], "split": split, "domain": dname}) + "\n")
+                    rows += [(d["dial_id"], g, 1) for g in sorted(gold)]
+            write_qrels(dest / "qrels" / f"{split}.tsv", rows)
+    return dest
+
+
+def topic_groups(dial: dict, domain: str, secs, vague):
+    """The training groups of one MultiDoc2Dial dialogue (see fetch_multidoc2dial)."""
+    turns, starts, prev = dial["turns"], [], None
+    for i, t in enumerate(turns):
+        if t["role"] == "user" and t["da"].startswith("query") and t["references"]:
+            pages = {r["doc_id"] for r in t["references"]}
+            if pages != prev:
+                starts.append(i)
+            prev = pages
+    for n, i in enumerate(starts):
+        u, a = turns[i], turns[i + 1] if i + 1 < len(turns) else None
+        text = u["utterance"].strip()
+        if a is None or a["role"] != "agent" or not a["da"].startswith("respond_solution"):
+            continue
+        if vague.search(text) or ("?" not in text and len(text.split()) < 8):
+            continue
+        gold = sorted(secs(a, "solution"))[:2]
+        if not gold:
+            continue
+        end = starts[n + 1] if n + 1 < len(starts) else len(turns)
+        near = set().union(*(secs(t) for t in turns[i:end])) - set(gold)
+        yield {"_id": f"{dial['dial_id']}:{i}", "domain": domain, "query": text, "gold": gold,
+               "near": sorted(near), "tight": bool(secs(u)) and secs(u) <= set(gold)}
+
+
+def fetch_techqa(root: Path) -> Path:
+    """TechQA (IBM, Apache-2.0) as cut by ConTEB (illuin-conteb/tech-qa): questions people posted
+    on IBM support forums, each answered by one passage of a technote (a support article of
+    question, cause, answer and steps). 119 questions over 2,309 passages of 360 technotes, test
+    only: no split of it is trained on. ConTEB leaves every passage but a technote's first without
+    its title; here each carries it as its heading, as a section of a real document does in
+    Inventio (the title is what the first passage says before " - United States")."""
+    from huggingface_hub import hf_hub_download
+    import pandas as pd
+
+    dest = root / "beir" / "techqa"
+    if (dest / "qrels" / "test.tsv").exists():
+        return dest
+    (dest / "qrels").mkdir(parents=True, exist_ok=True)
+    get = lambda f: pd.read_parquet(hf_hub_download("illuin-conteb/tech-qa", f, repo_type="dataset"))  # noqa: E731
+    docs = get("documents/train-00000-of-00001.parquet")
+    doc = lambda cid: cid.rsplit("_", 1)[0]  # noqa: E731
+    title = lambda t: " ".join(t.split(" - United States", 1)[0].split()) if " - United States" in t[:400] else ""  # noqa: E731
+    titles = {doc(r.chunk_id): title(r.chunk) for r in docs.itertuples() if r.chunk_id.endswith("_0")}
+    with (dest / "corpus.jsonl").open("w", encoding="utf-8") as f:
+        for r in docs.itertuples():
+            f.write(json.dumps({"_id": r.chunk_id, "title": titles.get(doc(r.chunk_id), ""), "text": r.chunk},
+                               ensure_ascii=False) + "\n")
+    qs = get("queries/train-00000-of-00001.parquet")
+    with (dest / "queries.jsonl").open("w", encoding="utf-8") as f:
+        for i, r in enumerate(qs.itertuples()):
+            f.write(json.dumps({"_id": f"q{i}", "text": r.query.strip()}, ensure_ascii=False) + "\n")
+    write_qrels(dest / "qrels" / "test.tsv", ((f"q{i}", r.chunk_id, 1) for i, r in enumerate(qs.itertuples())))
+    return dest
+
+
 def fetch_swe_lite(root: Path) -> Path:
     dest = root / "swe-lite"
     dest.mkdir(parents=True, exist_ok=True)
@@ -124,7 +261,7 @@ def fetch_swe_lite(root: Path) -> Path:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("kind", choices=["beir", "coir", "zalo", "swe-lite"])
+    ap.add_argument("kind", choices=["beir", "coir", "zalo", "multidoc2dial", "techqa", "swe-lite"])
     ap.add_argument("name", nargs="?", help="dataset name for beir / coir")
     ap.add_argument("--data", help="data directory (default: user cache)")
     args = ap.parse_args()
@@ -132,7 +269,8 @@ def main() -> int:
     if args.kind in ("beir", "coir") and not args.name:
         ap.error(f"{args.kind} needs a dataset name")
     out = {"beir": lambda: fetch_beir(args.name, root), "coir": lambda: fetch_coir(args.name, root),
-           "zalo": lambda: fetch_zalo(root), "swe-lite": lambda: fetch_swe_lite(root)}[args.kind]()
+           "zalo": lambda: fetch_zalo(root), "multidoc2dial": lambda: fetch_multidoc2dial(root),
+           "techqa": lambda: fetch_techqa(root), "swe-lite": lambda: fetch_swe_lite(root)}[args.kind]()
     print(out)
     return 0
 

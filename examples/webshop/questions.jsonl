@@ -1,0 +1,13 @@
+{"query": "the nightly backup has not finished, what do I do?", "answer": "wiki:runbook.md:8"}
+{"query": "What should I do when nightly_backup is still running in the morning?", "answer": "wiki:runbook.md:8"}
+{"query": "how do I take a new backup without loading the main database?", "answer": "wiki:runbook.md:8"}
+{"query": "which date does a backup taken the next morning get?", "answer": "wiki:runbook.md:8"}
+{"query": "what time does the backup job start?", "answer": "wiki:runbook.md:3"}
+{"query": "how often must we test restoring a backup?", "answer": "wiki:policy.md:3"}
+{"query": "what is blocked while a restore test is overdue?", "answer": "wiki:policy.md:3"}
+{"query": "can the engineer who took a backup delete it early?", "answer": "wiki:policy.md:10"}
+{"query": "who has to approve deleting the last backup older than a week?", "answer": "wiki:policy.md:10"}
+{"query": "how many days are backups kept before they are deleted?", "answer": "app:jobs/backup.py:1"}
+{"query": "why could we not restore the orders on March 14?", "answer": "wiki:incidents/2026-03-14.md:3"}
+{"query": "what did we change after the incident with no backup to restore?", "answer": "wiki:incidents/2026-03-14.md:10"}
+{"query": "when does the backup job page the on-call engineer?", "answer": "wiki:incidents/2026-03-14.md:10"}
