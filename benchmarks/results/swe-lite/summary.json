@@ -62,7 +62,7 @@
     "sec_query": 1.1711,
     "sec_index": 2.4073
   },
-  "code/dispositio": {
+  "code/dispositio-v1": {
     "n": 300,
     "ndcg@10": 0.6547,
     "top1": 0.49,
@@ -70,6 +70,24 @@
     "in_pool": 0.8233,
     "sec_query": 1.1568,
     "sec_index": 2.4705
+  },
+  "code/dispositio-run3": {
+    "n": 300,
+    "ndcg@10": 0.6456,
+    "top1": 0.4733,
+    "top5": 0.76,
+    "in_pool": 0.8233,
+    "sec_query": 1.1273,
+    "sec_index": 2.5484
+  },
+  "code/dispositio": {
+    "n": 300,
+    "ndcg@10": 0.6608,
+    "top1": 0.5067,
+    "top5": 0.7533,
+    "in_pool": 0.8233,
+    "sec_query": 1.1522,
+    "sec_index": 2.5363
   },
   "mixed/none": {
     "n": 300,
@@ -116,7 +134,7 @@
     "sec_query": 0.7207,
     "sec_index": 4.94
   },
-  "mixed/dispositio": {
+  "mixed/dispositio-v1": {
     "n": 300,
     "ndcg@10": 0.4932,
     "top1": 0.3733,
@@ -124,5 +142,23 @@
     "in_pool": 0.63,
     "sec_query": 0.6843,
     "sec_index": 4.9803
+  },
+  "mixed/dispositio-run3": {
+    "n": 300,
+    "ndcg@10": 0.4915,
+    "top1": 0.3567,
+    "top5": 0.59,
+    "in_pool": 0.63,
+    "sec_query": 0.702,
+    "sec_index": 5.1804
+  },
+  "mixed/dispositio": {
+    "n": 300,
+    "ndcg@10": 0.4861,
+    "top1": 0.3433,
+    "top5": 0.5833,
+    "in_pool": 0.63,
+    "sec_query": 0.6968,
+    "sec_index": 5.0915
   }
 }
