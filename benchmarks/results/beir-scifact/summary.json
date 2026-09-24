@@ -323,5 +323,12 @@
     "recall@30chunks": 0.8494,
     "sec_per_query": 0.393,
     "timed_queries": 300
+  },
+  "dispositio": {
+    "queries": 300,
+    "ndcg@10": 0.7218,
+    "recall@30chunks": 0.8494,
+    "sec_per_query": 0.401,
+    "timed_queries": 300
   }
 }

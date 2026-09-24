@@ -258,24 +258,28 @@ def test_vietnamese_query_matches_words_not_scattered_syllables(tmp_path, capsys
 
 
 class FakeJudge:
-    """Counts calls. Categories: a chunk naming a card is about a Product, one naming a merchant
-    about an Organization; every query is about a Product. Two passages are about the same thing
-    when both name the same card."""
+    """Counts calls. A chunk naming a cap or a limit states a Rule, one saying where things go a
+    Procedure, one saying who a card is for is Reference, anything else Other; every query asks
+    for a Rule. Two passages are about the same thing when both name the same card."""
 
     packs = True
 
     def __init__(self, cloud=False):
         self.cloud, self.name, self.calls, self.refused, self.failed = cloud, "fake", 0, 0, 0
 
+    @staticmethod
+    def category(t: str) -> dict:
+        from inventio.facts import CATEGORIES
+
+        c = ("Rule" if "cap" in t or "limit" in t else "Procedure" if " go to " in t
+             else "Reference" if "issued to" in t else "Other")
+        return {x: (0.7 if x == c else 0.05) for x in CATEGORIES}
+
     def batch(self, jobs):
         for i, (state, qs) in enumerate(jobs):
             self.calls += 1
-            if "query" in state:
-                yield i, {c: (0.9 if c == "Product" else 0.1) for c in qs}
-            elif "n0" not in state:
-                t = state["passage"]
-                yield i, {c: (0.9 if (c == "Product" and "card" in t) or (c == "Organization" and "merchant" in t)
-                              else 0.1) for c in qs}
+            if "n0" not in state:
+                yield i, {"category": self.category("cap" if "query" in state else state["passage"])}
             else:
                 card = lambda t: next((w for w in ("gold card", "blue card") if w in t), None)
                 yield i, {s: (0.9 if card(state[s]) and card(state[s]) == card(state["passage"]) else 0.1) for s in qs}
@@ -294,23 +298,28 @@ def test_facts_categories_links_and_query_widening(tmp_path, capsys):
     write(repo, "c.md", "# Blue card\nthe blue card is issued to students\n")
     write(repo, "d.md", "# Merchants\na merchant is onboarded after a site visit\n")
     write(repo, "e.md", "# Cap\nspend cap limits reset at month end for every product\n")
+    write(repo, "f.md", "# Holders\nevery gold card holder has the same spend cap\n")
     write(repo, "code.py", "def gold_card_cap():\n    return 5000\n")
     run(capsys, "--db", str(db), "init", str(repo), "--name", "repo", "--public")
     con = connect(db)
     judge = FakeJudge()
-    res = build(con, judge)
+    build(con, judge)
 
-    # every prose chunk has all eight p; code is not categorized; kept = p >= 0.5
+    # every prose chunk has a p per category and keeps the likeliest one, none when that is Other;
+    # code is not categorized
     per_chunk = con.execute(
         "SELECT f.path, count(*) n, group_concat(CASE WHEN kept THEN category END) kept FROM chunk_categories cc "
         "JOIN chunks c ON c.id = cc.chunk_id JOIN files f ON f.id = c.file_id GROUP BY c.id").fetchall()
     assert {r["path"]: (r["n"], r["kept"]) for r in per_chunk} == {
-        "a.md": (8, "Product"), "b.md": (8, "Product"), "c.md": (8, "Product"), "d.md": (8, "Organization"), "e.md": (8, None)}
-    # the gold card chunks are linked; the blue card shares their type but not their card
+        "a.md": (7, "Rule"), "b.md": (7, "Procedure"), "c.md": (7, "Reference"), "d.md": (7, None),
+        "e.md": (7, "Rule"), "f.md": (7, "Rule")}
+    # the gold card rule is linked to the gold card procedure; the other gold card rule is not,
+    # being of the same category, nor is the blue card
     about = con.execute("SELECT fa.path a, fb.path b, l.via FROM links l JOIN chunks ca ON ca.id = l.src "
                         "JOIN files fa ON fa.id = ca.file_id JOIN chunks cb ON cb.id = l.dst "
                         "JOIN files fb ON fb.id = cb.file_id WHERE l.rel = 'about'").fetchall()
-    assert [tuple(sorted((r["a"], r["b"]))) + (r["via"],) for r in about] == [("a.md", "b.md", "Product")]
+    assert sorted(tuple(sorted((r["a"], r["b"]))) + (r["via"],) for r in about) == [
+        ("a.md", "b.md", "Procedure~Rule"), ("b.md", "f.md", "Procedure~Rule")]
     # every judgment is kept with the text it read
     j = con.execute("SELECT kind, passage, other, model FROM judgments WHERE kind = 'same_thing' AND p >= 0.5").fetchone()
     assert j["model"] == "fake" and "gold card" in j["passage"] and "gold card" in j["other"]
@@ -321,16 +330,21 @@ def test_facts_categories_links_and_query_widening(tmp_path, capsys):
     build(con, judge, relink=True)
     rebuild_links(con)
     assert judge.calls == calls
-    assert con.execute("SELECT count(*) FROM links WHERE rel = 'about'").fetchone()[0] == 1
+    assert con.execute("SELECT count(*) FROM links WHERE rel = 'about'").fetchone()[0] == 2
+
+    # categories of an earlier scheme are replaced, with the links they gated
+    con.execute("UPDATE chunk_categories SET category = 'Product' WHERE category = 'Rule'")
+    build(con, judge)
+    assert con.execute("SELECT count(*) FROM chunk_categories WHERE category = 'Product'").fetchone()[0] == 0
+    assert con.execute("SELECT count(*) FROM links WHERE rel = 'about'").fetchone()[0] == 2
 
     # query time only adds: the plain pool is a prefix, the rest came through a category or a link
     plain = search(con, "spend cap", k=100, pool=1)
     wide = search(con, "spend cap", k=100, pool=1, facts=judge, ranker=None)
     assert [h.id for h in wide[:len(plain)]] == [h.id for h in plain]
-    assert plain[0].path == "a.md" or plain[0].path == "e.md"
     added = {h.path: h.via for h in wide[len(plain):]}
-    assert set(added) <= {"a.md", "b.md", "c.md"} and "b.md" in added
-    assert all(v.startswith(("category:Product", "about:Product")) for v in added.values())
+    assert "b.md" in added and added["b.md"].startswith("about:")
+    assert all(v.startswith("category:Rule") for p, v in added.items() if p != "b.md")
 
     # editing a file drops its judged links with its chunks
     write(repo, "b.md", "# Disputes\nchargebacks go to the disputes desk\n")

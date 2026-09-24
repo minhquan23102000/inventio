@@ -35,6 +35,42 @@
     "sec_query": 0.7684,
     "sec_index": 2.4743
   },
+  "code/laya-tuned-w": {
+    "n": 300,
+    "ndcg@10": 0.5966,
+    "top1": 0.44,
+    "top5": 0.6867,
+    "in_pool": 0.8233,
+    "sec_query": 1.2382,
+    "sec_index": 3.3836
+  },
+  "code/dispositio-heading": {
+    "n": 300,
+    "ndcg@10": 0.6586,
+    "top1": 0.4933,
+    "top5": 0.7667,
+    "in_pool": 0.8233,
+    "sec_query": 1.1779,
+    "sec_index": 2.4911
+  },
+  "code/dispositio-docneg": {
+    "n": 300,
+    "ndcg@10": 0.6452,
+    "top1": 0.4633,
+    "top5": 0.7633,
+    "in_pool": 0.8233,
+    "sec_query": 1.1711,
+    "sec_index": 2.4073
+  },
+  "code/dispositio": {
+    "n": 300,
+    "ndcg@10": 0.6547,
+    "top1": 0.49,
+    "top5": 0.7567,
+    "in_pool": 0.8233,
+    "sec_query": 1.1568,
+    "sec_index": 2.4705
+  },
   "mixed/none": {
     "n": 300,
     "ndcg@10": 0.4001,
@@ -61,5 +97,32 @@
     "in_pool": 0.6333,
     "sec_query": 0.9838,
     "sec_index": 14.4315
+  },
+  "mixed/dispositio-heading": {
+    "n": 300,
+    "ndcg@10": 0.5484,
+    "top1": 0.4533,
+    "top5": 0.6067,
+    "in_pool": 0.63,
+    "sec_query": 0.7266,
+    "sec_index": 5.0359
+  },
+  "mixed/dispositio-docneg": {
+    "n": 300,
+    "ndcg@10": 0.5264,
+    "top1": 0.4167,
+    "top5": 0.5967,
+    "in_pool": 0.63,
+    "sec_query": 0.7207,
+    "sec_index": 4.94
+  },
+  "mixed/dispositio": {
+    "n": 300,
+    "ndcg@10": 0.4932,
+    "top1": 0.3733,
+    "top5": 0.5567,
+    "in_pool": 0.63,
+    "sec_query": 0.6843,
+    "sec_index": 4.9803
   }
 }
