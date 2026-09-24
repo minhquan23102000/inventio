@@ -201,10 +201,11 @@ def _scope(sources: list[str] | None) -> tuple[str, list]:
 
 
 CHUNK_SQL = """
-SELECT c.id, c.file_id, s.name source, s.public, f.path, c.heading_path, c.text
+SELECT c.id, c.file_id, s.name source, s.public, f.path, f.type, c.heading_path, c.text
 FROM chunks c JOIN files f ON f.id = c.file_id JOIN sources s ON s.id = f.source_id
-WHERE f.lang IN ('markdown', 'text')
+WHERE (f.lang IN ('markdown', 'text') OR f.type = 'Dataset')
 """
+SCHEMA_CARD = {c: float(c == "Reference") for c in CATEGORIES}  # a table's card: its category is known, not judged
 
 
 def _cache(con, kind: str, model: str) -> dict[str, float]:
@@ -243,7 +244,7 @@ def categorize(con, judge, sources: list[str] | None = None, log=print) -> dict:
         CHUNK_SQL + where + " AND NOT EXISTS (SELECT 1 FROM chunk_categories cc WHERE cc.chunk_id = c.id) ORDER BY c.id",
         args,
     ).fetchall()
-    _refuse_private(judge, rows)
+    _refuse_private(judge, [r for r in rows if r["type"] != "Dataset"])  # cards are filed by code, sent nowhere
     cache = _cache(con, "category", judge.name)
     questions = {"category": category_question()}
     texts = [passage(r["path"], r["heading_path"], r["text"]) for r in rows]
@@ -264,7 +265,13 @@ def categorize(con, judge, sources: list[str] | None = None, log=print) -> dict:
     todo = []
     for i, text in enumerate(texts):
         ks = {c: key("category", c, text) for c in CATEGORIES}
-        if all(k in cache for k in ks.values()):
+        if rows[i]["type"] == "Dataset":
+            for c, p in SCHEMA_CARD.items():
+                con.execute("INSERT OR REPLACE INTO chunk_categories (chunk_id, category, p, kept, model) "
+                            "VALUES (?, ?, ?, ?, 'code')", (rows[i]["id"], c, p, int(p == 1.0)))
+            stats["done"].append(rows[i]["id"])
+            stats["cached"] += 1
+        elif all(k in cache for k in ks.values()):
             put(i, {c: cache[k] for c, k in ks.items()}, False)
             stats["cached"] += 1
         else:

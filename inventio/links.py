@@ -3,7 +3,7 @@
 Relation names come from schema.org's CreativeWork vocabulary:
 - `citation`: a Markdown link points at a file or heading.
 - `mentions`: a chunk names an identifier another chunk defines (a function, a class), or two
-  chunks in different files share a rare identifier-shaped token (`fraud_score_daily`, `FRAML-123`).
+  chunks in different files share a rare identifier-shaped token (`nightly_backup`, `SHOP-123`).
   This is the bridge between a repository and the prose written about it.
 Parent sections (`isPartOf`) are kept on the chunk row itself. Links judged by a model (`about`,
 see facts.py) are not drawn from the sources, so a rebuild leaves them alone.
