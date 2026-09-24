@@ -1,17 +1,18 @@
 """Content categories and fact links, judged by a decision model when a source is indexed.
 
-Categories are schema.org's top-level types. Each chunk of prose is asked one yes/no question per
-type, whose criteria separate a chunk that states something about a specific thing of that type
-from one that only names such a thing in passing. A chunk keeps every type with p >= KEEP_P, at
-most MAX_KEPT of them.
+A category says what a passage does for its reader: states a rule, walks through a procedure,
+describes something for lookup, explains why, reports a finding, or records what happened. One
+choice question per chunk of prose, so every chunk keeps exactly one category (none for Other)
+and the categories cut a corpus into regions instead of all covering it. A question asks for
+the category of passage that would answer it, the same way.
 
-Fact links: each chunk's BM25 neighbours in other files that share a kept type are asked whether
-the two passages state something about the same specific thing; pairs judged true become `about`
-links. Structure (headings, definitions, Markdown links) is drawn by code in ingest and links;
-this module is the one place a model decides what the map says.
-
-Jev packs its questions: one call per chunk for the eight types, one call per chunk for all of its
-neighbours. Laya reads one pair per pass, since its context holds two passages, not eleven.
+Fact links: each chunk's BM25 neighbours in other files, of a different category, are asked
+whether the two passages state something about the same specific thing; pairs judged true become
+`about` links. They join the rule to the procedure that carries it out, the incident where it
+failed, the decision that changed it; two passages of one category about one thing are most
+often near-copies, and BM25 already finds those. Structure (headings, definitions, Markdown
+links) is drawn by code in ingest and links; this module is the one place a model decides what
+the map says.
 
 Every judgment is stored in `judgments` with the text it read, the model and the source: a cache,
 so a rebuilt map pays nothing twice.
@@ -27,25 +28,23 @@ from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
 
 from .rankers import CloudRefused, load_laya
 
-# schema.org's top-level types (https://schema.org/Thing), without the life-science branch
-# (BioChemEntity, MedicalEntity, Taxon)
 CATEGORIES = {
-    "Event": "something that happened or is scheduled at a time: an incident, an outage, a meeting, "
-             "a release, a trial or an experiment",
-    "Person": "a person or a group of people: a named individual, a customer, an author, a user, "
-              "patients in a study",
-    "Organization": "an organization: a company, a bank, a team, a regulator, a university, a project",
-    "Place": "a place: a country, a city, a region, an office or branch, a site",
-    "Product": "a product or something made or offered: a software library, a tool, an API, a card, "
-               "an account type, a drug, a device",
-    "Action": "an action or procedure: a step to take, a process, a method, how to do something",
-    "Intangible": "an abstract thing: a concept, a rule, a policy, a threshold, a quantity, "
-                  "a property, a mechanism, a relation",
-    "CreativeWork": "a work someone authored: a document, a paper, a report, a dataset, "
-                    "a piece of code, a message",
+    "Rule": "states what must, may or must not be done: a requirement, a policy, a law, a limit or "
+            "threshold, a convention",
+    "Procedure": "tells the reader how to do something: steps, commands to run, a setup or usage guide, "
+                 "a runbook",
+    "Reference": "describes what something is or contains, for lookup: an API, a signature, parameters, "
+                 "fields, options, a schema, a definition",
+    "Explanation": "explains why or how something works: a mechanism, a rationale, a design, background, "
+                   "a comparison of approaches",
+    "Finding": "reports what was measured or observed: results, a benchmark, an experiment, evidence for "
+               "a claim",
+    "Record": "tells what happened or was decided at a point in time: an incident, a bug report, a change "
+              "log, release notes, meeting notes, a decision",
+    "Other": "does none of these: a table of contents, a list of links or names, credits, boilerplate",
 }
-KEEP_P = 0.5      # a chunk keeps a type, and a pair becomes a link, at p >= this
-MAX_KEPT = 3
+NONE = "Other"    # a chunk whose category is Other keeps none, and is never linked or routed to
+KEEP_P = 0.5      # a pair becomes a link at p >= this
 NEIGHBOURS = 10   # neighbours judged per chunk
 FETCH = 50        # BM25 candidates read to find them, before the type and same-file filters
 MLT_TERMS = 24    # the chunk's most distinctive terms form its neighbour query
@@ -53,31 +52,18 @@ SAME = "same_thing"
 WORD = re.compile(r"\w+", re.UNICODE)
 
 
-def category_question(cat: str) -> dict:
-    x = cat.lower() if cat not in ("CreativeWork",) else "creative work"
-    return {
-        "instructions": f"Does the `passage` state something about a specific {x} ({CATEGORIES[cat]})?",
-        "criteria": {
-            "true": f"The passage says what a specific {x} is, does or has, or what happened to it; "
-                    f"that {x} is what a statement in the passage is about.",
-            "false": f"The passage names a {x} only in passing, or is about something else.",
-        },
-    }
+def category_question() -> dict:
+    return {"type": "choice", "instructions": "What does the `passage` do for its reader?", "criteria": CATEGORIES}
 
 
-def query_category_question(cat: str) -> dict:
-    x = cat.lower() if cat not in ("CreativeWork",) else "creative work"
-    return {
-        "instructions": f"Is the `query` about a specific {x} ({CATEGORIES[cat]})?",
-        "criteria": {
-            "true": f"The query asks about, or makes a claim about, a specific {x}.",
-            "false": f"The query names a {x} only in passing, or is about something else.",
-        },
-    }
+def query_category_question() -> dict:
+    return {"type": "choice", "instructions": "What kind of passage would answer the `query`?",
+            "criteria": CATEGORIES}
 
 
 def same_question(slot: str) -> dict:
     return {
+        "type": "noul",
         "instructions": f"Do the `passage` and `{slot}` each state something about the same specific thing?",
         "criteria": {
             "true": "Both passages make a statement about one and the same specific thing: the same event, "
@@ -92,9 +78,12 @@ def key(kind: str, question: str, passage: str, other: str = "") -> str:
     return hashlib.sha1("\x1f".join((kind, question, passage, other)).encode("utf-8")).hexdigest()
 
 
-def kept_types(probs: dict[str, float]) -> list[str]:
-    ranked = sorted((c for c in probs if probs[c] >= KEEP_P), key=lambda c: -probs[c])
-    return ranked[:MAX_KEPT]
+def kept_categories(probs: dict[str, float]) -> list[str]:
+    """The most likely category, unless it is Other: at most one."""
+    if not probs:
+        return []
+    top = max(probs, key=probs.get)
+    return [] if top == NONE else [top]
 
 
 def passage(path: str, heading_path: str, text: str) -> str:
@@ -104,6 +93,7 @@ def passage(path: str, heading_path: str, text: str) -> str:
 
 
 # --------------------------------------------------------------------------------------- judges
+# A judge answers a yes/no question (`type` noul) with p, a choice question with {label: p}.
 
 class JevJudge:
     """TypeSafe Jev in the cloud. Packs every question about one chunk into one call."""
@@ -124,15 +114,17 @@ class JevJudge:
         self.refused = 0   # texts the API's edge firewall rejected (HTTP 403 "Attention Required")
         self.failed = 0    # calls that still failed after every retry; a rerun asks again
 
-    def _call(self, state: dict, questions: dict[str, dict]) -> dict[str, float] | None:
-        from typesafe_sdk import Noul, NoulCriteria, TypeSafePermissionDeniedError
+    def _call(self, state: dict, questions: dict[str, dict]) -> dict | None:
+        from typesafe_sdk import Choice, Noul, NoulCriteria, TypeSafePermissionDeniedError
         from typesafe_sdk._core.errors import TypeSafeAPIError
 
-        qs = {k: Noul(instructions=q["instructions"], criteria=NoulCriteria(**q["criteria"])) for k, q in questions.items()}
+        qs = {k: Choice(instructions=q["instructions"], criteria=q["criteria"]) if q["type"] == "choice"
+              else Noul(instructions=q["instructions"], criteria=NoulCriteria(**q["criteria"])) for k, q in questions.items()}
         for attempt in range(self.retries):
             try:
                 r = self.client.system_one(state=state, questions=qs, model=self.model)
-                return {k: float(r.nouls[k].noul) for k in questions}
+                return {k: dict(r.choices[k].probabilities) if q["type"] == "choice" else float(r.nouls[k].noul)
+                        for k, q in questions.items()}
             except TypeSafePermissionDeniedError as e:
                 if "Attention Required" not in str(e):
                     raise  # the key itself
@@ -183,9 +175,9 @@ class LayaJudge:
 
     def batch(self, jobs):
         for i, (state, qs) in enumerate(jobs):
-            q = {k: {"type": "noul", **v} for k, v in qs.items()}
-            ans = self.agent.predict(state, q)["answers"]
-            yield i, {k: float(ans[k]["noul"]) for k in qs}
+            ans = self.agent.predict(state, qs)["answers"]
+            yield i, {k: dict(ans[k]["probabilities"]) if q["type"] == "choice" else float(ans[k]["noul"])
+                      for k, q in qs.items()}
 
 
 JUDGES = ("laya", "typesafe")
@@ -236,7 +228,15 @@ def _store(con, kind, question, text, other, p, model, source):
 
 
 def categorize(con, judge, sources: list[str] | None = None, log=print) -> dict:
-    """Give every prose chunk in scope that has no categories one p per type."""
+    """Give every prose chunk in scope that has no category yet one p per category. Categories of
+    an earlier scheme are dropped first, with the fact links they gated."""
+    labels = ",".join("?" * len(CATEGORIES))
+    stale = [r[0] for r in con.execute(
+        f"SELECT DISTINCT chunk_id FROM chunk_categories WHERE category NOT IN ({labels})", list(CATEGORIES))]
+    if stale:
+        ph = ",".join(map(str, stale))
+        con.execute(f"DELETE FROM chunk_categories WHERE chunk_id IN ({ph})")
+        con.execute(f"DELETE FROM links WHERE rel = 'about' AND (src IN ({ph}) OR dst IN ({ph}))")
     where, args = _scope(sources)
     rows = con.execute(
         CHUNK_SQL + where + " AND NOT EXISTS (SELECT 1 FROM chunk_categories cc WHERE cc.chunk_id = c.id) ORDER BY c.id",
@@ -244,13 +244,13 @@ def categorize(con, judge, sources: list[str] | None = None, log=print) -> dict:
     ).fetchall()
     _refuse_private(judge, rows)
     cache = _cache(con, "category", judge.name)
-    questions = {c: category_question(c) for c in CATEGORIES}
+    questions = {"category": category_question()}
     texts = [passage(r["path"], r["heading_path"], r["text"]) for r in rows]
     stats = {"chunks": len(rows), "asked": 0, "cached": 0, "refused": 0, "failed": 0, "done": []}
 
     def put(i, probs, fresh):
         r, text = rows[i], texts[i]
-        keep = set(kept_types(probs))
+        keep = set(kept_categories(probs))
         for c, p in probs.items():
             if fresh:
                 _store(con, "category", c, text, "", p, judge.name, r["source"])
@@ -271,9 +271,9 @@ def categorize(con, judge, sources: list[str] | None = None, log=print) -> dict:
     con.commit()
     t0 = time.time()
     jobs = (({"passage": texts[i]}, questions) for i in todo)
-    for n, (j, probs) in enumerate(judge.batch(jobs), 1):
-        if probs is not None:
-            put(todo[j], probs, True)
+    for n, (j, ans) in enumerate(judge.batch(jobs), 1):
+        if ans is not None:
+            put(todo[j], ans["category"], True)
             stats["asked"] += 1
         if n % 200 == 0:
             con.commit()
@@ -288,7 +288,7 @@ def _terms(text: str) -> list[str]:
 
 
 def link_facts(con, judge, chunk_ids: list[int] | None = None, sources: list[str] | None = None, log=print) -> dict:
-    """Judge each chunk's neighbours that share a kept type; true pairs become `about` links.
+    """Judge each chunk's neighbours of another category; true pairs become `about` links.
 
     `chunk_ids` limits which chunks look for neighbours (default: every categorized chunk in
     scope); neighbours come from the whole scope. Pairs already judged, in either direction, cost
@@ -299,9 +299,7 @@ def link_facts(con, judge, chunk_ids: list[int] | None = None, sources: list[str
     where, args = _scope(sources)
     rows = con.execute(CHUNK_SQL + where + " ORDER BY c.id", args).fetchall()
     _refuse_private(judge, rows)
-    kept: dict[int, set[str]] = {}
-    for r in con.execute("SELECT chunk_id, category FROM chunk_categories WHERE kept = 1"):
-        kept.setdefault(r["chunk_id"], set()).add(r["category"])
+    kept = {r["chunk_id"]: r["category"] for r in con.execute("SELECT chunk_id, category FROM chunk_categories WHERE kept = 1")}
     by_id = {r["id"]: r for r in rows if r["id"] in kept}
     texts = {i: passage(r["path"], r["heading_path"], r["text"]) for i, r in by_id.items()}
     df, tfs = Counter(), {}
@@ -320,7 +318,7 @@ def link_facts(con, judge, chunk_ids: list[int] | None = None, sources: list[str
         if fresh:
             _store(con, SAME, SAME, texts[a], texts[b], p, judge.name, ra["source"])
         if p >= KEEP_P:
-            via = sorted(kept[a] & kept[b])[0]
+            via = "~".join(sorted((kept[a], kept[b])))
             con.execute("INSERT OR IGNORE INTO links (src, dst, rel, via) VALUES (?, ?, 'about', ?)", (a, b, via))
             stats["links"] += 1
 
@@ -331,7 +329,7 @@ def link_facts(con, judge, chunk_ids: list[int] | None = None, sources: list[str
         out = []
         for h in bm25(con, q, FETCH, [by_id[a]["source"]]) if q else []:
             b = h.id
-            if b == a or b not in by_id or by_id[b]["file_id"] == by_id[a]["file_id"] or not (kept[a] & kept[b]):
+            if b == a or b not in by_id or by_id[b]["file_id"] == by_id[a]["file_id"] or kept[a] == kept[b]:
                 continue
             pair = frozenset((a, b))
             if pair in planned:
@@ -400,15 +398,16 @@ def build(con, judge, sources: list[str] | None = None, relink: bool = False, lo
 # ------------------------------------------------------------------------------------ query time
 
 def query_categories(con, judge, q: str) -> dict[str, float]:
-    """One p per type for the query itself; cached like the rest."""
+    """One p per category of passage that would answer the query; cached like the rest."""
     ks = {c: key("query_category", c, q) for c in CATEGORIES}
     cache = {r["key"]: r["p"] for r in con.execute(
         f"SELECT key, p FROM judgments WHERE model = ? AND key IN ({','.join('?' * len(ks))})", [judge.name, *ks.values()])}
     if all(k in cache for k in ks.values()):
         return {c: cache[k] for c, k in ks.items()}
-    _, probs = next(judge.batch(iter([({"query": q}, {c: query_category_question(c) for c in CATEGORIES})])))
-    if probs is None:
+    _, ans = next(judge.batch(iter([({"query": q}, {"category": query_category_question()})])))
+    if ans is None:
         return {}
+    probs = ans["category"]
     for c, p in probs.items():
         _store(con, "query_category", c, q, "", p, judge.name, "query")
     con.commit()
@@ -419,10 +418,10 @@ def warm_query_categories(con, judge, queries: list[str]) -> int:
     """Judge many queries' categories at once (benchmarks); query_categories then reads the cache."""
     cache = _cache(con, "query_category", judge.name)
     todo = [q for q in dict.fromkeys(queries) if any(key("query_category", c, q) not in cache for c in CATEGORIES)]
-    questions = {c: query_category_question(c) for c in CATEGORIES}
-    for n, (i, probs) in enumerate(judge.batch(({"query": q}, questions) for q in todo), 1):
-        if probs is not None:
-            for c, p in probs.items():
+    questions = {"category": query_category_question()}
+    for n, (i, ans) in enumerate(judge.batch(({"query": q}, questions) for q in todo), 1):
+        if ans is not None:
+            for c, p in ans["category"].items():
                 _store(con, "query_category", c, todo[i], "", p, judge.name, "query")
         if n % 200 == 0:
             con.commit()

@@ -6,6 +6,7 @@ model reward passages that are merely on topic. Both rankers ask the same questi
 tuned Laya (benchmarks/finetune_laya.py) learns this question from human-labelled benchmarks.
 """
 
+import json
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -24,9 +25,17 @@ class CloudRefused(RuntimeError):
     pass
 
 
+DISPOSITIO = "minhquan2310/dispositio"  # Laya fine-tuned for Inventio's questions (benchmarks/finetune_laya.py)
+PUBLISHED_LAYA = "convaiinnovations/laya"  # the multilingual checkpoint it starts from; worse than BM25 alone here
+
+
+def laya_model() -> str:
+    """The Laya checkpoint Inventio loads: INVENTIO_LAYA_MODEL (a directory or a Hugging Face id), else dispositio."""
+    return os.environ.get("INVENTIO_LAYA_MODEL") or DISPOSITIO
+
+
 def load_laya():
-    """The Laya agent and its name. INVENTIO_LAYA_MODEL points at a fine-tuned checkpoint
-    directory (benchmarks/finetune_laya.py writes one); without it, the published multilingual one."""
+    """The Laya agent and its name."""
     import warnings
 
     import laya
@@ -34,11 +43,58 @@ def load_laya():
 
     warnings.filterwarnings("ignore", module="laya")
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    tuned = os.environ.get("INVENTIO_LAYA_MODEL")
-    if tuned:
-        return laya.load(tuned, device=device), f"laya:{tuned}"
-    model, subfolder = "convaiinnovations/laya", "multilingual"
-    return laya.load(model, device=device, subfolder=subfolder), f"laya:{model}/{subfolder}"
+    model = laya_model()
+    if model == PUBLISHED_LAYA:
+        return laya.load(model, device=device, subfolder="multilingual"), f"laya:{model}/multilingual"
+    return laya.load(model, device=device), f"laya:{model}"
+
+
+def ranker_tag(name: str) -> str:
+    """The name results and score caches are kept under: for `laya`, its checkpoint's last path
+    part (`dispositio`), or `laya` for the published checkpoint, so no two checkpoints share a cache."""
+    if name != "laya":
+        return name
+    model = laya_model()
+    return "laya" if model == PUBLISHED_LAYA else model.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
+
+
+QUERY_TOKENS = 384  # Laya reads the query, then the passage, and cuts from the right: an issue of
+# 1,000 tokens would leave no room for the passage it is asked about (15% of SWE-bench Lite issues)
+
+
+def cap_query(tok, query: str) -> str:
+    """The query's first QUERY_TOKENS tokens, so every passage keeps at least ~500 of Laya's 1,024."""
+    ids = tok(query, add_special_tokens=False)["input_ids"]
+    return query if len(ids) <= QUERY_TOKENS else tok.decode(ids[:QUERY_TOKENS])
+
+
+def passage_room(tok, query: str, q: dict, max_len: int, head_max_len: int) -> int:
+    """Tokens left for the passage once the instructions, options and (capped) query are in."""
+    from laya.common import build_sequence
+
+    return max_len - len(build_sequence(tok, {"query": query, "passage": ""}, q, max_len, head_max_len)[0]) - 8
+
+
+def windows(tok, head: str, body: str, room: int) -> list[tuple[str, int, int]]:
+    """`head + body` whole when Laya can read it whole; else runs of the body's consecutive lines
+    that each fit in `room` tokens, every run under `head` (the `[path > heading]` line), so a long
+    function is read in parts instead of losing its tail. Each comes with the body lines it covers
+    (0-based, inclusive). Lengths are counted as Laya reads them, inside the JSON state."""
+    cost = lambda s: len(tok(json.dumps(s, ensure_ascii=False)[1:-1], add_special_tokens=False)["input_ids"])  # noqa: E731
+    lines = body.split("\n")
+    if cost(head + body) <= room:
+        return [(head + body, 0, len(lines) - 1)]
+    left = max(16, room - cost(head))
+    costs = [len(x) for x in tok([json.dumps(ln + "\n", ensure_ascii=False)[1:-1] for ln in lines],
+                                 add_special_tokens=False)["input_ids"]]
+    out, start, used = [], 0, 0
+    for i, c in enumerate(costs):
+        if used and used + c > left:
+            out.append((head + "\n".join(lines[start:i]), start, i - 1))
+            start, used = i, 0
+        used += c
+    out.append((head + "\n".join(lines[start:]), start, len(lines) - 1))
+    return out
 
 
 class LayaRanker:
@@ -49,7 +105,8 @@ class LayaRanker:
         self.questions = {"rel": {"type": "noul", "instructions": INSTRUCTIONS, "criteria": CRITERIA}}
 
     def score(self, query: str, hits) -> list[float]:
-        """The same numbers as one `agent.predict` per pair, from a few batched forward passes."""
+        """The same numbers as one `agent.predict` per pair, from a few batched forward passes. A
+        passage longer than Laya reads is scored in windows (see `windows`) and keeps its best."""
         import numpy as np
         import torch
         from laya.common import QTYPES, build_sequence, collate_items, temp_bucket
@@ -57,12 +114,17 @@ class LayaRanker:
         a = self.agent
         q = a._to_internal(self.questions["rel"])
         max_len, head_max_len = a.cfg.get("max_len", 512), a.cfg.get("head_max_len", 192)
-        items = []
-        for h in hits:
-            seq, markers = build_sequence(a.tok, {"query": query, "passage": h.passage()}, q, max_len, head_max_len)
-            items.append({"ids": seq, "markers": markers, "qtype": QTYPES[q["t"]]})
+        items, owner = [], []
+        query = cap_query(a.tok, query)
+        room = passage_room(a.tok, query, q, max_len, head_max_len)
+        for j, h in enumerate(hits):
+            head, body = h.passage().split("\n", 1)
+            for text, _, _ in windows(a.tok, head + "\n", body, room):
+                seq, markers = build_sequence(a.tok, {"query": query, "passage": text}, q, max_len, head_max_len)
+                items.append({"ids": seq, "markers": markers, "qtype": QTYPES[q["t"]]})
+                owner.append(j)
         t_scale = a.temperature_by_options.get(temp_bucket(QTYPES[q["t"]], 2), a.temperature[QTYPES[q["t"]]])
-        out = [0.0] * len(items)
+        out = [0.0] * len(hits)
         order = sorted(range(len(items)), key=lambda i: len(items[i]["ids"]))
         with torch.no_grad():
             for s in range(0, len(order), self.BATCH):
@@ -74,7 +136,7 @@ class LayaRanker:
                 z = logits.float().cpu().numpy()[:, :2] / t_scale
                 p = np.exp(z - z.max(-1, keepdims=True))
                 for i, row in zip(idx, p / p.sum(-1, keepdims=True)):
-                    out[i] = round(float(row[1]), 4)
+                    out[owner[i]] = max(out[owner[i]], round(float(row[1]), 4))
         return out
 
     def types(self, query: str, types: dict[str, str]) -> dict[str, float]:

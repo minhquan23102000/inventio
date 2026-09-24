@@ -345,9 +345,9 @@ def widen_by_facts(con, q: str, pool: list[Hit], judge, *, limit: int = 10, seed
                    sources: list[str] | None = None) -> list[Hit]:
     """The judge predicts which content categories the query is about; BM25's best chunks of those
     categories join the pool, then the chunks the top seeds are linked to by judged `about` links."""
-    from .facts import kept_types, query_categories
+    from .facts import kept_categories, query_categories
 
-    cats = kept_types(query_categories(con, judge, q))
+    cats = kept_categories(query_categories(con, judge, q))
     added = widen_by_category(con, q, pool, cats, limit, sources)
     return added + expand(con, pool + added, seeds, limit, sources, rels=("about",))
 

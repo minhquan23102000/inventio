@@ -25,22 +25,25 @@ python benchmarks/data.py beir scifact
 python benchmarks/data.py coir stackoverflow-qa
 python benchmarks/data.py swe-lite                 # about 2 GB of clones
 
+# `laya` is dispositio unless INVENTIO_LAYA_MODEL says otherwise; results go under its tag
 python benchmarks/beir_bench.py scifact --rankers none,laya,typesafe
-python benchmarks/beir_bench.py coir-stackoverflow-qa --rankers none
-python benchmarks/beir_bench.py coir-stackoverflow-qa --rankers none,laya,typesafe --limit 300
+python benchmarks/beir_bench.py coir-stackoverflow-qa --rankers none,laya,typesafe
 python benchmarks/swe_bench.py --rankers none,laya,typesafe
+python benchmarks/data.py zalo && python benchmarks/beir_bench.py zalo-legal --rankers none,laya
+INVENTIO_LAYA_MODEL=convaiinnovations/laya python benchmarks/beir_bench.py scifact --rankers laya   # Laya as published
 python benchmarks/swe_bench.py --types --variants mixed --rankers none,typesafe
 
 # categories and fact links: Jev judges every chunk and candidate pair, then the arms
 python benchmarks/beir_bench.py scifact --arms --mlt --rankers none,typesafe,laya
 python benchmarks/beir_bench.py coir-stackoverflow-qa --arms --mlt --rankers none,typesafe,laya
 python benchmarks/swe_bench.py --strat --variants mixed --rankers none,laya   # names and code-decided widening
-python benchmarks/data.py zalo && python benchmarks/beir_bench.py zalo-legal --rankers none,laya
 python benchmarks/pack_check.py                    # packed neighbour call vs one call per pair
 
-# fine-tuned Laya: results are tagged laya-tuned, beside the published model's
-python benchmarks/finetune_laya.py
-INVENTIO_LAYA_MODEL=<user cache>/inventio/laya-tuned python benchmarks/beir_bench.py scifact --rankers laya
+# dispositio: SWE-bench train groups, category passages (labelled by a small LLM), fine-tune
+python benchmarks/swe_train.py --per-repo 150 --workers 12
+python benchmarks/category_data.py
+python benchmarks/finetune_laya.py --init <a relevance fine-tune> --sources category,swe,coir-stackoverflow-qa \
+    --max-items 17100 --replay 12000 --name dispositio
 ```
 
 Data goes to `<user cache>/inventio/bench` (`--data` or `INVENTIO_BENCH_DATA` to move it), never
@@ -50,36 +53,65 @@ Ranker scores are cached (ignored by git), so an interrupted run resumes and a r
 
 Every ranker reorders the same 30 BM25 candidates (chunks); chunks are then collapsed to
 documents or files, first occurrence wins. `recall@30chunks` is therefore the ceiling for
-every ranker. `laya` is `convaiinnovations/laya` multilingual, zero-shot; `laya-tuned` is the
-same model after `finetune_laya.py` (see the [main README](../README.md#fine-tuning-laya)).
+every ranker. `laya` is [dispositio](https://huggingface.co/minhquan2310/dispositio), Laya
+fine-tuned for Inventio (tag `dispositio`); with `INVENTIO_LAYA_MODEL=convaiinnovations/laya`
+it is Laya multilingual as published (tag `laya`).
 `typesafe` is Jev through the TypeSafe API, asked the same yes/no question with the same
 criteria (`inventio/rankers.py`).
 
 ## Results
 
-nDCG@10 (higher is better, 1.0 = every gold document at the top). Run on 2026-09-23.
+nDCG@10 (higher is better, 1.0 = every gold document at the top). Run on 2026-09-24.
 
-| Benchmark | Published BM25 | Inventio BM25 | + Laya zero-shot | + Laya fine-tuned | + TypeSafe Jev | ceiling (gold in the 30 candidates) |
+| Benchmark | Published BM25 | Inventio BM25 | + Laya as published | + dispositio | + TypeSafe Jev | ceiling (gold in the 30 candidates) |
 |---|---|---|---|---|---|---|
-| SciFact (300 queries) | 0.665 | 0.670 | 0.302 | 0.684 | **0.765** | 0.849 |
-| StackOverflow QA (1,994 queries) | 0.568 | 0.670 | 0.193 | 0.698 | **0.791** | 0.805 |
-| SWE-bench Lite `code` (300 issues) | 0.430 | 0.540 | 0.391 | 0.602 | **0.696** | 0.823 |
-| SWE-bench Lite `mixed` (300 issues) | | 0.400 | 0.264 | 0.426 | **0.515** | 0.633 |
-| Zalo legal (788 queries) | | 0.756 | 0.512 | **0.817** | not run | 0.945 |
+| SciFact (300 queries) | 0.665 | 0.670 | 0.302 | 0.722 | **0.765** | 0.849 |
+| StackOverflow QA (1,994 queries) | 0.568 | 0.670 | 0.193 | 0.699 | **0.791** | 0.805 |
+| SWE-bench Lite `code` (300 issues) | 0.430 | 0.540 | 0.391 | 0.655 | **0.696** | 0.823 |
+| SWE-bench Lite `mixed` (300 issues) | | 0.400 | 0.264 | 0.493 | **0.515** | 0.633 |
+| Zalo legal (788 queries) | | 0.756 | 0.512 | **0.831** | not run | 0.945 |
 
 Zalo's BM25 searches adjacent syllables as phrases, which Inventio does for every Vietnamese
 question; over single syllables it is 0.543, ceiling 0.815. Jev was not run on Zalo.
 
+dispositio against BM25, per query, paired bootstrap 95% interval: SWE-bench `code` +0.114
+(+0.078, +0.152), `mixed` +0.093 (+0.061, +0.127), Zalo +0.075 (+0.056, +0.094), SciFact +0.052
+(+0.020, +0.083), StackOverflow QA +0.029 (+0.015, +0.043). Jev against dispositio: +0.041
+(+0.014, +0.069) on `code`, +0.022 (−0.007, +0.050) on `mixed`, +0.043 on SciFact, +0.092 on
+StackOverflow QA.
+
 For SWE-bench, the share of issues where a file the fix touches is the first result, or in the
 first five:
 
-| Variant | BM25 top 1 | top 5 | + Laya fine-tuned top 1 | top 5 | + TypeSafe top 1 | top 5 |
+| Variant | BM25 top 1 | top 5 | + dispositio top 1 | top 5 | + TypeSafe top 1 | top 5 |
 |---|---|---|---|---|---|---|
-| `code` | 38% | 64% | 44% | 68% | 56% | 78% |
-| `mixed` | 24% | 48% | 28% | 50% | 40% | 58% |
+| `code` | 38% | 64% | 49% | 76% | 56% | 78% |
+| `mixed` | 24% | 48% | 37% | 56% | 40% | 58% |
 
-Cost per query: BM25 35-140 ms; Laya 0.4-0.9 s on the laptop GPU; TypeSafe 1.0-1.3 s. Indexing
-a repository at one commit takes 6 s (`code`) to 14 s (`mixed`) on average.
+Cost per query: BM25 35-140 ms; dispositio 0.4-1.2 s on the laptop GPU (a long SWE-bench issue
+has more windows to read); TypeSafe 1.0-1.3 s. Indexing a repository at one commit takes 6 s
+(`code`) to 14 s (`mixed`) on average.
+
+### Training dispositio
+
+Relevance labels come from people: SciFact, StackOverflow QA and Zalo train splits, and 3,923
+SWE-bench train issues (35 repositories, none in Lite) with the chunks their merged fix changed
+as answers. Category labels come from a small LLM, since no human set exists. Two runs that
+did not ship say what the data teaches:
+
+| SWE-bench negatives | StackOverflow QA share | StackOverflow QA | SWE `mixed` | SWE `code` |
+|---|---|---|---|---|
+| any other chunk, docs included | 2,400 items | 0.612 | **0.526** | 0.645 |
+| source code only | 2,400 items | 0.652 | | |
+| source code only (released) | 6,364 items | **0.699** | 0.493 | **0.655** |
+
+With docs as negatives the model learns that an issue-shaped question wants code: where the
+gold StackOverflow answer lost two or more places, its median probability fell from 0.63 to
+0.06, and the passages lifted over it were twice as code-heavy. A patch says which code was
+changed, not that a doc is a wrong answer, so those chunks are now neither answer nor negative.
+The cost is on whole repositories, where the docs-as-negatives run ranks code over docs better
+(−0.033, 95% CI −0.051 to −0.018). Results, data and terms: the
+[model card](https://huggingface.co/minhquan2310/dispositio).
 
 ### Categories and fact links (`--arms`)
 
@@ -89,12 +121,44 @@ chunks of the query's predicted categories and the chunks linked to the top hits
 `about` (base plus the judged links only) and `mlt` (base plus the same link candidates,
 unjudged: `search.widen_by_neighbours`, the code behind `--neighbours`). Each distinct chunk
 is scored once per query, so the arms differ only in their pools. `facts_vs_control` and
-`about_vs_mlt` are paired per-query comparisons with a bootstrap 95% interval. Results and
-what they say are in the [main README](../README.md#do-content-categories-and-fact-links-help);
-per-query rows are in `results/beir-<name>/arms.jsonl`, totals in its `summary.json` under
-`arms`.
+`about_vs_mlt` are paired per-query comparisons with a bootstrap 95% interval. Per-query rows
+are in `results/beir-<name>/arms.jsonl`, totals in its `summary.json` under `arms`.
 
-Jev calls: one per chunk for the eight categories, one per chunk for up to ten neighbours.
+Measured with the earlier category set (eight schema.org types, one yes/no question each,
+judged by Jev), before the categories were redefined by what a passage does for its reader;
+"earlier dispositio" is the relevance-only checkpoint dispositio was trained from.
+
+| Benchmark | Ranker | BM25 30 | + facts | BM25, same size | facts vs same size (95% CI) |
+|---|---|---|---|---|---|
+| SciFact | Jev | 0.765 | **0.771** | 0.769 | +0.002 (−0.003, +0.007) |
+| SciFact | earlier dispositio | **0.684** | 0.677 | 0.675 | +0.001 (−0.003, +0.006) |
+| SciFact | Laya as published | **0.302** | 0.249 | 0.252 | −0.004 (−0.012, +0.005) |
+| StackOverflow QA | Jev | 0.791 | **0.811** | 0.806 | +0.005 (−0.001, +0.011) |
+| StackOverflow QA | earlier dispositio | **0.698** | 0.676 | 0.697 | −0.021 (−0.028, −0.015) |
+| StackOverflow QA | Laya as published | **0.193** | 0.157 | 0.156 | +0.001 (−0.002, +0.004) |
+
+Answer among the candidates: SciFact 84.9% (BM25 30), **87.6%** (+ facts), 86.3% (same size);
+StackOverflow QA 80.5%, **83.1%**, 82.4%. Pools grow from 30 to about 47 candidates.
+
+- Categories and links find answers BM25 missed, more than as many extra BM25 candidates do.
+- Ranked by Jev the gain over a same-size pool is within the noise: a bigger pool, not a
+  better one. That set gave almost every chunk the same types (`Intangible` on 90-99% of
+  chunks), so its category pool was close to more BM25; the new set partitions (the largest
+  category holds 31-79% on four unseen collections) and has yet to be measured here.
+
+Judged links against the same candidates unjudged (`--neighbours`):
+
+| Benchmark | Ranker | about links (judged) | neighbours (unjudged) | neighbours − about (95% CI) |
+|---|---|---|---|---|
+| SciFact | Jev | 0.769 | **0.785** | +0.015 (+0.004, +0.030) |
+| SciFact | earlier dispositio | 0.681 | **0.690** | +0.009 (−0.001, +0.023) |
+| StackOverflow QA | Jev | **0.803** | 0.796 | −0.007 (−0.012, −0.002) |
+| StackOverflow QA | earlier dispositio | 0.677 | **0.686** | +0.009 (+0.004, +0.015) |
+
+In three of the four cells the ranker does better among the raw neighbours than among the ones
+Jev kept, so the judgment is not paying for itself yet.
+
+Jev calls then: one per chunk for the eight types, one per chunk for up to ten neighbours.
 SciFact took 5,183 + 5,180 calls (51,792 pairs) in 335 s. StackOverflow QA took 26,941 + 26,517
 calls (264,864 pairs); 77 chunks were refused by the API's edge firewall and keep only their
 BM25 place. A run stopped halfway (for example HTTP 402, no credits left, which stops a run at
@@ -137,7 +201,7 @@ No model decides these pools. `sym` adds the files whose path the issue names an
 that define an identifier it names (a name defined in more than three places is skipped);
 `code` adds BM25's best chunks among source files; `all` and `under` do the same for every
 type, or for the types rarer in BM25's 30 than in the repository. Each arm has a BM25 control
-with as many candidates. Ranked by the fine-tuned Laya, 300 issues:
+with as many candidates. Ranked by the earlier dispositio checkpoint, 300 issues:
 
 | Arm | Candidates (mean) | Gold in the pool | control: gold in the pool | nDCG@10 | vs control (95% CI) |
 |---|---|---|---|---|---|
@@ -189,11 +253,9 @@ What the numbers say:
   the 30 candidates; there the pool is the limit, as on whole repositories.
 - TypeSafe Jev reordering the same 30 candidates adds 0.10 to 0.16 everywhere, and on SWE-bench
   `code` turns 38% first-hit into 56%.
-- Zero-shot Laya makes every ranking worse, by a lot. Fine-tuned on the benchmarks'
-  human-labelled train splits it is ahead of BM25 on every test set: clearly on Zalo (+0.061,
-  95% CI +0.042 to +0.082), StackOverflow QA (+0.028, +0.015 to +0.042) and SWE-bench `code`
-  (+0.062, +0.025 to +0.098), which it never trained on; within the noise on SciFact and
-  SWE-bench `mixed`.
+- Laya as published makes every ranking worse, by a lot. dispositio, fine-tuned on human
+  relevance labels, is ahead of BM25 on every test set with every interval above zero,
+  including SWE-bench Lite, whose 12 repositories are not among the 35 it trained on.
 - A whole repository is harder than its code: tests and docs push the fix's files out of the 30
   candidates (ceiling 0.823 falls to 0.633). The ranker cannot recover what BM25 did not hand
   it, so on mixed repositories the candidate pool, not the ranker, is the limit to work on.
@@ -205,8 +267,9 @@ What the numbers say:
 - Every configuration was run on every test query (SciFact 300, StackOverflow QA 1,994,
   SWE-bench Lite 300). An earlier StackOverflow QA run on the first 300 queries gave higher
   numbers (0.713 / 0.837); those 300 are easier than the full set.
-- Laya reads at most 1,024 tokens of query plus passage. SWE-bench issues are often longer than
-  that on their own, so Laya sees a truncated question there.
+- Laya reads at most 1,024 tokens of query plus passage. The query is cut to its first 384
+  tokens (15% of SWE-bench Lite issues are longer); a longer passage is read in windows of
+  whole lines, each with its `[path > heading]` line, and scored by its best window.
 - TypeSafe's edge firewall refuses some texts outright (HTTP 403 "Attention Required"; it
   happens on Django source). Such a pair stays unscored and keeps its BM25 place after the
   scored ones; the count is reported with the results.

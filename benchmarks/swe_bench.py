@@ -40,7 +40,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from data import data_dir  # noqa: E402
 from inventio.ingest import DOC_TYPES, ingest_source  # noqa: E402
-from inventio.rankers import make_ranker  # noqa: E402
+from inventio.rankers import make_ranker, ranker_tag  # noqa: E402
 from inventio.search import bm25, rank_key, scope_types, widen_by_symbols, widen_by_type  # noqa: E402
 from inventio.store import connect  # noqa: E402
 
@@ -168,9 +168,7 @@ def main() -> int:
     rows = [json.loads(l) for l in (swe / "lite.jsonl").open(encoding="utf-8")]
     if args.limit:
         rows = rows[: args.limit]
-    # a tuned Laya (INVENTIO_LAYA_MODEL) is kept apart from the published checkpoint's rows and cache
-    tag = lambda n: "laya-tuned" if n == "laya" and os.environ.get("INVENTIO_LAYA_MODEL") else n
-    rankers = {tag(n): make_ranker(n) for n in args.rankers.split(",")}
+    rankers = {ranker_tag(n): make_ranker(n) for n in args.rankers.split(",")}
     rnames = list(rankers)
     predictor = (rankers.get("typesafe") or make_ranker("typesafe")) if args.types else None
     src = "swe"  # one source per tree; issue ids still key the score cache and the results

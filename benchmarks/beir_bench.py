@@ -33,7 +33,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from data import data_dir  # noqa: E402
 from inventio.bench import ARMS, arm_pools, paired, rank_arms  # noqa: E402
 from inventio.ingest import ingest_source  # noqa: E402
-from inventio.rankers import make_ranker  # noqa: E402
+from inventio.rankers import make_ranker, ranker_tag as tag  # noqa: E402
 from inventio.search import bm25, rank_key  # noqa: E402
 from inventio.store import connect  # noqa: E402
 
@@ -57,12 +57,6 @@ def load_beir(d: Path, split: str = "test"):
         if int(s) > 0:
             qrels.setdefault(q, {})[doc] = int(s)
     return corpus, {q: queries[q] for q in qrels}, qrels
-
-
-def tag(rname: str) -> str:
-    """The name results and score caches are kept under: a tuned Laya (INVENTIO_LAYA_MODEL) is
-    another ranker than the published checkpoint, and must not read its cached scores."""
-    return "laya-tuned" if rname == "laya" and os.environ.get("INVENTIO_LAYA_MODEL") else rname
 
 
 def safe_name(doc_id: str) -> str:

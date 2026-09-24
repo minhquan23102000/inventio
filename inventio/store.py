@@ -75,8 +75,8 @@ CREATE INDEX IF NOT EXISTS links_dst ON links(dst);
 -- Every judgment a decision model made at index or query time, with the text it read. `key` is
 -- the sha1 of (kind, question, passage, other), so a rebuilt map or a rerun reuses a judgment
 -- instead of paying for it again.
---   kind 'category'        passage = a chunk, question = a schema.org type
---   kind 'query_category'  passage = a query, question = a schema.org type
+--   kind 'category'        passage = a chunk, question = a category (facts.CATEGORIES)
+--   kind 'query_category'  passage = a query, question = a category
 --   kind 'same_thing'      passage = a chunk, other = a neighbour chunk
 CREATE TABLE IF NOT EXISTS judgments (
     id INTEGER PRIMARY KEY,
@@ -91,7 +91,7 @@ CREATE TABLE IF NOT EXISTS judgments (
     at TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE (key, model)
 );
--- one row per (chunk, type); `kept` marks the types the chunk keeps (p >= threshold, at most 3)
+-- one row per (chunk, category); `kept` marks the one category the chunk keeps (the likeliest, unless Other)
 CREATE TABLE IF NOT EXISTS chunk_categories (
     chunk_id INTEGER NOT NULL REFERENCES chunks(id) ON DELETE CASCADE,
     category TEXT NOT NULL,
