@@ -135,7 +135,7 @@ def widen_by_type(con, q: str, pool: list[Hit], ranker, per_type: int,
         if private:
             raise CloudRefused(
                 f"--types with ranker 'typesafe' could send text from non-public source(s) {', '.join(private)}; "
-                "restrict with --source, re-init them with --public, or use --ranker laya"
+                "restrict with --source, re-init them with --public, or use --ranker dispositio"
             )
     probs = ranker.types(q, {t: DOC_TYPES.get(t, t) for t in present})
     if not probs:
@@ -362,7 +362,7 @@ def search(con, q: str, *, k: int = 5, pool: int = 30, ranker=None, expand_links
     if symbols:
         # files and definitions the question names. SWE-bench Lite `mixed`: the answer file in the
         # pool 63% -> 73% for 3 more candidates; nDCG@10 against a BM25 pool of the same size
-        # 0.430 -> 0.495 ranked by the tuned Laya, 0.401 -> 0.456 unranked with these hits first
+        # 0.430 -> 0.495 ranked by an earlier dispositio, 0.401 -> 0.456 unranked with these hits first
         named = widen_by_symbols(con, q, hits, pool, sources)
         hits += named
     if by_type and ranker is not None:

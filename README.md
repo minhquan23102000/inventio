@@ -19,7 +19,7 @@ public. Everything lives in one SQLite file.
 pip install -e ".[code,laya]"
 inventio init ~/code/fraud-rules --name rules
 inventio init ~/notes/wiki --name wiki
-inventio query "which job recomputes customer risk overnight?" --ranker laya
+inventio query "which job recomputes customer risk overnight?"   # ranked by dispositio
 ```
 
 ```
@@ -99,12 +99,13 @@ for the two questions Inventio asks: does this passage answer the query, and wha
 passage do for its reader. It runs on a laptop GPU or a CPU and nothing leaves the machine.
 
 ```sh
-inventio query "..." --ranker laya        # dispositio, downloaded once from Hugging Face
-inventio facts --source wiki              # categories, judged locally
+inventio query "..."                      # dispositio ranks by default, downloaded once from Hugging Face
+inventio facts --source wiki              # categories, judged by dispositio
 ```
 
-`INVENTIO_LAYA_MODEL` points at another checkpoint: a directory, a Hugging Face id, or
-`convaiinnovations/laya` for Laya as published.
+`--ranker laya` is Laya as published, `--ranker none` BM25 order. `INVENTIO_DISPOSITIO_MODEL`
+points `dispositio` at another checkpoint: a directory or a Hugging Face id, such as a fine-tune
+of your own.
 
 Relevance labels are written by people: the train splits of SciFact, StackOverflow QA and Zalo
 legal, and 3,923 SWE-bench train issues paired with the code their fix changed (35 repositories,

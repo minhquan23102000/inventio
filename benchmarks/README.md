@@ -25,18 +25,18 @@ python benchmarks/data.py beir scifact
 python benchmarks/data.py coir stackoverflow-qa
 python benchmarks/data.py swe-lite                 # about 2 GB of clones
 
-# `laya` is dispositio unless INVENTIO_LAYA_MODEL says otherwise; results go under its tag
-python benchmarks/beir_bench.py scifact --rankers none,laya,typesafe
-python benchmarks/beir_bench.py coir-stackoverflow-qa --rankers none,laya,typesafe
-python benchmarks/swe_bench.py --rankers none,laya,typesafe
-python benchmarks/data.py zalo && python benchmarks/beir_bench.py zalo-legal --rankers none,laya
-INVENTIO_LAYA_MODEL=convaiinnovations/laya python benchmarks/beir_bench.py scifact --rankers laya   # Laya as published
+# dispositio is the released model (INVENTIO_DISPOSITIO_MODEL for another checkpoint; results go
+# under its last path part), laya is Laya multilingual as published
+python benchmarks/beir_bench.py scifact --rankers none,laya,dispositio,typesafe
+python benchmarks/beir_bench.py coir-stackoverflow-qa --rankers none,laya,dispositio,typesafe
+python benchmarks/swe_bench.py --rankers none,laya,dispositio,typesafe
+python benchmarks/data.py zalo && python benchmarks/beir_bench.py zalo-legal --rankers none,laya,dispositio
 python benchmarks/swe_bench.py --types --variants mixed --rankers none,typesafe
 
 # categories and fact links: Jev judges every chunk and candidate pair, then the arms
-python benchmarks/beir_bench.py scifact --arms --mlt --rankers none,typesafe,laya
-python benchmarks/beir_bench.py coir-stackoverflow-qa --arms --mlt --rankers none,typesafe,laya
-python benchmarks/swe_bench.py --strat --variants mixed --rankers none,laya   # names and code-decided widening
+python benchmarks/beir_bench.py scifact --arms --mlt --rankers none,typesafe,dispositio
+python benchmarks/beir_bench.py coir-stackoverflow-qa --arms --mlt --rankers none,typesafe,dispositio
+python benchmarks/swe_bench.py --strat --variants mixed --rankers none,dispositio   # names and code-decided widening
 python benchmarks/pack_check.py                    # packed neighbour call vs one call per pair
 
 # dispositio: SWE-bench train groups, category passages (labelled by a small LLM), fine-tune
@@ -53,9 +53,8 @@ Ranker scores are cached (ignored by git), so an interrupted run resumes and a r
 
 Every ranker reorders the same 30 BM25 candidates (chunks); chunks are then collapsed to
 documents or files, first occurrence wins. `recall@30chunks` is therefore the ceiling for
-every ranker. `laya` is [dispositio](https://huggingface.co/minhquan2310/dispositio), Laya
-fine-tuned for Inventio (tag `dispositio`); with `INVENTIO_LAYA_MODEL=convaiinnovations/laya`
-it is Laya multilingual as published (tag `laya`).
+every ranker. `dispositio` is [dispositio](https://huggingface.co/minhquan2310/dispositio), Laya
+fine-tuned for Inventio; `laya` is Laya multilingual as published.
 `typesafe` is Jev through the TypeSafe API, asked the same yes/no question with the same
 criteria (`inventio/rankers.py`).
 

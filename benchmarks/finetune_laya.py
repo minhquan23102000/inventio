@@ -3,7 +3,7 @@
     python benchmarks/finetune_laya.py --time-steps 40      # measure, print the projected run time, exit
     python benchmarks/finetune_laya.py                      # the full run
     python benchmarks/finetune_laya.py --init <checkpoint> --sources category,swe --replay 12000 --name dispositio
-    set INVENTIO_LAYA_MODEL=%LOCALAPPDATA%\\inventio\\dispositio   # then Inventio uses the tuned Laya
+    set INVENTIO_DISPOSITIO_MODEL=%LOCALAPPDATA%\\inventio\\dispositio   # then --ranker dispositio loads it
 
 Laya learns the questions Inventio asks, in the exact form it reads them: the ranker's (rankers.
 INSTRUCTIONS / CRITERIA: does the passage answer the query?) over the query and a passage rendered
@@ -604,7 +604,7 @@ def main() -> int:
     if res is not None:
         meta["result"] = res
         (out / "train_meta.json").write_text(json.dumps(meta, indent=1))
-        print(f"{args.name} in {out}; set INVENTIO_LAYA_MODEL={out}", flush=True)
+        print(f"{args.name} in {out}; set INVENTIO_DISPOSITIO_MODEL={out}", flush=True)
     return 0
 
 

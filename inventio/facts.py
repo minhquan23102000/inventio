@@ -164,13 +164,14 @@ class JevJudge:
 
 
 class LayaJudge:
-    """Laya on this machine. Asks all questions about one state in one forward pass."""
+    """A Laya model on this machine (dispositio, or Laya as published). Asks all questions about
+    one state in one forward pass."""
 
     cloud = False
     packs = False
 
-    def __init__(self):
-        self.agent, self.name = load_laya()
+    def __init__(self, name: str):
+        self.agent, self.name = load_laya(name)
         self.refused = self.failed = 0
 
     def batch(self, jobs):
@@ -180,12 +181,12 @@ class LayaJudge:
                       for k, q in qs.items()}
 
 
-JUDGES = ("laya", "typesafe")
+JUDGES = ("dispositio", "laya", "typesafe")
 
 
 def make_judge(name: str):
-    if name == "laya":
-        return LayaJudge()
+    if name in ("dispositio", "laya"):
+        return LayaJudge(name)
     if name == "typesafe":
         return JevJudge()
     raise ValueError(f"unknown judge {name!r}; choose from {', '.join(JUDGES)}")
@@ -216,7 +217,7 @@ def _refuse_private(judge, rows) -> None:
         if private:
             raise CloudRefused(
                 f"judge 'typesafe' would send text from non-public source(s) {', '.join(private)} to the cloud; "
-                "restrict with --source, re-init them with --public, or use --judge laya"
+                "restrict with --source, re-init them with --public, or use --judge dispositio"
             )
 
 

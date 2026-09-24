@@ -1,6 +1,6 @@
 """Run Inventio on SWE-bench Lite file retrieval, the CodeRAG-Bench repo-level setting.
 
-    python benchmarks/swe_bench.py --rankers none,laya,typesafe [--limit N]
+    python benchmarks/swe_bench.py --rankers none,dispositio,typesafe [--limit N]
 
 Reads `<data>/swe-lite` (fetch it with `benchmarks/data.py swe-lite`): lite.jsonl plus one
 clone per repo. For every instance the repo is exported at base_commit and indexed with

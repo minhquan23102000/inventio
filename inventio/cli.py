@@ -7,7 +7,7 @@ from pathlib import Path
 
 from . import __version__
 from .facts import JUDGES, make_judge
-from .rankers import RANKERS, CloudRefused, make_ranker
+from .rankers import RANKERS, CloudRefused, default_ranker, make_ranker
 from .store import connect, default_db
 
 
@@ -174,7 +174,7 @@ def cmd_bench(args) -> int:
 def main(argv=None) -> int:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
-    p = argparse.ArgumentParser(prog="inventio", description="Local retrieval map: BM25 + structure + links, reranked by Laya or TypeSafe.")
+    p = argparse.ArgumentParser(prog="inventio", description="Local retrieval map: BM25 + structure + links, reranked by dispositio or TypeSafe.")
     p.add_argument("--version", action="version", version=__version__)
     p.add_argument("--db", help=f"map file (default {default_db()}, or $INVENTIO_DB)")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -186,14 +186,14 @@ def main(argv=None) -> int:
     s.add_argument("--exclude", action="append", metavar="GLOB", help="skip paths matching GLOB (repeatable)")
     s.add_argument("--full", action="store_true", help="drop the source and rebuild it from scratch")
     s.add_argument("--facts", action="store_true", help="then judge content categories and fact links (see `facts`)")
-    s.add_argument("--judge", choices=JUDGES, default=os.environ.get("INVENTIO_JUDGE", "laya"),
-                   help="model for --facts: laya (local) or typesafe (cloud, public sources only)")
+    judge = os.environ.get("INVENTIO_JUDGE", "dispositio")
+    judges = "dispositio (local), laya (local, as published), typesafe (cloud, public sources only)"
+    s.add_argument("--judge", choices=JUDGES, default=judge, help=f"model for --facts: {judges}")
     s.set_defaults(fn=cmd_init)
 
     s = sub.add_parser("facts", help="judge content categories and fact links for chunks that have none yet")
     s.add_argument("--source", action="append", metavar="NAME", help="only this source (repeatable)")
-    s.add_argument("--judge", choices=JUDGES, default=os.environ.get("INVENTIO_JUDGE", "laya"),
-                   help="laya (local) or typesafe (cloud, public sources only)")
+    s.add_argument("--judge", choices=JUDGES, default=judge, help=judges)
     s.add_argument("--relink", action="store_true",
                    help="look for neighbours of every categorized chunk, not only new ones (judged pairs are reused)")
     s.set_defaults(fn=cmd_facts)
@@ -206,8 +206,9 @@ def main(argv=None) -> int:
     s.set_defaults(fn=cmd_drop)
 
     def ranking(s):
-        s.add_argument("--ranker", choices=RANKERS, default=os.environ.get("INVENTIO_RANKER", "none"),
-                       help="reorder the pool: none (BM25 order), laya (local), typesafe (cloud, public sources only)")
+        s.add_argument("--ranker", choices=RANKERS, default=default_ranker(),
+                       help="reorder the pool: dispositio (local; the default when the laya extra is installed), "
+                            "none (BM25 order), laya (local, as published), typesafe (cloud, public sources only)")
         s.add_argument("--pool", type=int, default=30, help="BM25 candidates handed to the ranker")
         s.add_argument("--links", action="store_true",
                        help="also hand the ranker chunks linked to the top BM25 hits (off: measured no gain yet)")
@@ -222,7 +223,7 @@ def main(argv=None) -> int:
         s.add_argument("--facts", action="store_true",
                        help="add BM25's best chunks of the query's predicted content categories and the chunks "
                             "its top hits are linked to by judged fact links (needs `facts` run on the map)")
-        s.add_argument("--judge", choices=JUDGES, default=os.environ.get("INVENTIO_JUDGE", "laya"),
+        s.add_argument("--judge", choices=JUDGES, default=judge,
                        help="model that predicts the query's categories for --facts / --arms")
 
     s = sub.add_parser("query", help="find the passages that answer a question")

@@ -2,8 +2,8 @@
 (None for a pair the ranker refused to score; it keeps its BM25 place after the scored ones).
 
 The question carries explicit true/false criteria: a bare "does this answer the query?" lets the
-model reward passages that are merely on topic. Both rankers ask the same question, and the
-tuned Laya (benchmarks/finetune_laya.py) learns this question from human-labelled benchmarks.
+model reward passages that are merely on topic. Every ranker asks the same question.
+`dispositio` is Laya fine-tuned on it (benchmarks/finetune_laya.py); `laya` is Laya as published.
 """
 
 import json
@@ -18,7 +18,7 @@ CRITERIA = {
 }
 TYPE_INSTRUCTIONS = "Which kind of document would contain the answer to the `query`?"
 
-RANKERS = ("none", "laya", "typesafe")
+RANKERS = ("none", "dispositio", "laya", "typesafe")
 
 
 class CloudRefused(RuntimeError):
@@ -26,16 +26,29 @@ class CloudRefused(RuntimeError):
 
 
 DISPOSITIO = "minhquan2310/dispositio"  # Laya fine-tuned for Inventio's questions (benchmarks/finetune_laya.py)
-PUBLISHED_LAYA = "convaiinnovations/laya"  # the multilingual checkpoint it starts from; worse than BM25 alone here
+LAYA = "convaiinnovations/laya"  # Laya multilingual as published, the base dispositio starts from
 
 
-def laya_model() -> str:
-    """The Laya checkpoint Inventio loads: INVENTIO_LAYA_MODEL (a directory or a Hugging Face id), else dispositio."""
-    return os.environ.get("INVENTIO_LAYA_MODEL") or DISPOSITIO
+def default_ranker() -> str:
+    """INVENTIO_RANKER, else dispositio when the `laya` extra is installed, else BM25 order."""
+    import importlib.util
+
+    return os.environ.get("INVENTIO_RANKER") or ("dispositio" if importlib.util.find_spec("laya") else "none")
 
 
-def load_laya():
-    """The Laya agent and its name."""
+def checkpoint(name: str) -> str:
+    """What a local model name loads: `laya` the published checkpoint; `dispositio`
+    INVENTIO_DISPOSITIO_MODEL (a directory or a Hugging Face id, e.g. a fine-tune of your own),
+    else the released one."""
+    if name == "laya":
+        return LAYA
+    if name == "dispositio":
+        return os.environ.get("INVENTIO_DISPOSITIO_MODEL") or DISPOSITIO
+    raise ValueError(f"not a local model: {name!r}")
+
+
+def load_laya(name: str):
+    """The agent for a local model name (`dispositio` or `laya`), and the name its judgments are stored under."""
     import warnings
 
     import laya
@@ -43,19 +56,18 @@ def load_laya():
 
     warnings.filterwarnings("ignore", module="laya")
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    model = laya_model()
-    if model == PUBLISHED_LAYA:
+    model = checkpoint(name)
+    if model == LAYA:
         return laya.load(model, device=device, subfolder="multilingual"), f"laya:{model}/multilingual"
     return laya.load(model, device=device), f"laya:{model}"
 
 
 def ranker_tag(name: str) -> str:
-    """The name results and score caches are kept under: for `laya`, its checkpoint's last path
-    part (`dispositio`), or `laya` for the published checkpoint, so no two checkpoints share a cache."""
-    if name != "laya":
+    """The name results and score caches are kept under: for `dispositio`, its checkpoint's last
+    path part, so a fine-tune of your own never shares a cache with the released model."""
+    if name != "dispositio":
         return name
-    model = laya_model()
-    return "laya" if model == PUBLISHED_LAYA else model.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
+    return checkpoint(name).replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
 
 
 QUERY_TOKENS = 384  # Laya reads the query, then the passage, and cuts from the right: an issue of
@@ -100,8 +112,8 @@ def windows(tok, head: str, body: str, room: int) -> list[tuple[str, int, int]]:
 class LayaRanker:
     BATCH = 16  # pairs per forward pass; pairs are sorted by length so padding stays small
 
-    def __init__(self):
-        self.agent, self.name = load_laya()
+    def __init__(self, name: str):
+        self.agent, self.name = load_laya(name)
         self.questions = {"rel": {"type": "noul", "instructions": INSTRUCTIONS, "criteria": CRITERIA}}
 
     def score(self, query: str, hits) -> list[float]:
@@ -205,7 +217,7 @@ class TypeSafeRanker:
         if private:
             raise CloudRefused(
                 f"ranker 'typesafe' would send text from non-public source(s) {', '.join(private)} to the cloud; "
-                "restrict with --source, re-init them with --public, or use --ranker laya"
+                "restrict with --source, re-init them with --public, or use --ranker dispositio"
             )
         passages = [h.passage() for h in hits]
         with ThreadPoolExecutor(max_workers=self.workers) as pool:
@@ -215,8 +227,8 @@ class TypeSafeRanker:
 def make_ranker(name: str):
     if name == "none":
         return None
-    if name == "laya":
-        return LayaRanker()
+    if name in ("dispositio", "laya"):
+        return LayaRanker(name)
     if name == "typesafe":
         return TypeSafeRanker()
     raise ValueError(f"unknown ranker {name!r}; choose from {', '.join(RANKERS)}")

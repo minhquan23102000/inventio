@@ -19,6 +19,13 @@ def run(capsys, *argv):
     return code, capsys.readouterr()
 
 
+@pytest.fixture(autouse=True)
+def bm25_order(monkeypatch):
+    """The CLI ranks with dispositio when the laya extra is installed; these tests pin BM25 order
+    so they run offline and do not depend on a model."""
+    monkeypatch.setenv("INVENTIO_RANKER", "none")
+
+
 def test_coordinates_point_at_the_exact_lines(tmp_path):
     text = textwrap.dedent("""
         # Title

@@ -2,11 +2,12 @@
 
     python benchmarks/local_proof.py <directory> "<question>"
 
-Laya judges the categories and links and reranks; the map is a fresh file in a temp directory.
-Before anything runs, the TypeSafe key is removed, Hugging Face is put offline (Laya must already
-be in the local cache) and every socket connection to a non-loopback address raises. At the end
-the script asserts that no such connection was attempted and that the TypeSafe SDK was never
-imported. The transcript is what docs/design/evidence/local-proof.txt records.
+dispositio judges the categories and links and reranks; the map is a fresh file in a temp
+directory. Before anything runs, the TypeSafe key is removed, Hugging Face is put offline
+(dispositio must already be in the local cache) and every socket connection to a non-loopback
+address raises. At the end the script asserts that no such connection was attempted and that
+the TypeSafe SDK was never imported. The transcript is what docs/design/evidence/local-proof.txt
+records.
 """
 
 import ipaddress
@@ -43,10 +44,11 @@ from inventio import cli  # noqa: E402
 def main() -> int:
     root, question = sys.argv[1], sys.argv[2]
     db = str(Path(tempfile.mkdtemp()) / "map.db")
-    print(f"$ inventio --db {db} init {root} --name local --facts --judge laya", flush=True)
-    assert cli.main(["--db", db, "init", root, "--name", "local", "--facts", "--judge", "laya"]) == 0
-    print(f'\n$ inventio --db {db} query "{question}" --facts --judge laya --ranker laya -k 5', flush=True)
-    assert cli.main(["--db", db, "query", question, "--facts", "--judge", "laya", "--ranker", "laya", "-k", "5"]) == 0
+    print(f"$ inventio --db {db} init {root} --name local --facts --judge dispositio", flush=True)
+    assert cli.main(["--db", db, "init", root, "--name", "local", "--facts", "--judge", "dispositio"]) == 0
+    print(f'\n$ inventio --db {db} query "{question}" --facts --judge dispositio --ranker dispositio -k 5', flush=True)
+    assert cli.main(["--db", db, "query", question, "--facts", "--judge", "dispositio", "--ranker", "dispositio",
+                     "-k", "5"]) == 0
     print(f"\nnon-loopback connections attempted: {len(attempts)}")
     print(f"typesafe_sdk imported: {'typesafe_sdk' in sys.modules}")
     assert not attempts and "typesafe_sdk" not in sys.modules
