@@ -177,7 +177,7 @@ def _stem(path: str) -> str:
 
 
 def query_symbols(q: str) -> tuple[set[str], set[str]]:
-    """Identifiers and path fragments a query names: `fraud_score_daily`, `Header.fromstring`,
+    """Identifiers and path fragments a query names: `nightly_backup`, `Header.fromstring`,
     a traceback's `astropy/io/fits/header.py` and `line 5, in fromstring`, a dotted module
     `astropy.io.fits.header`."""
     from .ingest import mentions_in, norm_ident

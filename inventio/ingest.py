@@ -26,6 +26,8 @@ LANGS = {
     ".c": "c", ".h": "c", ".cpp": "cpp", ".cc": "cpp", ".hpp": "cpp", ".cs": "csharp",
     ".rb": "ruby", ".php": "php", ".swift": "swift", ".lua": "lua",
     ".sql": "sql", ".sh": "bash", ".ps1": "powershell",
+    # data: indexed as a card of its schema (schema.py), never its rows
+    ".parquet": "data", ".csv": "data", ".tsv": "data", ".jsonl": "data", ".ndjson": "data",
 }
 PROSE_LANGS = {"markdown", "text"}
 CONFIG_LANGS = {"yaml", "toml", "ini", "json"}
@@ -36,7 +38,8 @@ TREE_LANGS = {
     "javascript", "typescript", "tsx", "java", "scala", "kotlin", "go", "rust", "c", "cpp",
     "csharp", "ruby", "php", "swift", "lua", "sql", "bash",
 }
-SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv", "dist", "build", ".mypy_cache", ".pytest_cache"}
+SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv", "dist", "build", ".mypy_cache", ".pytest_cache",
+             ".inventio"}
 MAX_FILE_BYTES = 1_000_000
 
 
@@ -81,7 +84,7 @@ def list_files(root: Path, excludes: list[str]) -> list[str]:
             continue
         p = root / rel
         try:
-            if not p.is_file() or p.stat().st_size > MAX_FILE_BYTES:
+            if not p.is_file() or (p.stat().st_size > MAX_FILE_BYTES and LANGS[p.suffix.lower()] != "data"):
                 continue
         except OSError:
             continue
@@ -95,15 +98,27 @@ def decode_text(data: bytes) -> str | None:
     return data.decode("utf-8", "replace").replace("\r\n", "\n")
 
 
+def file_text(path: Path) -> str:
+    """What the map holds for a file, as `read` and `grep` show it: its text, or for a data file
+    the card of its schema."""
+    if LANGS.get(path.suffix.lower()) == "data":
+        from .schema import file_card
+
+        return file_card(path, path.name) or ""
+    return path.read_text(encoding="utf-8", errors="replace")
+
+
 # ---------------------------------------------------------------- identifiers and references
 
 BACKTICK = re.compile(r"`([^`\n]{2,80})`")
+QUOTED = re.compile(r"[\"']([A-Za-z_][\w\-]*(?:[.\-][\w\-]+)+)[\"']")  # code names a topic or table in a string: "txn.scored"
+TICKET = re.compile(r"\b[A-Z][A-Z0-9]+-\d+\b")
 IDENT_SHAPES = [
-    re.compile(r"\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b"),            # snake_case
-    re.compile(r"\b[a-z]+(?:[A-Z][a-z0-9]+)+\b"),                 # camelCase
-    re.compile(r"\b[A-Z][a-z0-9]+(?:[A-Z][a-z0-9]+)+\b"),         # PascalCase
-    re.compile(r"\b[A-Z][A-Z0-9]+-\d+\b"),                         # ticket ids: FRAML-123
-    re.compile(r"\b[a-z0-9_]+\.[a-z0-9_]+\.[a-z0-9_]+\b"),        # schema.table.column
+    re.compile(r"\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b"),  # snake_case
+    re.compile(r"\b[a-z]+(?:[A-Z][a-z0-9]+)+\b"),  # camelCase
+    re.compile(r"\b[A-Z][a-z0-9]+(?:[A-Z][a-z0-9]+)+\b"),  # PascalCase
+    TICKET,  # ticket ids: SHOP-123
+    re.compile(r"\b[a-z0-9_]+\.[a-z0-9_]+\.[a-z0-9_]+\b"),  # schema.table.column
 ]
 TOKEN_IN_TICKS = re.compile(r"^[A-Za-z_@][\w.\-/:@]*$")
 MD_LINK = re.compile(r"\[[^\]]*\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)")
@@ -121,6 +136,7 @@ def mentions_in(text: str) -> set[str]:
             found.add(norm_ident(inner))
     for rx in IDENT_SHAPES:
         found.update(norm_ident(x) for x in rx.findall(text))
+    found.update(norm_ident(x) for x in QUOTED.findall(text) if len(x) <= 80)
     return found
 
 
@@ -452,7 +468,7 @@ def chunk_tree(text: str, lang: str) -> list[Chunk] | None:
             p.parent = parent
             if name:
                 p.defines.add(norm_ident(name))
-            if lang == "sql" and "." in qual:  # prose names a table `risk.daily_score`, dbt names it daily_score
+            if lang == "sql" and "." in qual:  # prose names a table `shop.orders`, dbt names it orders
                 p.defines.add(norm_ident(qual))
             chunks.append(p)
         for i in range(s, e + 1):
@@ -494,6 +510,7 @@ DOC_TYPES = {
     "Test": "Tests that exercise the source code.",
     "Configuration": "Configuration and settings files: YAML, TOML, JSON, INI.",
     "Article": "Prose written for people: documentation, READMEs, guides, notes, design records.",
+    "Dataset": "Where data lives: database tables, Kafka topics, datasets and data files, described by their schema.",
 }
 TEST_TOKENS = {"test", "tests", "testing", "conftest", "spec", "specs", "__tests__"}
 TEST_STEM = re.compile(r"(?:Tests?|Spec)$")
@@ -502,6 +519,8 @@ TEST_STEM = re.compile(r"(?:Tests?|Spec)$")
 def doc_type(rel: str, lang: str) -> str:
     if lang in PROSE_LANGS:
         return "Article"
+    if lang == "data":
+        return "Dataset"
     if lang in CONFIG_LANGS:
         return "Configuration"
     if TEST_TOKENS & set(re.split(r"[/_\-.]", rel.lower())) or TEST_STEM.search(Path(rel).stem):
@@ -511,7 +530,7 @@ def doc_type(rel: str, lang: str) -> str:
 
 def chunk_file(text: str, lang: str, rel: str) -> list[Chunk]:
     chunks = None
-    if lang == "markdown":
+    if lang in ("markdown", "data"):  # a data file is held as the Markdown card of its schema
         chunks = chunk_markdown(text)
     elif lang == "python":
         chunks = chunk_python(text)
@@ -521,17 +540,25 @@ def chunk_file(text: str, lang: str, rel: str) -> list[Chunk]:
         chunks = chunk_generic(text)
     for c in chunks:
         c.mentions |= mentions_in(c.text)
-        if lang == "markdown":
+        if lang in ("markdown", "data"):
             c.refs = md_refs(c.text, rel)
+    if lang in ("markdown", "data") and chunks:  # `<!-- defines: SHOP-812 -->`: a ticket, a table card
+        from .schema import defined_names
+
+        chunks[0].defines |= {norm_ident(x) for x in defined_names(text)}
     return chunks
 
 
-def ingest_source(con, name: str, root: Path, public: bool, excludes: list[str], full: bool = False) -> dict:
+def ingest_source(con, name: str, root: Path, public: bool, excludes: list[str], full: bool = False,
+                  dtype: str | None = None) -> dict:
     """Bring one source's part of the map in line with the files on disk.
 
     A file whose size and modification time match the map is skipped without being read; one
     whose bytes hash the same is only re-stamped. Only new and edited files are chunked again,
     so unchanged chunks keep their ids. `full` drops the source first and rebuilds everything.
+    `dtype` gives every file one document type (a mirror of table cards is `Dataset`, though
+    its files are Markdown). A data file is never hashed (it may be gigabytes): a new size or
+    modification time re-reads its schema.
     """
     from .store import drop_file, drop_source
 
@@ -559,32 +586,37 @@ def ingest_source(con, name: str, root: Path, public: bool, excludes: list[str],
         path = root / rel
         st = path.stat()
         lang = effective_lang(rel)
-        dtype = doc_type(rel, lang)
+        dtype_ = dtype or doc_type(rel, lang)
         old = known.pop(rel, None)
         # a file parsed by another chunker than it would get now (tree-sitter installed since) is re-chunked
         same = old is not None and old["lang"] == lang
         if same and old["size"] == st.st_size and old["mtime_ns"] == st.st_mtime_ns:
-            if old["type"] != dtype:
-                con.execute("UPDATE files SET type = ? WHERE id = ?", (dtype, old["id"]))
+            if old["type"] != dtype_:
+                con.execute("UPDATE files SET type = ? WHERE id = ?", (dtype_, old["id"]))
             counts["unchanged"] += 1
             continue
-        data = path.read_bytes()
-        digest = hashlib.sha1(data).hexdigest()
-        if same and old["sha1"] == digest:
-            con.execute(
-                "UPDATE files SET size = ?, mtime_ns = ?, type = ? WHERE id = ?",
-                (st.st_size, st.st_mtime_ns, dtype, old["id"]),
-            )
-            counts["unchanged"] += 1
-            continue
+        if lang == "data":
+            from .schema import file_card
+
+            digest, text = f"stat:{st.st_size}:{st.st_mtime_ns}", file_card(path, rel)
+        else:
+            data = path.read_bytes()
+            digest = hashlib.sha1(data).hexdigest()
+            if same and old["sha1"] == digest:
+                con.execute(
+                    "UPDATE files SET size = ?, mtime_ns = ?, type = ? WHERE id = ?",
+                    (st.st_size, st.st_mtime_ns, dtype_, old["id"]),
+                )
+                counts["unchanged"] += 1
+                continue
+            text = decode_text(data)
         if old is not None:
             drop_file(con, old["id"])
-        text = decode_text(data)
-        if text is None or not text.strip():  # binary or empty: not in the map
+        if text is None or not text.strip():  # binary, empty, or a data file no reader could open: not in the map
             counts["removed"] += old is not None
             continue
         counts["changed" if old is not None else "added"] += 1
-        _insert_file(con, sid, rel, lang, dtype, text, st.st_size, st.st_mtime_ns, digest)
+        _insert_file(con, sid, rel, lang, dtype_, text, st.st_size, st.st_mtime_ns, digest)
     for old in known.values():  # indexed before, gone from disk or now excluded
         drop_file(con, old["id"])
         counts["removed"] += 1

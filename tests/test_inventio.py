@@ -62,20 +62,20 @@ def test_python_method_coordinates(tmp_path):
 def test_prose_links_to_the_code_that_defines_what_it_names(tmp_path, capsys):
     db = str(tmp_path / "map.db")
     repo, wiki = tmp_path / "repo", tmp_path / "wiki"
-    write(repo, "jobs/score.py", """
-        def fraud_score_daily(txns):
-            return sum(t.amount for t in txns)
+    write(repo, "jobs/backup.py", """
+        def nightly_backup(db):
+            return db.snapshot()
     """)
     write(wiki, "runbook.md", """
-        # Daily scoring
-        The nightly job `fraud_score_daily` recomputes customer risk before the morning review.
+        # Nightly backup
+        The nightly job `nightly_backup` copies the orders database before the morning peak.
     """)
     assert run(capsys, "--db", db, "init", str(repo), "--name", "repo")[0] == 0
     assert run(capsys, "--db", db, "init", str(wiki), "--name", "wiki")[0] == 0
-    code, out = run(capsys, "--db", db, "query", "nightly job customer risk", "--json", "--source", "wiki")
+    code, out = run(capsys, "--db", db, "query", "nightly job orders database", "--json", "--source", "wiki")
     assert code == 0
     top = json.loads(out.out)[0]
-    assert {"rel": "mentions", "dir": "out", "via": "fraud_score_daily", "source": "repo", "coord": "jobs/score.py:1-2"} in top["links"]
+    assert {"rel": "mentions", "dir": "out", "via": "nightly_backup", "source": "repo", "coord": "jobs/backup.py:1-2"} in top["links"]
 
 
 def test_markdown_link_resolves_to_the_heading(tmp_path, capsys):
@@ -102,9 +102,9 @@ def test_reindex_touches_only_what_changed(tmp_path, capsys):
 
     db = str(tmp_path / "map.db")
     d = tmp_path / "d"
-    keep = write(d, "keep.md", "# Keep\nThe nightly job `fraud_score_daily` recomputes customer risk.\n")
+    keep = write(d, "keep.md", "# Keep\nThe nightly job `nightly_backup` copies the orders database.\n")
     write(d, "edit.md", "# Edit\nthresholds are tuned per wombat segment\n")
-    gone = write(d, "jobs/score.py", "def fraud_score_daily(txns):\n    return 0\n")
+    gone = write(d, "jobs/backup.py", "def nightly_backup(db):\n    return 0\n")
     run(capsys, "--db", db, "init", str(d), "--name", "d")
 
     def keep_ids():
@@ -125,7 +125,7 @@ def test_reindex_touches_only_what_changed(tmp_path, capsys):
     hits = json.loads(run(capsys, "--db", db, "query", "quokka", "--json")[1].out)
     assert [h["path"] for h in hits] == ["edit.md"]
     assert run(capsys, "--db", db, "query", "wombat")[0] == 1
-    hits = json.loads(run(capsys, "--db", db, "query", "nightly customer risk", "--json")[1].out)
+    hits = json.loads(run(capsys, "--db", db, "query", "nightly orders database", "--json")[1].out)
     assert hits[0]["links"] == []  # the definer was deleted, so its link went with it
 
 
@@ -133,49 +133,49 @@ def test_cloud_ranker_refuses_private_sources(tmp_path, capsys, monkeypatch):
     pytest.importorskip("typesafe_sdk")
     monkeypatch.setenv("TYPESAFE_API_KEY", "not-a-real-key")
     db = str(tmp_path / "map.db")
-    write(tmp_path / "private", "notes.md", "# Notes\ncustomer 4411 flagged for mule activity\n")
-    run(capsys, "--db", db, "init", str(tmp_path / "private"), "--name", "bank")
-    code, out = run(capsys, "--db", db, "query", "mule activity", "--ranker", "typesafe")
+    write(tmp_path / "private", "notes.md", "# Notes\ncustomer 4411 emailed their card number\n")
+    run(capsys, "--db", db, "init", str(tmp_path / "private"), "--name", "crm")
+    code, out = run(capsys, "--db", db, "query", "card number", "--ranker", "typesafe")
     assert code == 3
-    assert "bank" in out.err
+    assert "crm" in out.err
 
 
 def test_tree_sitter_definitions_carry_coordinates_and_links(tmp_path, capsys):
     pytest.importorskip("tree_sitter_language_pack")
     db = str(tmp_path / "map.db")
     repo, wiki = tmp_path / "repo", tmp_path / "wiki"
-    write(repo, "models/score_daily.sql", """
+    write(repo, "models/daily_orders.sql", """
         -- one row per customer per day
-        create table risk.daily_score as
-        select customer_id, sum(amount) amt from txn group by 1;
+        create table shop.daily_orders as
+        select customer_id, sum(total) amt from orders group by 1;
 
-        create view risk.v_alerts as select * from risk.daily_score where amt > 1000;
+        create view shop.v_big_orders as select * from shop.daily_orders where amt > 1000;
     """)
-    ts = write(repo, "src/rules.ts", """
-        import { Txn } from "./txn";
+    ts = write(repo, "src/limits.ts", """
+        import { Req } from "./req";
 
-        export class Velocity {
+        export class RateLimit {
           limit = 5;
 
-          /** txns in the last hour above the limit */
-          breached(txns: Txn[]): boolean {
-            return txns.length > this.limit;
+          /** requests in the last second above the limit */
+          breached(reqs: Req[]): boolean {
+            return reqs.length > this.limit;
           }
         }
 
-        export const muleScore = (t: Txn) => t.amount * 0.3;
+        export const shippingCost = (r: Req) => r.weight * 0.3;
     """)
-    write(wiki, "alerts.md", "# Alerts\nAlerts read `risk.daily_score` every morning.\n")
+    write(wiki, "reports.md", "# Reports\nReports read `shop.daily_orders` every morning.\n")
     run(capsys, "--db", db, "init", str(repo), "--name", "repo")
     run(capsys, "--db", db, "init", str(wiki), "--name", "wiki")
 
     lines = ts.read_text(encoding="utf-8").split("\n")
-    by_name = {c.heading_path: c for c in chunk_file("\n".join(lines), "typescript", "src/rules.ts")}
-    assert (by_name["Velocity"].start_line, by_name["Velocity"].end_line) == (3, 10)
-    assert (by_name["muleScore"].kind, by_name["muleScore"].start_line) == ("function", 12)
+    by_name = {c.heading_path: c for c in chunk_file("\n".join(lines), "typescript", "src/limits.ts")}
+    assert (by_name["RateLimit"].start_line, by_name["RateLimit"].end_line) == (3, 10)
+    assert (by_name["shippingCost"].kind, by_name["shippingCost"].start_line) == ("function", 12)
 
-    top = json.loads(run(capsys, "--db", db, "query", "alerts every morning", "--json", "--source", "wiki")[1].out)[0]
-    assert ("mentions", "repo", "models/score_daily.sql:1-3") in {(l["rel"], l["source"], l["coord"]) for l in top["links"]}
+    top = json.loads(run(capsys, "--db", db, "query", "reports every morning", "--json", "--source", "wiki")[1].out)[0]
+    assert ("mentions", "repo", "models/daily_orders.sql:1-3") in {(l["rel"], l["source"], l["coord"]) for l in top["links"]}
 
 
 class FakeRanker:
@@ -199,25 +199,25 @@ def test_type_widening_only_adds_and_respects_privacy(tmp_path, capsys):
     db = tmp_path / "map.db"
     repo = tmp_path / "repo"
     for i in range(3):
-        write(repo, f"docs/limits{i}.md", f"# Limits {i}\nthe velocity limit is five per hour, note {i}\n")
+        write(repo, f"docs/limits{i}.md", f"# Limits {i}\nthe rate limit is five per second, note {i}\n")
     write(repo, "tests/test_cap.py", """
-        def test_velocity_cap():
-            txns = make_txns(count=6, window="1h")
-            assert flagged(txns)
-            assert not flagged(txns[:5])
+        def test_rate_cap():
+            reqs = make_requests(count=6, window="1s")
+            assert throttled(reqs)
+            assert not throttled(reqs[:5])
     """)
     run(capsys, "--db", str(db), "init", str(repo), "--name", "repo", "--public")
     con = connect(db)
 
-    plain = search(con, "velocity limit", k=100, pool=2)
-    wide = search(con, "velocity limit", k=100, pool=2, ranker=FakeRanker(), by_type=True)
+    plain = search(con, "rate limit", k=100, pool=2)
+    wide = search(con, "rate limit", k=100, pool=2, ranker=FakeRanker(), by_type=True)
     assert [h.id for h in wide[:len(plain)]] == [h.id for h in plain]
     added = wide[len(plain):]
     assert [(h.path, h.type, h.via) for h in added] == [("tests/test_cap.py", "Test", "type:Test")]
 
     run(capsys, "--db", str(db), "init", str(tmp_path / "repo" / "docs"), "--name", "notes")  # private
     with pytest.raises(CloudRefused, match="notes"):
-        search(con, "velocity limit", pool=2, ranker=FakeRanker(cloud=True), by_type=True)
+        search(con, "rate limit", pool=2, ranker=FakeRanker(cloud=True), by_type=True)
 
 
 def test_query_names_bring_their_file_and_definition(tmp_path, capsys):
@@ -228,18 +228,18 @@ def test_query_names_bring_their_file_and_definition(tmp_path, capsys):
     repo = tmp_path / "repo"
     for i in range(6):  # prose that outranks the code on every word of the question
         write(repo, f"docs/jobs-report-nightly-{i}.md",
-              f"# Nightly jobs report {i}\nnightly job crash: recompute risk fails; see the jobs report, then run it again\n")
-    write(repo, "jobs/nightly.py", "def recompute_risk(rows):\n    return sum(r.score for r in rows)\n")
+              f"# Nightly jobs report {i}\nnightly job crash: rebuild index fails; see the jobs report, then run it again\n")
+    write(repo, "jobs/nightly.py", "def rebuild_index(rows):\n    return sum(r.size for r in rows)\n")
     write(repo, "jobs/report.py", "def render(rows):\n    return str(rows)\n")
     for i in range(4):  # a name defined in many places names nothing in particular
         write(repo, f"lib/m{i}.py", "def run():\n    return 1\n")
     run(capsys, "--db", str(db), "init", str(repo), "--name", "repo")
     con = connect(db)
 
-    q = "the nightly job crash: recompute_risk fails, see jobs/report.py, then run"
+    q = "the nightly job crash: rebuild_index fails, see jobs/report.py, then run"
     plain = search(con, q, k=100, pool=2, symbols=False)
     assert {h.path for h in plain} <= {f"docs/jobs-report-nightly-{i}.md" for i in range(6)}
-    named = [("jobs/report.py", "path"), ("jobs/nightly.py", "defines:recompute_risk")]
+    named = [("jobs/report.py", "path"), ("jobs/nightly.py", "defines:rebuild_index")]
     wide = search(con, q, k=100, pool=2)  # no ranker: the named ones go first, BM25's order after
     assert [(h.path, h.via) for h in wide] == named + [(h.path, h.via) for h in plain]
     ranked = search(con, q, k=100, pool=2, ranker=FakeRanker())  # a ranker sees all of them
@@ -365,9 +365,88 @@ def test_cloud_judge_refuses_private_sources(tmp_path, capsys):
     from inventio.store import connect
 
     db = tmp_path / "map.db"
-    write(tmp_path / "private", "notes.md", "# Notes\ncustomer 4411 flagged for mule activity\n")
-    run(capsys, "--db", str(db), "init", str(tmp_path / "private"), "--name", "bank")
+    write(tmp_path / "private", "notes.md", "# Notes\ncustomer 4411 emailed their card number\n")
+    run(capsys, "--db", str(db), "init", str(tmp_path / "private"), "--name", "crm")
     judge = FakeJudge(cloud=True)
-    with pytest.raises(CloudRefused, match="bank"):
+    with pytest.raises(CloudRefused, match="crm"):
         build(connect(db), judge)
     assert judge.calls == 0
+
+
+def test_grep_and_ls_print_coordinates_that_read_opens(tmp_path, capsys):
+    db = str(tmp_path / "map.db")
+    write(tmp_path / "d", "ops/runbook.md", """
+        # Runbook
+
+        ## Late backup
+        Rerun nightly_backup from the replica.
+    """)
+    write(tmp_path / "d", "jobs/backup.py", """
+        import os
+
+
+        def nightly_backup(db):
+            return db
+    """)
+    assert run(capsys, "--db", db, "init", str(tmp_path / "d"), "--name", "d")[0] == 0
+
+    code, out = run(capsys, "--db", db, "grep", "NIGHTLY_BACKUP", "-i", "--json")
+    assert code == 0
+    got = json.loads(out.out)
+    assert [(m["path"], m["line"]) for m in got["matches"]] == [("jobs/backup.py", 4), ("ops/runbook.md", 4)]
+    code, out = run(capsys, "--db", db, "read", "d:jobs/backup.py:4")
+    assert out.out.splitlines()[1].endswith("def nightly_backup(db):")
+    assert run(capsys, "--db", db, "grep", "absent_name")[0] == 1
+
+    code, out = run(capsys, "--db", db, "ls", "d")
+    assert out.out.splitlines() == ["d:jobs/  1 file, 2 chunks", "d:ops/  1 file, 1 chunk"]
+    code, out = run(capsys, "--db", db, "ls", "d:ops/runbook.md")
+    assert out.out.splitlines() == ["d:ops/runbook.md:3-4  section  Runbook > Late backup"]
+
+
+def test_show_names_who_decided_each_fact_and_every_coordinate_opens(tmp_path, capsys):
+    db = str(tmp_path / "map.db")
+    write(tmp_path / "d", "ops/runbook.md", """
+        # Runbook
+
+        ## Late backup
+        Rerun nightly_backup from the replica.
+
+        ## Backup retention
+        Every nightly backup is kept for 35 days.
+    """)
+    write(tmp_path / "d", "jobs/backup.py", """
+        def nightly_backup(db):
+            return db
+    """)
+    assert run(capsys, "--db", db, "init", str(tmp_path / "d"), "--name", "d")[0] == 0
+    from inventio.facts import SAME, key, passage
+    from inventio.store import connect
+
+    con = connect(db)
+    ids = {r["start_line"]: r["id"] for r in con.execute(
+        "SELECT c.id, c.start_line FROM chunks c JOIN files f ON f.id = c.file_id WHERE f.path = 'ops/runbook.md'")}
+    late, retention = ids[3], ids[6]
+    con.execute("INSERT INTO chunk_categories VALUES (?, 'Procedure', 0.91, 1, 'dispositio')", (late,))
+    con.execute("INSERT INTO chunk_categories VALUES (?, 'Rule', 0.88, 1, 'dispositio')", (retention,))
+    con.execute("INSERT INTO links VALUES (?, ?, 'about', 'Procedure~Rule')", (late, retention))
+    text = {i: passage(*con.execute("SELECT f.path, c.heading_path, c.text FROM chunks c JOIN files f "
+                                    "ON f.id = c.file_id WHERE c.id = ?", (i,)).fetchone()) for i in (late, retention)}
+    con.execute("INSERT INTO judgments (kind, question, passage, other, key, p, model, source) "
+                "VALUES (?, ?, ?, ?, ?, 0.84, 'dispositio', 'd')",
+                (SAME, SAME, text[late], text[retention], key(SAME, SAME, text[late], text[retention])))
+    con.commit()
+
+    code, out = run(capsys, "--db", db, "show", "d:ops/runbook.md:3-4")
+    lines = out.out.splitlines()
+    assert code == 0 and lines[0] == "d:ops/runbook.md:3-4  Runbook > Late backup"
+    assert lines[1] == "  Article (by path) · markdown · private"
+    assert lines[2] == "  section 3-4 · Procedure p=0.91 (dispositio) · mentions 1 name"
+    assert "  -> mentions d:jobs/backup.py:1-2  nightly_backup  · SoftwareSourceCode  (nightly_backup)" in lines
+    assert "  ~  about    d:ops/runbook.md:6-7  Runbook > Backup retention  · Article · Rule p=0.88 (dispositio)  p=0.84 (dispositio)" in lines
+    assert "  > d:ops/runbook.md:6-7  Runbook > Backup retention  · Article · Rule p=0.88 (dispositio)" in lines
+
+    node = json.loads(run(capsys, "--db", db, "show", "d:ops/runbook.md:3", "--json")[1].out)
+    for other in [*node["links"], *node["structure"], *node["similar"]]:
+        assert run(capsys, "--db", db, "show", other["coord"])[0] == 0
+    assert run(capsys, "--db", db, "show", "d:ops/absent.md")[0] == 2

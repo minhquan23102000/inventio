@@ -14,3 +14,4 @@ benchmarks/results/**/scores*.jsonl
 # design map and walk stay local (kept in ~/.omp/docs)
 docs/design/map.md
 docs/design/walk.md
+.env

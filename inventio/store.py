@@ -1,12 +1,14 @@
 """One SQLite file holds the whole map: sources, files, chunks, the BM25 index, links, content
 categories and every model judgment behind them.
 
-The file lives in the user's cache directory, never inside an indexed repository: every derived
-table carries source text, and a map built over private sources must not be committed anywhere.
+The file lives in the user's data directory (data_home), never inside an indexed repository:
+every derived table carries source text, and a map built over private sources must not be
+committed anywhere.
 """
 
 import os
 import sqlite3
+import sys
 from pathlib import Path
 
 SCHEMA = """
@@ -16,7 +18,9 @@ CREATE TABLE IF NOT EXISTS sources (
     root TEXT NOT NULL,
     public INTEGER NOT NULL DEFAULT 0,
     excludes TEXT NOT NULL DEFAULT '',
-    indexed_at TEXT
+    indexed_at TEXT,
+    kind TEXT NOT NULL DEFAULT 'dir',  -- 'dir', or a connector (connectors.KINDS) whose mirror is the root
+    origin TEXT NOT NULL DEFAULT ''    -- what a connector syncs from: a space or query URL
 );
 CREATE TABLE IF NOT EXISTS files (
     id INTEGER PRIMARY KEY,
@@ -105,15 +109,32 @@ CREATE INDEX IF NOT EXISTS chunk_categories_kept ON chunk_categories(category, c
 
 
 def cache_dir() -> Path:
+    """Downloads that can be fetched again: benchmark data, model checkpoints."""
     base = os.environ.get("LOCALAPPDATA") or os.environ.get("XDG_CACHE_HOME") or str(Path.home() / ".cache")
     return Path(base) / "inventio"
 
 
+def data_home() -> Path:
+    """Where the map lives. Not a cache: it holds every model judgment paid for, and a cache
+    cleaner must not take it. %LOCALAPPDATA% on Windows, Application Support on macOS,
+    $XDG_DATA_HOME (~/.local/share) elsewhere."""
+    if os.name == "nt":
+        base = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
+    elif sys.platform == "darwin":
+        base = str(Path.home() / "Library" / "Application Support")
+    else:
+        base = os.environ.get("XDG_DATA_HOME") or str(Path.home() / ".local" / "share")
+    return Path(base) / "inventio"
+
+
 def default_db() -> Path:
+    """One map for every source on this machine, so a query and the links reach across them
+    (code in one repository, the wiki that describes it in another). INVENTIO_DB or --db keeps
+    a separate one, e.g. per project."""
     env = os.environ.get("INVENTIO_DB")
     if env:
         return Path(env)
-    return cache_dir() / "map.db"
+    return data_home() / "map.db"
 
 
 def connect(path: Path | None = None) -> sqlite3.Connection:
@@ -129,6 +150,10 @@ def connect(path: Path | None = None) -> sqlite3.Connection:
     for col, kind in (("size", "INTEGER"), ("mtime_ns", "INTEGER"), ("sha1", "TEXT"), ("type", "TEXT")):
         if col not in have:
             con.execute(f"ALTER TABLE files ADD COLUMN {col} {kind}")
+    have = {r["name"] for r in con.execute("PRAGMA table_info(sources)")}
+    for col, decl in (("kind", "TEXT NOT NULL DEFAULT 'dir'"), ("origin", "TEXT NOT NULL DEFAULT ''")):
+        if col not in have:
+            con.execute(f"ALTER TABLE sources ADD COLUMN {col} {decl}")
     return con
 
 
