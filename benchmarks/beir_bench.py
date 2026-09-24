@@ -1,8 +1,8 @@
 """Run Inventio on a BEIR-format dataset through its real ingest and search path; score nDCG@10.
 
-    python benchmarks/beir_bench.py scifact --rankers none,laya,typesafe
-    python benchmarks/beir_bench.py coir-stackoverflow-qa --rankers laya --limit 300
-    python benchmarks/beir_bench.py zalo-legal --rankers none,laya   # Vietnamese law (data.py zalo)
+    python benchmarks/beir_bench.py scifact --rankers none,dispositio,typesafe
+    python benchmarks/beir_bench.py coir-stackoverflow-qa --rankers dispositio --limit 300
+    python benchmarks/beir_bench.py zalo-legal --rankers none,dispositio   # Vietnamese law (data.py zalo)
     python benchmarks/beir_bench.py scifact --arms --rankers none,typesafe
 
 `--arms` first has Jev judge the content categories and fact links of every chunk (facts.py;
