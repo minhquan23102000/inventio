@@ -159,7 +159,7 @@ also searched as pairs of adjacent syllables, since *hợp đồng* (contract) i
   |---|---|---|
   | Rule | states what must, may or must not be done | "is it allowed to...", "what is the limit" |
   | Procedure | walks through how to do something | "how do I..." |
-  | Reference | describes what something is or contains, for lookup | "what are the fields of..." |
+  | Reference | describes what something is or contains, for lookup; every `Dataset` card is filed here by code, not judged | "what are the fields of...", "which table holds..." |
   | Explanation | explains why or how something works | "why does..." |
   | Finding | reports what was measured or observed | "does it work", "how much faster" |
   | Record | tells what happened or was decided | "when did this change", "what broke last time" |
