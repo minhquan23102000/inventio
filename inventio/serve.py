@@ -1,6 +1,6 @@
 """A background process that keeps dispositio loaded, so a query pays only for reading its
-candidates. Importing PyTorch and loading the model take about 5 s on a laptop; reading 30
-candidates about 3 s. The first `inventio query` with a local ranker starts it, later ones hand
+candidates. Importing PyTorch and loading the model take about 5 s on a laptop; reading 15
+candidates about 1.5 s. The first `inventio query` with a local ranker starts it, later ones hand
 it their command line, and it exits after INVENTIO_SERVE_IDLE seconds (default 900) without a
 request. INVENTIO_SERVE=0 runs every query in its own process, as before.
 

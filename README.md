@@ -225,7 +225,7 @@ GitHub's search box reads: `key:value` terms separated by spaces all hold, `a,b`
 `-key:value` negates, `>=` `>` `<=` `<` compare (dates are ISO; `-90d` and `-2w` count back from
 today), `*` is a wildcard, quotes hold a value with spaces (`assignee:"Nguyen An"`), and case does
 not matter. Every way into the pool (names the question uses, predicted types and categories,
-neighbours, links) keeps to it, so the 30 candidates are all spent inside the scope.
+neighbours, links) keeps to it, so the 15 candidates are all spent inside the scope.
 
 Every map has `source`, `kind` (`dir`, `confluence`, `jira`, `github`, `sql`, `kafka`, `s3`),
 `type`, `lang`, `path` and `category`. Connectors add their items' fields: Jira `status`,
@@ -357,6 +357,11 @@ listens on 127.0.0.1 only, answers only requests carrying the token in `serve.js
 directory, and exits after 15 minutes without a request (`INVENTIO_SERVE_IDLE`, in seconds).
 `INVENTIO_SERVE=0` runs every query in its own process; `inventio serve --stop` stops it.
 
+The ranker reads BM25's best 15 chunks (`--pool`). Reading time grows with the pool: on a
+laptop GPU, 15 take about half as long as 30. On 40 questions over a private wiki, ticket
+tracker and two repositories, 15 found as many answers as 30 and 10 lost some. Raise `--pool`
+when BM25 is likely to rank the answer lower, such as questions worded unlike the documents.
+
 Relevance labels are written by people: the train splits of MultiDoc2Dial (questions about the
 pages of US public services: rules, eligibility, procedures), StackOverflow QA, SciFact and Zalo
 legal, and 3,923 SWE-bench train issues paired with the code their fix changed (35 repositories,
@@ -367,7 +372,9 @@ RTX 5070 laptop GPU; results, training data and terms are on the model card.
 ## Benchmarks
 
 nDCG@10 on every test query, through Inventio's real ingest and query path; the rankers reorder
-the same 30 BM25 candidates. Method and reproduction: [benchmarks/README.md](benchmarks/README.md).
+the same 30 BM25 candidates (`--pool 30`; `query` hands the ranker 15 by default, see
+[dispositio](#dispositio)).
+Method and reproduction: [benchmarks/README.md](benchmarks/README.md).
 
 | System | Runs on | SWE-bench Lite | SciFact | StackOverflow QA | Zalo legal | MultiDoc2Dial | TechQA |
 |---|---|---|---|---|---|---|---|
