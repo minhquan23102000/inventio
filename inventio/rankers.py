@@ -58,9 +58,25 @@ def load_laya(name: str):
     warnings.filterwarnings("ignore", module="laya")
     device = os.environ.get("INVENTIO_DEVICE") or None
     model = checkpoint(name)
-    if model == LAYA:
-        return laya.load(model, device=device, subfolder="multilingual"), f"laya:{model}/multilingual"
-    return laya.load(model, device=device), f"laya:{model}"
+    sub = "multilingual" if model == LAYA else None
+    agent = laya.load(cached(model, sub) or model, device=device, subfolder=sub)
+    return agent, f"laya:{model}/{sub}" if sub else f"laya:{model}"
+
+
+def cached(model: str, subfolder: str | None) -> str | None:
+    """The downloaded snapshot of a Hugging Face checkpoint, found without the network; None for
+    a local directory or one not downloaded yet. A cached checkpoint is not refreshed: delete it
+    from the Hugging Face cache (`hf cache delete`) to fetch a newer release."""
+    if os.path.exists(model):
+        return None
+    from huggingface_hub import snapshot_download
+
+    prefix = f"{subfolder}/" if subfolder else ""
+    try:
+        return snapshot_download(model, local_files_only=True, allow_patterns=[
+            prefix + f for f in ("rl_agent_config.json", "model.safetensors", "tokenizer/*", "encoder/*")])
+    except Exception:  # not in the cache (or only part of it): laya.load downloads it
+        return None
 
 
 def ranker_tag(name: str) -> str:
@@ -112,9 +128,12 @@ def windows(tok, head: str, body: str, room: int) -> list[tuple[str, int, int]]:
 
 class LayaRanker:
     BATCH = 16  # pairs per forward pass; pairs are sorted by length so padding stays small
+    MPS_BATCH = 4  # Apple GPUs: 3.5 s against 4.9 s for 16 on an M3, 30 pool chunks
 
     def __init__(self, name: str):
         self.agent, self.name = load_laya(name)
+        if self.agent.device.type == "mps":
+            self.BATCH = self.MPS_BATCH
         self.questions = {"rel": {"type": "noul", "instructions": INSTRUCTIONS, "criteria": CRITERIA}}
 
     def score(self, query: str, hits) -> list[float]:
