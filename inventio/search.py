@@ -352,7 +352,7 @@ def widen_by_facts(con, q: str, pool: list[Hit], judge, *, limit: int = 10, seed
     return added + expand(con, pool + added, seeds, limit, scope, rels=("about",))
 
 
-def search(con, q: str, *, k: int = 5, pool: int = 30, ranker=None, expand_links: bool = False,
+def search(con, q: str, *, k: int = 5, pool: int = 15, ranker=None, expand_links: bool = False,
            by_type: bool = False, type_limit: int | None = None, facts=None, facts_limit: int = 10,
            symbols: bool = True, neighbours: bool = False, seeds: int = 5, expand_limit: int = 10,
            scope: Scope | None = None) -> list[Hit]:

@@ -591,7 +591,7 @@ there. Every command prints source:path:start-end coordinates that read and show
         s.add_argument("--ranker", choices=RANKERS, default=default_ranker(),
                        help="reorder the pool: dispositio (local; the default when the laya extra is installed), "
                             "none (BM25 order), laya (local, as published), typesafe (cloud, public sources only)")
-        s.add_argument("--pool", type=int, default=30, help="BM25 candidates handed to the ranker")
+        s.add_argument("--pool", type=int, default=15, help="BM25 candidates handed to the ranker")
         s.add_argument("--links", action="store_true",
                        help="also hand the ranker chunks linked to the top BM25 hits (off: measured no gain yet)")
         s.add_argument("--no-symbols", action="store_true",
