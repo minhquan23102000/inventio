@@ -17,6 +17,15 @@ def _db(args):
     return connect(Path(args.db) if args.db else None)
 
 
+def _scope(con, args):
+    """The -w filter and --source as one Scope; None when neither is given. ValueError on a bad term."""
+    from .scope import Scope
+
+    scope = Scope.parse(getattr(args, "where", None), getattr(args, "source", None))
+    scope.check(con)
+    return scope or None
+
+
 def cmd_init(args) -> int:
     from .ingest import ingest_source
     from .links import rebuild_links
@@ -50,7 +59,7 @@ def cmd_init(args) -> int:
 
 
 def _init_remote(con, args, t: float) -> int:
-    from . import connectors
+    from . import connectors, credentials
     from .links import rebuild_links
 
     try:
@@ -59,14 +68,23 @@ def _init_remote(con, args, t: float) -> int:
         print(str(e), file=sys.stderr)
         return 2
     if not found:
-        print(f"not a Confluence/Jira URL, a database URL (postgresql://, mysql://, sqlite:///...), "
+        print(f"not a Confluence/Jira/GitHub URL, a database URL (postgresql://, mysql://, sqlite:///...), "
               f"kafka:// or s3://: {args.path}", file=sys.stderr)
         return 2
     kind, origin = found
     try:
-        with con:
-            stats = connectors.sync(con, args.name, kind, origin, args.public)
-            links = rebuild_links(con)
+        try:
+            with con:
+                stats = connectors.sync(con, args.name, kind, origin, args.public)
+                links = rebuild_links(con)
+        except credentials.Missing as e:
+            if not sys.stdin.isatty():  # an agent or a script: say how, never wait on a prompt
+                raise
+            print(f"no login for {e.url} yet; it is asked once and kept in the keychain", file=sys.stderr)
+            print(credentials.login(e.url))
+            with con:
+                stats = connectors.sync(con, args.name, kind, origin, args.public)
+                links = rebuild_links(con)
     except connectors.RemoteError as e:
         print(str(e), file=sys.stderr)
         return 2
@@ -176,11 +194,15 @@ def cmd_grep(args) -> int:
     except re.error as e:
         print(f"not a regular expression: {e}", file=sys.stderr)
         return 2
-    where, params = "", []
-    if args.source:
-        where = f" WHERE s.name IN ({','.join('?' * len(args.source))})"
-        params = args.source
-    rows = con.execute("SELECT s.name, s.root, f.path FROM files f JOIN sources s ON s.id = f.source_id"
+    try:
+        scope = _scope(con, args)
+    except ValueError as e:
+        print(str(e), file=sys.stderr)
+        return 2
+    from .scope import where as scope_where
+
+    where, params = scope_where(scope, chunks=False)
+    rows = con.execute("SELECT s.name, s.root, f.path FROM files f JOIN sources s ON s.id = f.source_id WHERE 1 = 1"
                        + where + " ORDER BY s.name, f.path", params).fetchall()
     hits, total, files = [], 0, 0
     for r in rows:
@@ -202,7 +224,7 @@ def cmd_grep(args) -> int:
     for h in hits:
         print(f"{h['source']}:{h['path']}:{h['line']}  {h['text'].strip()[:200]}")
     if total > len(hits):
-        print(f"... {total - len(hits)} more ({total} lines in {files} files); narrow with --source or the pattern, or raise -m")
+        print(f"... {total - len(hits)} more ({total} lines in {files} files); narrow with -w, --source or the pattern, or raise -m")
     if not total:
         print("no match")
     return 0 if total else 1
@@ -270,6 +292,8 @@ def cmd_facts(args) -> int:
 
 
 def cmd_sources(args) -> int:
+    from .credentials import status
+
     con = _db(args)
     rows = con.execute(
         "SELECT s.name, s.root, s.kind, s.origin, s.public, s.indexed_at, count(DISTINCT f.id) files, count(c.id) chunks "
@@ -278,7 +302,9 @@ def cmd_sources(args) -> int:
     ).fetchall()
     for r in rows:
         where = r["root"] if r["kind"] == "dir" else f"{r['kind']} {r['origin']}"
-        print(f"{r['name']:<16} {'public ' if r['public'] else 'private'} {r['files']:>5} files {r['chunks']:>6} chunks  {where}  ({r['indexed_at']})")
+        auth = status(r["kind"], r["origin"])
+        print(f"{r['name']:<16} {'public ' if r['public'] else 'private'} {r['files']:>5} files {r['chunks']:>6} chunks  "
+              f"auth {auth:<7}  {where}  ({r['indexed_at']})")
     if not rows:
         print("no sources; run `inventio init <path>`")
     return 0
@@ -303,6 +329,43 @@ def cmd_drop(args) -> int:
     return 0
 
 
+def cmd_login(args) -> int:
+    from .connectors import RemoteError
+    from .credentials import login
+
+    try:
+        print(login(args.url))
+    except (RemoteError, ValueError) as e:
+        print(str(e), file=sys.stderr)
+        return 2
+    return 0
+
+
+def cmd_logout(args) -> int:
+    from .connectors import RemoteError
+    from .credentials import logout
+
+    try:
+        print(logout(args.url))
+    except (RemoteError, ValueError) as e:
+        print(str(e), file=sys.stderr)
+        return 2
+    return 0
+
+
+def cmd_skill(args) -> int:
+    """Copy the agent skill shipped with this version into a skills directory, replacing an
+    older copy: agents that read `.agents/skills` then know how to install and use inventio."""
+    from importlib.resources import files
+
+    root = Path(args.dir) if args.dir else (Path.cwd() if args.project else Path.home()) / ".agents" / "skills"
+    dest = root / "inventio" / "SKILL.md"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(files("inventio").joinpath("skill/SKILL.md").read_text(encoding="utf-8"), encoding="utf-8")
+    print(f"skill written to {dest}")
+    return 0
+
+
 def _snippet(text: str, width: int = 160) -> str:
     lines = [l.strip() for l in text.splitlines() if l.strip() and not l.lstrip().startswith(("#", "<!--"))]
     s = " ".join(lines)
@@ -315,10 +378,15 @@ def cmd_query(args) -> int:
 
     con = _db(args)
     try:
+        scope = _scope(con, args)
+    except ValueError as e:
+        print(str(e), file=sys.stderr)
+        return 2
+    try:
         ranker = make_ranker(args.ranker)
         hits = search(con, args.text, k=args.k, pool=args.pool, ranker=ranker, expand_links=args.links,
                       by_type=args.types, facts=make_judge(args.judge) if args.facts else None,
-                      symbols=not args.no_symbols, neighbours=args.neighbours, sources=args.source)
+                      symbols=not args.no_symbols, neighbours=args.neighbours, scope=scope)
     except CloudRefused as e:
         print(str(e), file=sys.stderr)
         return 3
@@ -327,7 +395,10 @@ def cmd_query(args) -> int:
         print(json.dumps(rows, ensure_ascii=False, indent=2))
         return 0
     if not hits:
-        print("no match")
+        from .scope import count
+
+        # an empty scope is a filter to loosen, not a question nothing answers
+        print(f"no match; 0 chunks in scope -w {scope.text!r}" if scope and not count(con, scope) else "no match")
         return 1
     # grouped by document type, groups in order of their best hit; the number is the overall rank
     groups: dict[str, list] = {}
@@ -355,13 +426,18 @@ def cmd_bench(args) -> int:
     con = _db(args)
     rows = bench.load(Path(args.file))
     try:
+        scope = _scope(con, args)
+    except ValueError as e:
+        print(str(e), file=sys.stderr)
+        return 2
+    try:
         ranker = make_ranker(args.ranker)
         if args.arms:
-            res = bench.run_arms(con, rows, ranker, make_judge(args.judge), pool=args.pool)
+            res = bench.run_arms(con, rows, ranker, make_judge(args.judge), pool=args.pool, scope=scope)
         else:
             res = bench.run(con, rows, ranker, pool=args.pool, expand_links=args.links, by_type=args.types,
                             facts=make_judge(args.judge) if args.facts else None,
-                            symbols=not args.no_symbols, neighbours=args.neighbours)
+                            symbols=not args.no_symbols, neighbours=args.neighbours, scope=scope)
     except CloudRefused as e:
         print(str(e), file=sys.stderr)
         return 3
@@ -401,6 +477,7 @@ finding an answer (a person or an agent):
                                                      links in and out, the sections around it,
                                                      similar passages elsewhere
   inventio grep "nightly_backup"                     every line that says it, not just the best few
+  inventio query "..." -w "kind:jira -status:Done"   only what the filter keeps, before ranking
   inventio ls wiki:Ops/                              what a source holds, like a folder; a file
                                                      lists its sections
 
@@ -412,12 +489,14 @@ there. Every command prints source:path:start-end coordinates that read and show
     p.add_argument("--db", help=f"map file (default {default_db()}, or $INVENTIO_DB)")
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    s = sub.add_parser("init", help="index a directory, a Confluence space, a Jira project/search, or the schema "
-                                    "of a database, Kafka or S3 as a source; re-running updates only what changed")
+    s = sub.add_parser("init", help="index a directory, a Confluence space, a Jira project/search, a GitHub "
+                                    "repository's issues and pull requests, or the schema of a database, Kafka or "
+                                    "S3 as a source; re-running updates only what changed")
     s.add_argument("path", help="a directory, or a URL: https://<site>/wiki/spaces/KEY, https://<site>/browse/PROJ, "
-                                "https://<site>/issues/?jql=..., postgresql://user@host/db (any SQLAlchemy URL), "
+                                "https://<site>/issues/?jql=..., https://github.com/OWNER/REPO, "
+                                "postgresql://user@host/db (any SQLAlchemy URL), "
                                 "kafka://broker:9092[?registry=URL], s3://bucket/prefix/")
-    s.add_argument("--name", help="source name (default: directory name, wiki-KEY, jira-PROJ)")
+    s.add_argument("--name", help="source name (default: directory name, wiki-KEY, jira-PROJ, gh-REPO)")
     s.add_argument("--jql", help="for Jira: narrow the tickets, e.g. \"updated >= -365d\"")
     s.add_argument("--public", action="store_true", help="allow this source's text to be sent to a cloud ranker")
     s.add_argument("--exclude", action="append", metavar="GLOB", help="skip paths matching GLOB (repeatable)")
@@ -448,11 +527,15 @@ there. Every command prints source:path:start-end coordinates that read and show
     s.add_argument("--json", action="store_true")
     s.set_defaults(fn=cmd_show)
 
+    where_help = ("pre-filter, key:value terms: 'kind:jira -status:Done updated:>=-90d'; a,b either value, "
+                  "-key:v not, >= > <= < compare, * wildcard. Keys: source kind type lang path category, and "
+                  "the fields connectors write (status, assignee, labels, updated, state, author ...)")
     s = sub.add_parser("grep", help="every line matching a regular expression, in every indexed file "
-                                    "(Confluence and Jira too); exhaustive where query ranks")
+                                    "(Confluence, Jira and GitHub too); exhaustive where query ranks")
     s.add_argument("pattern", help="Python regular expression, e.g. \"nightly_backup\" or \"SHOP-8\\d\\d\"")
     s.add_argument("-i", "--ignore-case", action="store_true")
     s.add_argument("--source", action="append", metavar="NAME", help="only this source (repeatable)")
+    s.add_argument("-w", "--where", metavar="FILTER", help=where_help)
     s.add_argument("-m", "--max", type=int, default=50, help="lines to print (the total is always counted)")
     s.add_argument("--json", action="store_true")
     s.set_defaults(fn=cmd_grep)
@@ -468,12 +551,27 @@ there. Every command prints source:path:start-end coordinates that read and show
                    help="look for neighbours of every categorized chunk, not only new ones (judged pairs are reused)")
     s.set_defaults(fn=cmd_facts)
 
-    s = sub.add_parser("sources", help="list indexed sources")
+    s = sub.add_parser("sources", help="list indexed sources, with where each one's login comes from")
     s.set_defaults(fn=cmd_sources)
 
     s = sub.add_parser("drop", help="remove a source from the map")
     s.add_argument("name")
     s.set_defaults(fn=cmd_drop)
+
+    s = sub.add_parser("login", help="sign in to an Atlassian site or a database once; the login is tried, "
+                                     "then kept in the OS keychain for init and sync (GitHub uses `gh auth login`)")
+    s.add_argument("url", help="https://<site>.atlassian.net (any URL on the site), or a database URL")
+    s.set_defaults(fn=cmd_login)
+
+    s = sub.add_parser("logout", help="remove a login `login` kept")
+    s.add_argument("url")
+    s.set_defaults(fn=cmd_logout)
+
+    s = sub.add_parser("skill", help="install the agent skill (how to install and use inventio) into "
+                                     "~/.agents/skills/inventio, or this project's .agents/skills")
+    s.add_argument("--project", action="store_true", help="into ./.agents/skills instead of your home")
+    s.add_argument("--dir", help="into this skills directory instead")
+    s.set_defaults(fn=cmd_skill)
 
     def ranking(s):
         s.add_argument("--ranker", choices=RANKERS, default=default_ranker(),
@@ -495,6 +593,7 @@ there. Every command prints source:path:start-end coordinates that read and show
                             "its top hits are linked to by judged fact links (needs `facts` run on the map)")
         s.add_argument("--judge", choices=JUDGES, default=judge,
                        help="model that predicts the query's categories for --facts / --arms")
+        s.add_argument("-w", "--where", metavar="FILTER", help=where_help)
 
     s = sub.add_parser("query", help="find the passages that answer a question")
     s.add_argument("text")
@@ -512,7 +611,7 @@ there. Every command prints source:path:start-end coordinates that read and show
     ranking(s)
     s.set_defaults(fn=cmd_bench)
 
-    args = p.parse_args(argv)
+    args = p.parse_args(_join_where(sys.argv[1:] if argv is None else list(argv)))
     try:
         return args.fn(args)
     except OSError as e:
@@ -522,6 +621,20 @@ there. Every command prints source:path:start-end coordinates that read and show
             raise
         os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())  # the exit flush would fail again
         return 0
+
+
+def _join_where(argv: list[str]) -> list[str]:
+    """`-w "-status:Done"` as `--where=-status:Done`: argparse would read a value that starts
+    with a dash as another option."""
+    out, i = [], 0
+    while i < len(argv):
+        if argv[i] in ("-w", "--where") and i + 1 < len(argv):
+            out.append(f"--where={argv[i + 1]}")
+            i += 2
+        else:
+            out.append(argv[i])
+            i += 1
+    return out
 
 
 if __name__ == "__main__":

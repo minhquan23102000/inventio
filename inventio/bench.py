@@ -28,11 +28,11 @@ def gold_rank(hits, g: dict) -> int | None:
 
 
 def run(con, rows: list[dict], ranker, *, pool: int = 30, expand_links: bool = False,
-        by_type: bool = False, facts=None, symbols: bool = True, neighbours: bool = False) -> dict:
+        by_type: bool = False, facts=None, symbols: bool = True, neighbours: bool = False, scope=None) -> dict:
     ranks, t0 = [], time.time()
     for g in rows:
         hits = search(con, g["question"], k=10_000, pool=pool, ranker=ranker, expand_links=expand_links,
-                      by_type=by_type, facts=facts, symbols=symbols, neighbours=neighbours)
+                      by_type=by_type, facts=facts, symbols=symbols, neighbours=neighbours, scope=scope)
         ranks.append(gold_rank(hits, g))
     n = len(rows)
     at = lambda k: sum(1 for r in ranks if r is not None and r <= k)
@@ -55,10 +55,10 @@ def run(con, rows: list[dict], ranker, *, pool: int = 30, expand_links: bool = F
 ARMS = ("base", "facts", "control")
 
 
-def arm_pools(con, q: str, judge, pool: int = 30, sources: list[str] | None = None, facts_limit: int = 10) -> dict:
-    base = bm25(con, q, pool, sources)
-    facts = base + widen_by_facts(con, q, base, judge, limit=facts_limit, sources=sources)
-    return {"base": base, "facts": facts, "control": bm25(con, q, len(facts), sources)}
+def arm_pools(con, q: str, judge, pool: int = 30, scope=None, facts_limit: int = 10) -> dict:
+    base = bm25(con, q, pool, scope)
+    facts = base + widen_by_facts(con, q, base, judge, limit=facts_limit, scope=scope)
+    return {"base": base, "facts": facts, "control": bm25(con, q, len(facts), scope)}
 
 
 def rank_arms(pools: dict, scores: dict | None) -> dict:
@@ -91,12 +91,12 @@ def ndcg_one(rank: int | None) -> float:
     return 1 / math.log2(rank + 1) if rank is not None and rank <= 10 else 0.0
 
 
-def run_arms(con, rows: list[dict], ranker, judge, *, pool: int = 30, facts_limit: int = 10) -> dict:
+def run_arms(con, rows: list[dict], ranker, judge, *, pool: int = 30, facts_limit: int = 10, scope=None) -> dict:
     """The three arms per question; each distinct chunk is scored once per question."""
     ranks = {a: [] for a in ARMS}
     sizes = {a: [] for a in ARMS}
     for g in rows:
-        pools = arm_pools(con, g["question"], judge, pool, facts_limit=facts_limit)
+        pools = arm_pools(con, g["question"], judge, pool, scope, facts_limit=facts_limit)
         scores = None
         if ranker is not None:
             uniq = list({h.id: h for hs in pools.values() for h in hs}.values())

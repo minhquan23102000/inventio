@@ -1,6 +1,7 @@
 """Remote sources, offline: what a page or ticket becomes as Markdown, and a mirror that follows
 the remote through edits, renames and deletions."""
 
+import json
 import sqlite3
 from types import SimpleNamespace
 
@@ -155,3 +156,120 @@ def test_kafka_card_keeps_field_names_never_values():
     card = remote._card("alerts.raw", 3, {"retention.ms": "86400000"}, set(), Message())
     assert "| account_id | integer |  |" in card and "| note | string |  |" in card
     assert "991" not in card and "0901234567" not in card
+
+
+class MetaRemote(FakeRemote):
+    """Items with the fields a connector writes; (version, path, text, meta)."""
+    items: dict = {}
+
+    def listing(self):
+        return {i: Entry(v[0], v[1], f"https://jira/{i}") for i, v in self.items.items()}
+
+    def fetch(self, ids):
+        for i in ids:
+            yield i, Doc(self.items[i][2], meta=self.items[i][3])
+
+
+def test_where_scopes_every_term_before_bm25(monkeypatch, tmp_path, capsys):
+    import datetime
+
+    site = "https://jira.test/SHOP"
+    fake = SimpleNamespace(KIND="fake", Remote=MetaRemote, heading_url=lambda item, heads: item["url"],
+                           origin=lambda url, q=None: url if url == site else None, locate=lambda url: None)
+    monkeypatch.setitem(connectors.KINDS, "fake", fake)
+    old = (datetime.date.today() - datetime.timedelta(days=200)).isoformat()
+    new = datetime.date.today().isoformat()
+    MetaRemote.items = {
+        "1": ("v1", "SHOP/SHOP-1.md", "# SHOP-1 backup failed\n\nnightly backup failed\n",
+              {"status": "Done", "labels": ["backup", "ops"], "updated": old}),
+        "2": ("v1", "SHOP/SHOP-2.md", "# SHOP-2 backup slow\n\nbackup is slow\n",
+              {"status": "In Progress", "labels": ["backup"], "updated": new}),
+        "3": ("v1", "SHOP/SHOP-3.md", "# SHOP-3 backup quota\n\nbackup quota hit\n", {"status": "Open", "updated": new}),
+    }
+    db = str(tmp_path / "map.db")
+    repo = tmp_path / "repo"
+    (repo / "jobs").mkdir(parents=True)
+    (repo / "jobs" / "backup.md").write_text("# Backup\n\nbackup runs nightly\n", encoding="utf-8")
+    assert cli.main(["--db", db, "init", site]) == 0
+    assert cli.main(["--db", db, "init", str(repo), "--name", "app"]) == 0
+    capsys.readouterr()
+
+    def found(where):
+        assert cli.main(["--db", db, "query", "backup", "-k", "10", "--json", "-w", where]) == 0
+        return {h["path"] for h in json.loads(capsys.readouterr().out)}
+
+    assert found("status:done") == {"SHOP/SHOP-1.md"}  # a value matches whatever its case
+    assert found("-status:Done") == {"SHOP/SHOP-2.md", "SHOP/SHOP-3.md", "jobs/backup.md"}  # no field: not Done
+    assert found("status:Open,\"In Progress\"") == {"SHOP/SHOP-2.md", "SHOP/SHOP-3.md"}
+    assert found("labels:backup updated:>=-90d") == {"SHOP/SHOP-2.md"}  # terms AND; a label of several
+    assert found("kind:dir") == found("source:app") == {"jobs/backup.md"}
+    assert found("path:SHOP/*") == {"SHOP/SHOP-1.md", "SHOP/SHOP-2.md", "SHOP/SHOP-3.md"}
+
+    assert cli.main(["--db", db, "query", "backup", "-w", "stauts:Done"]) == 2  # a misspelt key never matches silently
+    assert "keys:" in capsys.readouterr().err
+    assert cli.main(["--db", db, "query", "backup", "-w", "status:Closed"]) == 1
+    assert "0 chunks in scope" in capsys.readouterr().out
+    assert cli.main(["--db", db, "grep", "backup", "-w", "-status:Done labels:backup"]) == 0
+    assert {l.split(":")[1] for l in capsys.readouterr().out.splitlines()} == {"SHOP/SHOP-2.md"}
+
+
+def test_github_item_links_its_own_items_and_keeps_code_as_written():
+    from inventio.connectors.github import item_doc
+
+    origin = "https://github.com/acme/shop"
+    pr = {"number": 12, "title": "Restore from replica", "html_url": f"{origin}/pull/12", "state": "closed",
+          "pull_request": {"merged_at": "2026-03-15T09:00:00Z"}, "user": {"login": "an"},
+          "labels": [{"name": "backup"}], "created_at": "2026-03-14T07:10:00Z", "updated_at": "2026-03-15T09:00:00Z",
+          "closed_at": "2026-03-15T09:00:00Z",
+          "body": "# Why\nFixes #7, see also #99 and `#7` in code.\n```\n# not a heading\n```\n"
+                  f"Follow-up of {origin}/issues/7#issuecomment-1"}
+    review_comments = [{"created_at": "2026-03-14T08:00:00Z", "user": {"login": "binh"}, "path": "jobs/backup.py",
+                        "line": 9, "diff_hunk": "@@ -1 +1 @@\n-run()\n+run(replica=True)", "body": "Why the replica?",
+                        "html_url": f"{origin}/pull/12#discussion_r5"}]
+    doc = item_doc(origin, pr, [], [], review_comments, known={"7": "issues/7.md", "12": "pulls/12.md"})
+    lines = doc.text.split("\n")
+    assert lines[:2] == ["# shop#12 Restore from replica", "<!-- defines: shop#12 acme/shop#12 -->"]
+    assert "### Why" in lines and "# not a heading" in lines  # headings sit under the item; code stays code
+    assert "Fixes [#7](../issues/7.md), see also #99 and `#7` in code." in lines  # #99 is not in this mirror
+    assert "Follow-up of [#7](../issues/7.md)" in lines
+    head = "## Review comment 2026-03-14 08:00 binh on jobs/backup.py:9"
+    assert head in lines and doc.anchors["review-comment-2026-03-14-0800-binh-on-jobsbackuppy9"].endswith("r5")
+    assert doc.meta["state"] == "merged" and doc.meta["labels"] == ["backup"] and doc.meta["item"] == "pull"
+
+
+def test_login_comes_from_the_environment_before_the_keychain(monkeypatch):
+    import keyring
+    from keyring.backend import KeyringBackend
+
+    from inventio import credentials
+
+    class Memory(KeyringBackend):
+        priority = 1
+        kept: dict = {}
+
+        def get_password(self, service, user):
+            return self.kept.get((service, user))
+
+        def set_password(self, service, user, password):
+            self.kept[(service, user)] = password
+
+        def delete_password(self, service, user):
+            del self.kept[(service, user)]
+
+    before = keyring.get_keyring()
+    keyring.set_keyring(Memory())
+    try:
+        monkeypatch.delenv("ATLASSIAN_EMAIL", raising=False)
+        monkeypatch.delenv("ATLASSIAN_API_TOKEN", raising=False)
+        with pytest.raises(credentials.Missing, match="inventio login https://a.atlassian.net"):
+            credentials.atlassian("https://a.atlassian.net")
+        credentials.put(credentials.atlassian_key("a.atlassian.net"), {"email": "me@a", "token": "kept"})
+        assert credentials.atlassian("https://a.atlassian.net") == ("me@a", "kept")
+        with pytest.raises(credentials.Missing):  # a login is per site
+            credentials.atlassian("https://b.atlassian.net")
+        monkeypatch.setenv("ATLASSIAN_EMAIL", "ci@a")
+        monkeypatch.setenv("ATLASSIAN_API_TOKEN", "from-env")
+        assert credentials.atlassian("https://a.atlassian.net") == ("ci@a", "from-env")
+        assert credentials.logout("https://a.atlassian.net/wiki/spaces/OPS") == "removed the login for https://a.atlassian.net"
+    finally:
+        keyring.set_keyring(before)

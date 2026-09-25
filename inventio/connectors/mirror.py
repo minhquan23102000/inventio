@@ -30,6 +30,8 @@ class Doc:
     text: str  # Markdown, starting with a `# title` line
     # heading slug (ingest.slug) -> URL, for headings that are a place of their own (a Jira comment)
     anchors: dict[str, str] = field(default_factory=dict)
+    # fields a query can filter on (`-w status:Done`): key -> value, or several (labels)
+    meta: dict[str, str | list[str]] = field(default_factory=dict)
 
 
 def mirror_dir(name: str) -> Path:
@@ -99,7 +101,7 @@ def sync(kind: str, remote, root: Path, log=print) -> dict:
         if old and old["path"] != e.path:
             _prune(root, old["path"])
         _write(root, e.path, doc.text)
-        items[iid] = {"version": e.version, "path": e.path, "url": e.url, "anchors": doc.anchors}
+        items[iid] = {"version": e.version, "path": e.path, "url": e.url, "anchors": doc.anchors, "meta": doc.meta}
         counts["fetched"] += 1
         if counts["fetched"] % SAVE_EVERY == 0:
             save(root, m)

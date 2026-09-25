@@ -77,6 +77,7 @@ def sample(rows: list[dict], per_repo: int) -> dict[str, list[dict]]:
 
 def build_repo(job) -> tuple[str, int, int]:
     from inventio.ingest import ingest_source
+    from inventio.scope import Scope
     from inventio.search import bm25
     from inventio.store import connect
 
@@ -108,7 +109,7 @@ def build_repo(job) -> tuple[str, int, int]:
             ingest_source(con, name, clone, True, [])
             con.commit()  # a rerun after a crash starts from this map instead of re-reading the repository
             lines = touched(r["patch"])
-            hits = bm25(con, r["problem_statement"], POOL, [name])
+            hits = bm25(con, r["problem_statement"], POOL, Scope.only([name]))
 
             def at(path, a, b):
                 return sorted(n - a for n in lines.get(path, ()) if a <= n <= b)

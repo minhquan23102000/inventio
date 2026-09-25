@@ -1,5 +1,5 @@
-"""Sources that are not a directory on disk: a Confluence space, a Jira query, a database's schema;
-later mail or chat.
+"""Sources that are not a directory on disk: a Confluence space, a Jira query, a GitHub
+repository's issues and pull requests, a database's schema; later mail or chat.
 
 Each is mirrored into a directory of Markdown files (mirror.py), one per page, ticket, thread or
 table, and that directory is indexed like any other source. Chunking, BM25, links, judgments
@@ -16,15 +16,16 @@ one item into Markdown. A new kind is one module, registered in KINDS, that prov
     fetch_url(url)              (web URL, Doc) of one item read live, for items not mirrored
     Remote(origin)              .origin, .name (a default source name),
                                 .listing() -> {item id: mirror.Entry}, every item without its body,
-                                .fetch(ids) -> yields (item id, mirror.Doc) for the ids asked for
+                                .fetch(ids) -> yields (item id, mirror.Doc) for the ids asked for;
+                                Doc.meta holds the fields a query filters on (status, labels, updated)
 """
 
 from pathlib import Path
 
-from . import confluence, jira, kafka, mirror, s3, sql
+from . import confluence, github, jira, kafka, mirror, s3, sql
 from .http import RemoteError
 
-KINDS = {m.KIND: m for m in (confluence, jira, sql, kafka, s3)}
+KINDS = {m.KIND: m for m in (confluence, jira, sql, kafka, s3, github)}  # github last: it may ask `gh` about a host
 
 __all__ = ["KINDS", "RemoteError", "for_url", "sync", "web_url"]
 
@@ -51,7 +52,22 @@ def sync(con, name: str | None, kind: str, origin: str, public: bool, log=print)
     counts = mirror.sync(kind, remote, root, log)
     stats = ingest_source(con, name, root, public, [], dtype=getattr(KINDS[kind], "DOC_TYPE", None))
     con.execute("UPDATE sources SET kind = ?, origin = ? WHERE name = ?", (kind, origin, name))
+    write_meta(con, name, root)
     return {**stats, **counts}
+
+
+def write_meta(con, name: str, root: Path) -> None:
+    """The mirror's per-item fields as file_meta rows, replacing the source's old ones."""
+    files = {r["path"]: r["id"] for r in con.execute(
+        "SELECT f.id, f.path FROM files f JOIN sources s ON s.id = f.source_id WHERE s.name = ?", (name,))}
+    con.execute("DELETE FROM file_meta WHERE file_id IN (SELECT f.id FROM files f JOIN sources s "
+                "ON s.id = f.source_id WHERE s.name = ?)", (name,))
+    rows = []
+    for item in mirror.load(root)["items"].values():
+        fid = files.get(item["path"])
+        for key, value in (item.get("meta") or {}).items() if fid else ():
+            rows += [(fid, key, v) for v in ([value] if isinstance(value, str) else value) if v]
+    con.executemany("INSERT INTO file_meta (file_id, key, value) VALUES (?, ?, ?)", rows)
 
 
 def web_url(root: str, path: str, heading_path: str) -> str | None:

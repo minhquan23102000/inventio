@@ -84,7 +84,7 @@ def _comments(api, issue: dict) -> list[dict]:
 
 
 class Remote:
-    FORMAT = 2  # raise when the Markdown written changes, so every mirror is written again
+    FORMAT = 3  # raise when the Markdown or the fields written change, so every mirror is written again
 
     def __init__(self, origin_url: str):
         self.origin = origin_url
@@ -156,7 +156,14 @@ def issue_doc(site: str, issue: dict, comments: list[dict]) -> Doc:
         head = f"Comment {stamp} {_name(c.get('author'))}".rstrip()
         anchors[slug(head)] = f"{url}?focusedCommentId={c['id']}"
         lines += [f"## {head}", "", *adf_blocks(c.get("body") or {})]
-    return Doc(tidy(lines), anchors)
+    meta = {"project": key.split("-")[0], "status": (f.get("status") or {}).get("name", ""),
+            "resolution": (f.get("resolution") or {}).get("name", ""),
+            "issuetype": (f.get("issuetype") or {}).get("name", ""),
+            "priority": (f.get("priority") or {}).get("name", ""),
+            "assignee": _name(f.get("assignee")), "reporter": _name(f.get("reporter")),
+            "labels": list(f.get("labels") or []), "parent": (f.get("parent") or {}).get("key", ""),
+            "created": _day(f.get("created")), "updated": _day(f.get("updated"))}
+    return Doc(tidy(lines), anchors, meta)
 
 
 def adf_blocks(node: dict, shift: int = 2) -> list[str]:

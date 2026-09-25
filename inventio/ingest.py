@@ -119,6 +119,7 @@ IDENT_SHAPES = [
     re.compile(r"\b[A-Z][a-z0-9]+(?:[A-Z][a-z0-9]+)+\b"),  # PascalCase
     TICKET,  # ticket ids: SHOP-123
     re.compile(r"\b[a-z0-9_]+\.[a-z0-9_]+\.[a-z0-9_]+\b"),  # schema.table.column
+    re.compile(r"\b[\w.\-]+/[\w.\-]+#\d+\b"),  # GitHub issues and pull requests: acme/shop#812
 ]
 TOKEN_IN_TICKS = re.compile(r"^[A-Za-z_@][\w.\-/:@]*$")
 MD_LINK = re.compile(r"\[[^\]]*\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)")

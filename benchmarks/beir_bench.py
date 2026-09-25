@@ -34,6 +34,7 @@ from data import data_dir  # noqa: E402
 from inventio.bench import ARMS, arm_pools, paired, rank_arms  # noqa: E402
 from inventio.ingest import ingest_source  # noqa: E402
 from inventio.rankers import make_ranker, ranker_tag as tag  # noqa: E402
+from inventio.scope import Scope  # noqa: E402
 from inventio.search import bm25, rank_key  # noqa: E402
 from inventio.store import connect  # noqa: E402
 
@@ -105,8 +106,8 @@ def run_arms(con, args, queries, qrels, safe, out_dir, summary) -> None:
         arms += ("about", "mlt")
         # about: the judged links only; mlt: the candidates those links are judged from, unjudged
         for qid, p in pools.items():
-            p["about"] = p["base"] + expand(con, p["base"], 5, 10, [args.dataset], rels=("about",))
-            p["mlt"] = p["base"] + widen_by_neighbours(con, p["base"], 5, 10, [args.dataset])
+            p["about"] = p["base"] + expand(con, p["base"], 5, 10, Scope.only([args.dataset]), rels=("about",))
+            p["mlt"] = p["base"] + widen_by_neighbours(con, p["base"], 5, 10, Scope.only([args.dataset]))
     rows_path = out_dir / "arms.jsonl"
     arms_summary = summary.setdefault("arms", {})
     arms_summary["facts"] = {"categories": res["categories"], "links": res["links"], "kept": res["kept"]}
@@ -200,7 +201,7 @@ def main() -> int:
         with cache_path.open("a", encoding="utf-8") as cf:
             for n, (qid, q) in enumerate(queries.items(), 1):
                 t = time.time()
-                hits = bm25(con, q, args.pool, [args.dataset], phrases={"on": True, "off": False}.get(args.phrases))
+                hits = bm25(con, q, args.pool, Scope.only([args.dataset]), phrases={"on": True, "off": False}.get(args.phrases))
                 fresh = True
                 if ranker is not None:
                     todo = [h for h in hits if (qid, h.id) not in cache]

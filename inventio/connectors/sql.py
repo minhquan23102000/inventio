@@ -4,9 +4,10 @@ inspector, so Postgres, MySQL, SQL Server, Oracle, SQLite and the rest share one
     inventio init postgresql://reader@db.internal:5432/core      -> source postgresql-core
 
 Only the catalog is read: columns, keys, indexes, comments, view definitions; never a row. The
-password is taken from the URL for that run or from the driver's own variable (PGPASSWORD), or
-INVENTIO_SQL_PASSWORD; it is never written to the map. A foreign key becomes a link from the
-card of the table that holds it to the card of the table it references."""
+password is taken from the URL for that run, INVENTIO_SQL_PASSWORD, the keychain (kept there by
+`inventio login <url>`), or the driver's own variable (PGPASSWORD); it is never written to the
+map. A foreign key becomes a link from the card of the table that holds it to the card of the
+table it references."""
 
 import hashlib
 import os
@@ -57,6 +58,25 @@ def fetch_url(url: str):
     return None
 
 
+def check(origin_url: str, password: str) -> None:
+    """Connect once with this password, for `inventio login`; raises RemoteError when refused."""
+    from sqlalchemy import create_engine
+    from sqlalchemy.exc import SQLAlchemyError
+
+    from .http import RemoteError
+
+    engine = None
+    try:
+        engine = create_engine(_url(origin_url).set(password=password))
+        with engine.connect():
+            pass
+    except SQLAlchemyError as e:
+        raise RemoteError(f"cannot connect to {origin_url}: {str(e).splitlines()[0]}") from None
+    finally:
+        if engine is not None:
+            engine.dispose()
+
+
 class Remote:
     FORMAT = 1  # raise when the Markdown written changes, so every mirror is written again
 
@@ -65,7 +85,9 @@ class Remote:
         u = _url(origin_url)
         db = posixpath.basename((u.database or "").replace("\\", "/")).split(".")[0]
         self.name = f"{u.get_backend_name()}-{db or u.host or 'db'}"
-        password = _PASSWORDS.get(origin_url) or os.environ.get("INVENTIO_SQL_PASSWORD")
+        from ..credentials import sql_password
+
+        password = _PASSWORDS.get(origin_url) or sql_password(origin_url)
         self.url = u.set(password=password) if password else u
         self.docs: dict[str, str] = {}
 
@@ -80,7 +102,9 @@ class Remote:
             with engine.connect() as conn:
                 tables = _catalog(inspect(conn))
         except SQLAlchemyError as e:
-            raise RemoteError(f"cannot read the schema of {self.origin}: {str(e).splitlines()[0]}") from None
+            first = str(e).splitlines()[0]
+            hint = f"; `inventio login {self.origin}` keeps a password" if "password" in first.lower() else ""
+            raise RemoteError(f"cannot read the schema of {self.origin}: {first}{hint}") from None
         finally:
             if "engine" in locals():
                 engine.dispose()

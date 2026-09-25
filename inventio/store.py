@@ -45,6 +45,15 @@ CREATE TABLE IF NOT EXISTS chunks (
     text TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS chunks_file ON chunks(file_id);
+-- fields of a mirrored item a query filters on (`-w status:Done updated:>=-90d`), written by the
+-- connector: one row per value, so a ticket with two labels has two `labels` rows
+CREATE TABLE IF NOT EXISTS file_meta (
+    file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+    key TEXT NOT NULL,
+    value TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS file_meta_key ON file_meta(key, value, file_id);
+CREATE INDEX IF NOT EXISTS file_meta_file ON file_meta(file_id);
 CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
     head, body, tokenize = 'unicode61 remove_diacritics 2'
 );

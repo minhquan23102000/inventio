@@ -302,6 +302,7 @@ def link_facts(con, judge, chunk_ids: list[int] | None = None, sources: list[str
     scope); neighbours come from the whole scope. Pairs already judged, in either direction, cost
     no call, so a rerun after a crash only repeats the BM25 lookups.
     """
+    from .scope import Scope
     from .search import bm25
 
     where, args = _scope(sources)
@@ -335,7 +336,7 @@ def link_facts(con, judge, chunk_ids: list[int] | None = None, sources: list[str
         score = {w: c * math.log(n_docs / df[w]) for w, c in tf.items() if df[w] >= 2}
         q = " ".join(sorted(score, key=lambda w: -score[w])[:MLT_TERMS])
         out = []
-        for h in bm25(con, q, FETCH, [by_id[a]["source"]]) if q else []:
+        for h in bm25(con, q, FETCH, Scope.only([by_id[a]["source"]])) if q else []:
             b = h.id
             if b == a or b not in by_id or by_id[b]["file_id"] == by_id[a]["file_id"] or kept[a] == kept[b]:
                 continue
