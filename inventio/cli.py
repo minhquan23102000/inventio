@@ -374,8 +374,13 @@ def _snippet(text: str, width: int = 160) -> str:
 
 def cmd_query(args) -> int:
     from .connectors import web_url
+    from . import serve
     from .search import search
 
+    if args.ranker in ("dispositio", "laya") and not args.here and serve.enabled():
+        code = serve.forward(args.argv)  # the model stays loaded between queries
+        if code is not None:
+            return code
     con = _db(args)
     try:
         scope = _scope(con, args)
@@ -460,6 +465,15 @@ def cmd_bench(args) -> int:
         print(f"  in pool {res['in_pool']}/{n}  top-1 {res['top1']}/{n}  top-5 {res['top5']}/{n}  "
               f"top-10 {res['top10']}/{n}  {res['sec_per_query']}s/query")
     return 0
+
+
+def cmd_serve(args) -> int:
+    from . import serve
+
+    if args.stop:
+        print("stopped" if serve.stop() else "no server running")
+        return 0
+    return serve.serve(args.idle)
 
 
 def main(argv=None) -> int:
@@ -601,7 +615,15 @@ there. Every command prints source:path:start-end coordinates that read and show
     s.add_argument("--source", action="append", metavar="NAME", help="only search this source (repeatable)")
     s.add_argument("--json", action="store_true")
     ranking(s)
+    s.add_argument("--here", action="store_true", help=argparse.SUPPRESS)  # set by the server; never forward
     s.set_defaults(fn=cmd_query)
+
+    s = sub.add_parser("serve", help="keep dispositio loaded for queries (started by the first query; "
+                                     "INVENTIO_SERVE=0 turns it off)")
+    s.add_argument("--idle", type=float, default=float(os.environ.get("INVENTIO_SERVE_IDLE", 900)),
+                   help="exit after this many seconds without a request (default 900)")
+    s.add_argument("--stop", action="store_true", help="stop the running server")
+    s.set_defaults(fn=cmd_serve)
 
     s = sub.add_parser("bench", help="measure a configuration on questions with known answers")
     s.add_argument("file", help="JSON Lines: question, source, path, start_line, end_line")
@@ -611,7 +633,9 @@ there. Every command prints source:path:start-end coordinates that read and show
     ranking(s)
     s.set_defaults(fn=cmd_bench)
 
-    args = p.parse_args(_join_where(sys.argv[1:] if argv is None else list(argv)))
+    raw = sys.argv[1:] if argv is None else list(argv)
+    args = p.parse_args(_join_where(raw))
+    args.argv = raw
     try:
         return args.fn(args)
     except OSError as e:
