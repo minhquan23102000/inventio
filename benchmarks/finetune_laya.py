@@ -67,6 +67,7 @@ from beir_bench import load_beir, safe_name  # noqa: E402
 from data import data_dir  # noqa: E402
 from inventio.facts import CATEGORIES, category_question  # noqa: E402
 from inventio.rankers import CRITERIA, INSTRUCTIONS, cap_query, passage_room, windows  # noqa: E402
+from inventio.scope import Scope  # noqa: E402
 from inventio.search import bm25  # noqa: E402
 from inventio.store import connect  # noqa: E402
 
@@ -141,7 +142,7 @@ def relevance_groups(name: str, ds: Path, con, rng):
     for q, gold, near, tight, is_held in entries:
 
         def make(q=q, gold=gold, near=near, tight=tight):
-            hits = bm25(con, q, POOL, [name])
+            hits = bm25(con, q, POOL, Scope.only([name]))
             got = {doc_of(h) for h in hits}
             extra = [c for c in (gold_chunk(con, name, d) for d in sorted(gold - got) if chunks.get(d) == 1) if c][:1]
             fams = {family(d) for d in gold} if family else set()
@@ -151,7 +152,7 @@ def relevance_groups(name: str, ds: Path, con, rng):
                     "gold": [i for i, h in enumerate(hits) if doc_of(h) in gold],
                     "skip": [i for i, h in enumerate(hits) if doc_of(h) in near],
                     "sib_idx": [i for i, h in enumerate(hits) if family and sibling(doc_of(h))],
-                    "sib": bm25(con, q, n_sib, [name], files=sib_files) if sib_files else [],
+                    "sib": bm25(con, q, n_sib, Scope.only([name]), files=sib_files) if sib_files else [],
                     "n_neg": BM25_NEGS.get(name, 4), "extra": extra}
 
         yield is_held, make
@@ -177,7 +178,7 @@ def title_groups(name: str, ds: Path, con, rng):
         own = SimpleNamespace(path=r["path"], heading_path=r["heading_path"], text=r["text"])
 
         def make(q=q, own=own):
-            hits = [h for h in bm25(con, q, POOL + 5, [name]) if h.path != own.path][:POOL - 1]
+            hits = [h for h in bm25(con, q, POOL + 5, Scope.only([name])) if h.path != own.path][:POOL - 1]
             return {"src": f"{name}:title", "query": q, "heading": False, "hits": [own] + hits, "gold": [0], "extra": []}
 
         yield held(f"{name}\t{r['path']}"), make

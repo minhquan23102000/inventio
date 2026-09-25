@@ -20,6 +20,7 @@ and the wiki around it, a runbook, a retention policy and an incident report.
 
 ```sh
 uv tool install "inventio[laya] @ git+https://github.com/minhquan23102000/inventio"
+inventio skill                   # teaches your coding agents (~/.agents/skills) to install and use inventio
 git clone https://github.com/minhquan23102000/inventio && cd inventio
 
 inventio init examples/webshop/app --name app --public     # --public: may be sent to a cloud judge
@@ -80,6 +81,9 @@ links every pair it is asked about (see [Limitations](#limitations)).
 git+https://github.com/minhquan23102000/inventio" inventio ...` runs it once without installing.
 Without `[laya]` it installs in seconds and ranks by BM25 alone; `[laya]` adds dispositio,
 downloaded once from Hugging Face, and PyTorch (the CPU build unless you install a CUDA one).
+A package install cannot write outside its own environment, so the agent skill is copied by
+`inventio skill` (or `inventio skill --project` for this repository's `.agents/skills`); run it
+again after an upgrade to refresh it.
 
 ## How it works
 
@@ -204,10 +208,34 @@ link (code), or a model with its probability (category, `about`). `--json` gives
 agents.
 
 All sources share one map, so a query and the links reach across them (the job in `app`, the
-runbook in `wiki`, a ticket in Jira); `--source` narrows a query to some of them, and `--db` or
-`INVENTIO_DB` keeps a separate map. It lives in your user data directory
-(`%LOCALAPPDATA%\inventio`, `~/Library/Application Support/inventio`, or
-`~/.local/share/inventio`), never inside an indexed repository.
+runbook in `wiki`, a ticket in Jira), and `--db` or `INVENTIO_DB` keeps a separate map. It lives
+in your user data directory (`%LOCALAPPDATA%\inventio`, `~/Library/Application Support/inventio`,
+or `~/.local/share/inventio`), never inside an indexed repository.
+
+### Narrowing a search
+
+```sh
+inventio query "why no backup" -w "kind:jira -status:Done updated:>=-90d"
+inventio query "retention" -w "path:Ops/* type:Article"
+inventio grep "nightly_backup" -w "source:app,wiki"
+```
+
+`-w` (on `query`, `grep` and `bench`) decides what a search may look at before BM25 runs, the way
+GitHub's search box reads: `key:value` terms separated by spaces all hold, `a,b` is either value,
+`-key:value` negates, `>=` `>` `<=` `<` compare (dates are ISO; `-90d` and `-2w` count back from
+today), `*` is a wildcard, quotes hold a value with spaces (`assignee:"Nguyen An"`), and case does
+not matter. Every way into the pool (names the question uses, predicted types and categories,
+neighbours, links) keeps to it, so the 30 candidates are all spent inside the scope.
+
+Every map has `source`, `kind` (`dir`, `confluence`, `jira`, `github`, `sql`, `kafka`, `s3`),
+`type`, `lang`, `path` and `category`. Connectors add their items' fields: Jira `status`,
+`resolution`, `issuetype`, `priority`, `assignee`, `reporter`, `labels`, `project`, `created`,
+`updated`; Confluence `space`, `author`, `editor`, `labels`, `created`, `updated`; GitHub `repo`,
+`item` (`issue` or `pull`), `state` (`open`, `closed`, `merged`, `draft`), `author`, `assignee`,
+`labels`, `milestone`, `created`, `updated`, `closed`. A chunk without the field does not match a
+term on it and does match its negation, so `-status:Done` keeps the code. A key the map does not
+hold is an error that lists the keys it does; a scope with nothing in it says so instead of "no
+match". `--source NAME` is `-w source:NAME`.
 
 ## Sources
 
@@ -217,13 +245,32 @@ runbook in `wiki`, a ticket in Jira); `--source` narrows a query to some of them
 (tree-sitter), Markdown and text at their headings. `sync` or another `init` re-reads only the
 files whose size, time or content changed.
 
+### Signing in once
+
+```sh
+inventio login https://<site>.atlassian.net            # asks email and API token, tries them, keeps them
+inventio login postgresql://reader@db.internal/core    # asks the password, connects once, keeps it
+inventio sources                                       # each source's login: keyring, env, gh, driver or missing
+inventio logout https://<site>.atlassian.net
+```
+
+A login is kept in the operating system's keychain (Windows Credential Manager, macOS Keychain,
+Secret Service), never in the map, a mirror or a file beside your code, so `init` and `sync` work
+from any directory. It is kept per place: every space and project of one Atlassian site shares
+one login, and two sites keep two. `init` on a terminal asks for a login it does not have; run
+by an agent or a script it stops and names the `inventio login` to run. Variables still come
+first (`ATLASSIAN_EMAIL` and `ATLASSIAN_API_TOKEN`, `INVENTIO_SQL_PASSWORD`, the driver's own
+`PGPASSWORD`), for CI and agents handed their credentials. GitHub signs in through the GitHub
+CLI. A Linux machine without a keychain service has only the variables.
+
 ### Confluence and Jira
 
 ```sh
-export ATLASSIAN_EMAIL=you@example.com ATLASSIAN_API_TOKEN=...       # your own token: you index what you may read
 inventio init https://<site>.atlassian.net/wiki/spaces/OPS            # a Confluence space -> wiki-OPS
 inventio init https://<site>.atlassian.net/browse/SHOP --jql "updated >= -365d"   # Jira -> jira-SHOP
 ```
+
+Every request runs as the person who signed in, so a mirror holds only what they may read.
 
 A remote source is mirrored as Markdown under the data directory, one file per page or ticket,
 and indexed like a folder: the same chunks, links and judgments.
@@ -246,11 +293,30 @@ Connectors live in `inventio/connectors/`: one module per kind lists items with 
 turns one item into Markdown; mirroring, indexing and `read` are shared, so mail or chat is
 one more module.
 
+### GitHub issues and pull requests
+
+```sh
+gh auth login                                        # once, if the GitHub CLI is not signed in yet
+inventio init https://github.com/acme/shop           # -> gh-shop
+inventio query "why read from the replica" -w "item:pull state:merged"
+```
+
+Inventio keeps no GitHub token; each run asks the GitHub CLI for the one it holds (`gh auth
+token`), for github.com and for a GitHub Enterprise host the CLI is signed in to (`GH_TOKEN`,
+`GITHUB_TOKEN` or `GH_ENTERPRISE_TOKEN` without the CLI). One file per issue or pull request: the
+description, the comments, and for a pull request its reviews and every review comment under a
+heading with the file and line it is on and the last lines of its diff. `#12` and links to the
+repository's own items become relative links, so they are `citation` links in the map; the file
+defines `shop#12` and `acme/shop#12`, so a page or ticket that writes `acme/shop#12` links to it.
+Sync lists every item with its update time and fetches only what changed. The code is not
+fetched: index your clone with `inventio init <dir>`.
+
 ### Where the data lives
 
 ```sh
-pip install "inventio[data]" psycopg2-binary       # DuckDB, SQLAlchemy, Kafka, boto3; plus your database's driver
-inventio init postgresql://reader@db.internal/core  # password from PGPASSWORD or INVENTIO_SQL_PASSWORD
+uv tool install "inventio[laya,data] @ git+https://github.com/minhquan23102000/inventio" --with psycopg2-binary
+#   DuckDB, SQLAlchemy, Kafka, boto3, and your database's driver in the same environment (pymysql for MySQL ...)
+inventio init postgresql://reader@db.internal/core  # password from `inventio login`, INVENTIO_SQL_PASSWORD or PGPASSWORD
 inventio init "kafka://broker:9092?registry=http://registry:8081"
 inventio init s3://lake/warehouse/                  # AWS_* variables; AWS_ENDPOINT_URL for MinIO and the like
 ```
@@ -348,13 +414,21 @@ embedders over the whole corpus, while Inventio with a ranker is two-stage.
 - With dispositio as ranker and judge the whole path runs offline;
   `python benchmarks/local_proof.py <dir> "<question>"` fails if any connection is attempted.
 - The map holds source text. Keep it out of indexed trees and version control. Mirrors of
-  Confluence and Jira live beside it in the data directory; `drop` deletes a source's mirror.
+  Confluence, Jira and GitHub live beside it in the data directory; `drop` deletes a source's mirror.
+- Logins live in the operating system's keychain (`inventio login`), never in the map or a mirror.
 
 ## Limitations
 
-- Directories, Confluence Cloud, Jira Cloud, and the schemas of SQL databases, Kafka topics and
-  S3 datasets; no Slack or mail yet. Sync is on demand (`inventio sync`); nothing listens for
-  changes. A dbt project is read as its SQL files, not yet its `manifest.json` descriptions.
+- Directories, Confluence Cloud, Jira Cloud, GitHub issues and pull requests, and the schemas of
+  SQL databases, Kafka topics and S3 datasets; no Slack, mail, GitHub Discussions or wiki yet.
+  Sync is on demand (`inventio sync`); nothing listens for changes. A dbt project is read as its
+  SQL files, not yet its `manifest.json` descriptions.
+- A GitHub sync lists the whole repository and asks two more requests per changed pull request
+  (reviews, review comments) and one per issue with comments: a repository of a few thousand
+  items may meet the API's hourly limit on its first sync, which stops there and resumes on the
+  next. A bare `#12` in code or in another source names no repository and links nowhere.
+- Filtering by a connector's fields needs mirrors written by this version: the first `sync`
+  after upgrading fetches every Confluence page and Jira ticket once more.
 - Text inside images, diagrams and attached files is not read.
 - dispositio misses a paraphrase that needs an inference ("without loading the main database"
   for "from the replica") and finds one step of a numbered list less often than a section that

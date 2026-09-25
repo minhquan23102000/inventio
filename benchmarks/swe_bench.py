@@ -41,6 +41,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from data import data_dir  # noqa: E402
 from inventio.ingest import DOC_TYPES, ingest_source  # noqa: E402
 from inventio.rankers import make_ranker, ranker_tag  # noqa: E402
+from inventio.scope import Scope  # noqa: E402
 from inventio.search import bm25, rank_key, scope_types, widen_by_symbols, widen_by_type  # noqa: E402
 from inventio.store import connect  # noqa: E402
 
@@ -64,7 +65,7 @@ class Fixed:
 
 
 def strat_pools(con, q: str, base: list, src: str, depth: int) -> dict:
-    present = scope_types(con, [src])
+    present = scope_types(con, Scope.only([src]))
     corpus = dict(con.execute("SELECT f.type, count(*) FROM chunks c JOIN files f ON f.id = c.file_id "
                               "GROUP BY f.type").fetchall())
     total = sum(corpus.values()) or 1
@@ -76,12 +77,12 @@ def strat_pools(con, q: str, base: list, src: str, depth: int) -> dict:
     }
     pools = {"base": base}
     for arm, probs in choose.items():
-        pools[arm] = base + (widen_by_type(con, q, base, Fixed(probs), depth, [src]) if probs else [])
-    pools["sym"] = base + widen_by_symbols(con, q, base, depth, [src])
+        pools[arm] = base + (widen_by_type(con, q, base, Fixed(probs), depth, Scope.only([src])) if probs else [])
+    pools["sym"] = base + widen_by_symbols(con, q, base, depth, Scope.only([src]))
     pools["symfirst"] = pools["sym"][len(base):] + base  # the same pool, symbol hits ahead of BM25's
-    pools["code+sym"] = pools["code"] + widen_by_symbols(con, q, pools["code"], depth, [src])
+    pools["code+sym"] = pools["code"] + widen_by_symbols(con, q, pools["code"], depth, Scope.only([src]))
     for arm in ("all", "code", "under", "sym", "code+sym"):
-        pools[f"ctl-{arm}"] = bm25(con, q, len(pools[arm]), [src])
+        pools[f"ctl-{arm}"] = bm25(con, q, len(pools[arm]), Scope.only([src]))
     return pools
 
 
@@ -189,16 +190,16 @@ def main() -> int:
             t_index = time.time() - t
             q = inst["problem_statement"]
             t = time.time()
-            pools = {"base": bm25(con, q, args.pool, [src])}
+            pools = {"base": bm25(con, q, args.pool, Scope.only([src]))}
             t_bm25, added, probs = time.time() - t, [], {}
             if args.types:
                 t = time.time()
-                probs = predictor.types(q, {k: DOC_TYPES[k] for k in scope_types(con, [src])})
+                probs = predictor.types(q, {k: DOC_TYPES[k] for k in scope_types(con, Scope.only([src]))})
                 fixed = type("Fixed", (), {"cloud": True, "types": lambda self, q, types: probs})()
-                added = widen_by_type(con, q, pools["base"], fixed, args.type_limit or args.pool, [src])
+                added = widen_by_type(con, q, pools["base"], fixed, args.type_limit or args.pool, Scope.only([src]))
                 pools["types"] = pools["base"] + added
                 t_types = time.time() - t
-                pools["control"] = bm25(con, q, len(pools["types"]), [src])
+                pools["control"] = bm25(con, q, len(pools["types"]), Scope.only([src]))
             if args.strat:
                 t = time.time()
                 pools = strat_pools(con, q, pools["base"], src, args.type_limit or args.pool)

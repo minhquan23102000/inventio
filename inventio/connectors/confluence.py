@@ -70,7 +70,7 @@ def fetch_url(url: str) -> tuple[str, Doc] | None:
 
 
 class Remote:
-    FORMAT = 1  # raise when the Markdown written changes, so every mirror is written again
+    FORMAT = 2  # raise when the Markdown or the fields written change, so every mirror is written again
 
     def __init__(self, origin_url: str):
         self.origin = origin_url
@@ -104,19 +104,25 @@ class Remote:
         for i in range(0, len(ids), BATCH):
             params = {"id": ",".join(ids[i:i + BATCH]), "body-format": "storage", "limit": 250}
             batch = list(self._paged("/wiki/api/v2/pages", params))
-            people(self.api, [p["body"]["storage"]["value"] for p in batch], self.users)
+            people(self.api, [p["body"]["storage"]["value"] for p in batch], self.users,
+                   [a for p in batch for a in (p.get("authorId"), (p.get("version") or {}).get("authorId")) if a])
             for p in batch:
                 page = _Page(self.site, self.key, p["id"], self.paths[p["id"]], self.paths, self.by_title, self.users)
-                yield p["id"], Doc(page.markdown(p["title"], p["body"]["storage"]["value"]))
+                labels = [l["name"] for l in self._paged(f"/wiki/api/v2/pages/{p['id']}/labels", {"limit": 250})]
+                version = p.get("version") or {}
+                meta = {"space": self.key, "author": self.users.get(p.get("authorId") or "", ""),
+                        "editor": self.users.get(version.get("authorId") or "", ""), "labels": labels,
+                        "created": (p.get("createdAt") or "")[:10], "updated": (version.get("createdAt") or "")[:10]}
+                yield p["id"], Doc(page.markdown(p["title"], p["body"]["storage"]["value"]), meta=meta)
 
 
 ACCOUNT = re.compile(r'ri:account-id="([^"]+)"')
 
 
-def people(api, bodies: list[str], known: dict[str, str]) -> None:
-    """Display names for the people pages mention (`@Name`, an owner, a reviewer), added to `known`;
-    one request per hundred people not seen before."""
-    ids = sorted({a for b in bodies for a in ACCOUNT.findall(b)} - set(known))
+def people(api, bodies: list[str], known: dict[str, str], extra: list[str] = ()) -> None:
+    """Display names for the people pages mention (`@Name`, an owner, a reviewer) and for the
+    `extra` account ids (authors), added to `known`; one request per hundred people not seen before."""
+    ids = sorted(({a for b in bodies for a in ACCOUNT.findall(b)} | set(extra)) - set(known))
     for i in range(0, len(ids), 100):
         part = ids[i:i + 100]
         try:

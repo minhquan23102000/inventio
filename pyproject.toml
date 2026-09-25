@@ -9,7 +9,10 @@ description = "Local retrieval without embeddings: BM25 + source structure + cod
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "Apache-2.0" }
-dependencies = ["tree-sitter-language-pack>=1.0"]  # functions and classes as chunks; small wheels
+dependencies = [
+    "tree-sitter-language-pack>=1.0",  # functions and classes as chunks; small wheels
+    "keyring>=24",                     # logins kept in the OS keychain (`inventio login`)
+]
 
 [project.urls]
 Homepage = "https://github.com/minhquan23102000/inventio"
@@ -27,3 +30,6 @@ inventio = "inventio.cli:main"
 
 [tool.setuptools]
 packages = ["inventio", "inventio.connectors"]
+
+[tool.setuptools.package-data]
+inventio = ["skill/SKILL.md"]  # `inventio skill` copies it into .agents/skills

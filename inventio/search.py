@@ -8,6 +8,9 @@ import math
 import re
 from dataclasses import dataclass, field
 
+from .scope import Scope
+from .scope import where as scope_where
+
 WORD = re.compile(r"\w+", re.UNICODE)
 # letters only Vietnamese writes: đ, ơ, ư, ă, and the hook-above and dot-below tone marks
 VIETNAMESE = re.compile("[đĐơƠưƯăĂ\u1ea0-\u1ef9]")
@@ -70,19 +73,13 @@ FROM chunks c JOIN files f ON f.id = c.file_id JOIN sources s ON s.id = f.source
 """
 
 
-def _source_filter(sources: list[str] | None) -> tuple[str, list]:
-    if not sources:
-        return "", []
-    return f" AND s.name IN ({','.join('?' * len(sources))})", list(sources)
-
-
-def bm25(con, q: str, k: int, sources: list[str] | None = None, head_weight: float = 1.0,
+def bm25(con, q: str, k: int, scope: Scope | None = None, head_weight: float = 1.0,
          types: list[str] | None = None, categories: list[str] | None = None,
          files: list[int] | None = None, phrases: bool | None = None) -> list[Hit]:
     match = fts_query(q, phrases)
     if not match:
         return []
-    where, args = _source_filter(sources)
+    where, args = scope_where(scope)
     if types:
         where += f" AND f.type IN ({','.join('?' * len(types))})"
         args += list(types)
@@ -106,8 +103,8 @@ def bm25(con, q: str, k: int, sources: list[str] | None = None, head_weight: flo
 TYPE_MIN_P = 0.25  # a type the ranker gives at least this probability widens the pool
 
 
-def scope_types(con, sources: list[str] | None = None) -> list[str]:
-    where, args = _source_filter(sources)
+def scope_types(con, scope: Scope | None = None) -> list[str]:
+    where, args = scope_where(scope, chunks=False)
     rows = con.execute(
         "SELECT DISTINCT f.type FROM files f JOIN sources s ON s.id = f.source_id "
         f"WHERE f.type IS NOT NULL{where} ORDER BY f.type",
@@ -117,7 +114,7 @@ def scope_types(con, sources: list[str] | None = None) -> list[str]:
 
 
 def widen_by_type(con, q: str, pool: list[Hit], ranker, per_type: int,
-                  sources: list[str] | None = None) -> list[Hit]:
+                  scope: Scope | None = None) -> list[Hit]:
     """BM25's best chunks inside each document type the ranker thinks the answer is.
 
     Only ever adds to the pool: a wrong guess costs a few extra candidates, never an answer
@@ -126,16 +123,18 @@ def widen_by_type(con, q: str, pool: list[Hit], ranker, per_type: int,
     from .ingest import DOC_TYPES
     from .rankers import CloudRefused
 
-    present = scope_types(con, sources)
+    present = scope_types(con, scope)
     if len(present) < 2:
         return []
     if getattr(ranker, "cloud", False):  # widening may add any chunk in scope, so all of it must be public
-        where, args = _source_filter(sources)
-        private = [r["name"] for r in con.execute(f"SELECT name FROM sources s WHERE public = 0{where}", args)]
+        where, args = scope_where(scope, chunks=False)
+        private = [r["name"] for r in con.execute(
+            "SELECT DISTINCT s.name FROM files f JOIN sources s ON s.id = f.source_id "
+            f"WHERE s.public = 0{where}", args)]
         if private:
             raise CloudRefused(
                 f"--types with ranker 'typesafe' could send text from non-public source(s) {', '.join(private)}; "
-                "restrict with --source, re-init them with --public, or use --ranker dispositio"
+                "narrow with --source or -w, re-init them with --public, or use --ranker dispositio"
             )
     probs = ranker.types(q, {t: DOC_TYPES.get(t, t) for t in present})
     if not probs:
@@ -144,7 +143,7 @@ def widen_by_type(con, q: str, pool: list[Hit], ranker, per_type: int,
     have = {h.id for h in pool}
     out = []
     for t in chosen:
-        for h in bm25(con, q, per_type, sources, types=[t]):
+        for h in bm25(con, q, per_type, scope, types=[t]):
             if h.id not in have:
                 have.add(h.id)
                 h.via = f"type:{t}"
@@ -153,13 +152,13 @@ def widen_by_type(con, q: str, pool: list[Hit], ranker, per_type: int,
 
 
 def widen_by_category(con, q: str, pool: list[Hit], categories: list[str], limit: int,
-                      sources: list[str] | None = None) -> list[Hit]:
+                      scope: Scope | None = None) -> list[Hit]:
     """BM25's best chunks among those that keep one of the query's predicted categories."""
     if not categories or limit <= 0:
         return []
     have = {h.id for h in pool}
     out = []
-    for h in bm25(con, q, len(pool) + limit, sources, categories=categories):
+    for h in bm25(con, q, len(pool) + limit, scope, categories=categories):
         if h.id not in have:
             h.bm25_rank, h.via = None, "category:" + ",".join(categories)
             out.append(h)
@@ -196,17 +195,18 @@ def query_symbols(q: str) -> tuple[set[str], set[str]]:
     return idents, paths
 
 
-def widen_by_symbols(con, q: str, pool: list[Hit], limit: int, sources: list[str] | None = None) -> list[Hit]:
+def widen_by_symbols(con, q: str, pool: list[Hit], limit: int, scope: Scope | None = None) -> list[Hit]:
     """BM25's best chunks of files whose path the query names, then chunks that define a name the
     query uses (a name defined in more than MAX_DEFINERS places is skipped). Code decides both."""
     idents, paths = query_symbols(q)
     have, out = {h.id for h in pool}, []
-    where, args = _source_filter(sources)
+    where, args = scope_where(scope)
     if paths:
+        fwhere, fargs = scope_where(scope, chunks=False)
         files = [r["id"] for r in con.execute(
-            f"SELECT f.id, f.path FROM files f JOIN sources s ON s.id = f.source_id WHERE 1 = 1{where}", args)
+            f"SELECT f.id, f.path FROM files f JOIN sources s ON s.id = f.source_id WHERE 1 = 1{fwhere}", fargs)
             if any((s := _stem(r["path"])) == p or s.endswith("/" + p) for p in paths)][:20]
-        for h in bm25(con, q, 3 * len(files), sources, files=files) if files else []:
+        for h in bm25(con, q, 3 * len(files), scope, files=files) if files else []:
             if h.id not in have:
                 have.add(h.id)
                 h.bm25_rank, h.via = None, "path"
@@ -240,7 +240,7 @@ def _fold(w: str) -> str:
     return "".join(ch for ch in unicodedata.normalize("NFKD", w) if not unicodedata.combining(ch))
 
 
-def neighbours_of(con, seed: Hit, sources: list[str] | None = None) -> list[int]:
+def neighbours_of(con, seed: Hit, scope: Scope | None = None) -> list[int]:
     """Chunks of other files that share this chunk's most distinctive words: its 24 words with the
     highest tf-idf, as one BM25 query."""
     from collections import Counter
@@ -256,12 +256,12 @@ def neighbours_of(con, seed: Hit, sources: list[str] | None = None) -> list[int]
                               f"({','.join('?' * len(part))})", part).fetchall())
     score = {w: c * math.log(n / df[w]) for w, c in tf.items() if df.get(w, 0) >= 2}
     q = " ".join(sorted(score, key=lambda w: -score[w])[:NEIGHBOUR_TERMS])
-    hits = bm25(con, q, NEIGHBOUR_FETCH, sources) if q else []
+    hits = bm25(con, q, NEIGHBOUR_FETCH, scope) if q else []
     return [h.id for h in hits if (h.source, h.path) != (seed.source, seed.path)][:NEIGHBOURS_PER_SEED]
 
 
 def widen_by_neighbours(con, pool: list[Hit], seeds: int = 5, limit: int = 10,
-                        sources: list[str] | None = None) -> list[Hit]:
+                        scope: Scope | None = None) -> list[Hit]:
     """The neighbours of the top seeds that BM25 did not already put in the pool, those shared by
     the most seeds first. A pseudo-relevance feedback per seed, decided by code: on SciFact it
     finds more answers than the same neighbours pruned by a model (`about` links, facts.py)."""
@@ -269,7 +269,7 @@ def widen_by_neighbours(con, pool: list[Hit], seeds: int = 5, limit: int = 10,
 
     have, votes = {h.id for h in pool}, Counter()
     for h in pool[:seeds]:
-        votes.update(b for b in neighbours_of(con, h, sources) if b not in have)
+        votes.update(b for b in neighbours_of(con, h, scope) if b not in have)
     out = []
     for b, _ in votes.most_common(limit):
         row = con.execute(HIT_SQL + " WHERE c.id = ?", [b]).fetchone()
@@ -277,7 +277,7 @@ def widen_by_neighbours(con, pool: list[Hit], seeds: int = 5, limit: int = 10,
     return out
 
 
-def expand(con, pool: list[Hit], seeds: int, limit: int, sources: list[str] | None = None,
+def expand(con, pool: list[Hit], seeds: int, limit: int, scope: Scope | None = None,
            rels: tuple[str, ...] | None = None) -> list[Hit]:
     """Chunks linked to the top seeds that BM25 did not already put in the pool."""
     seed_ids = [h.id for h in pool[:seeds]]
@@ -297,7 +297,7 @@ def expand(con, pool: list[Hit], seeds: int, limit: int, sources: list[str] | No
         """,
         seed_ids + rel_args + seed_ids + rel_args,
     ).fetchall()
-    where, args = _source_filter(sources)
+    where, args = scope_where(scope)
     out = []
     for r in rows:
         if r["other"] in have:
@@ -342,39 +342,39 @@ def rank_key(h: Hit) -> tuple[bool, float]:
 
 
 def widen_by_facts(con, q: str, pool: list[Hit], judge, *, limit: int = 10, seeds: int = 5,
-                   sources: list[str] | None = None) -> list[Hit]:
+                   scope: Scope | None = None) -> list[Hit]:
     """The judge predicts which content categories the query is about; BM25's best chunks of those
     categories join the pool, then the chunks the top seeds are linked to by judged `about` links."""
     from .facts import kept_categories, query_categories
 
     cats = kept_categories(query_categories(con, judge, q))
-    added = widen_by_category(con, q, pool, cats, limit, sources)
-    return added + expand(con, pool + added, seeds, limit, sources, rels=("about",))
+    added = widen_by_category(con, q, pool, cats, limit, scope)
+    return added + expand(con, pool + added, seeds, limit, scope, rels=("about",))
 
 
 def search(con, q: str, *, k: int = 5, pool: int = 30, ranker=None, expand_links: bool = False,
            by_type: bool = False, type_limit: int | None = None, facts=None, facts_limit: int = 10,
            symbols: bool = True, neighbours: bool = False, seeds: int = 5, expand_limit: int = 10,
-           sources: list[str] | None = None) -> list[Hit]:
+           scope: Scope | None = None) -> list[Hit]:
     """`facts` is a judge (facts.make_judge) that predicts the query's content categories."""
-    hits = bm25(con, q, pool, sources)
+    hits = bm25(con, q, pool, scope)
     named = []
     if symbols:
         # files and definitions the question names. SWE-bench Lite `mixed`: the answer file in the
         # pool 63% -> 73% for 3 more candidates; nDCG@10 against a BM25 pool of the same size
         # 0.430 -> 0.495 ranked by an earlier dispositio, 0.401 -> 0.456 unranked with these hits first
-        named = widen_by_symbols(con, q, hits, pool, sources)
+        named = widen_by_symbols(con, q, hits, pool, scope)
         hits += named
     if by_type and ranker is not None:
         # as deep inside each predicted type as the pool goes overall: at depth 10, BM25's best
         # chunks of the predicted type were nearly always in the pool already (SWE-bench smoke)
-        hits += widen_by_type(con, q, hits, ranker, type_limit or pool, sources)
+        hits += widen_by_type(con, q, hits, ranker, type_limit or pool, scope)
     if facts is not None:
-        hits += widen_by_facts(con, q, hits, facts, limit=facts_limit, seeds=seeds, sources=sources)
+        hits += widen_by_facts(con, q, hits, facts, limit=facts_limit, seeds=seeds, scope=scope)
     if neighbours:
-        hits += widen_by_neighbours(con, hits, seeds, expand_limit, sources)
+        hits += widen_by_neighbours(con, hits, seeds, expand_limit, scope)
     if expand_links:
-        hits += expand(con, hits, seeds, expand_limit, sources)
+        hits += expand(con, hits, seeds, expand_limit, scope)
     if ranker is not None and hits:
         scores = ranker.score(q, hits)
         for h, s in zip(hits, scores):
