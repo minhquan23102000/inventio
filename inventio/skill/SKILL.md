@@ -71,6 +71,9 @@ Sources are private unless `init` gets `--public`. Never add `--public`, `--rank
    not cross languages: when the question is in one language (Vietnamese) and the documents may
    be in another (English), translate the whole question into the documents' language and ask
    again before concluding; a translated question finds more than a few translated keywords.
+   If rephrasing still finds nothing that answers, ask once more with `--pool 30`: the reranker
+   reads BM25's best 15 by default, and some answers sit at ranks 16-30 (slower, about twice
+   the reading time).
 2. `inventio read <coordinate>` for the lines behind each promising hit; the snippet in the
    query output is cut.
 3. `inventio show <coordinate>` for where it leads: the code a runbook names, the ticket a page
@@ -86,6 +89,9 @@ Jira or GitHub URL someone pasted, from the mirror or fetched live.
 
 If the reranker cannot load (MemoryError, no PyTorch, no network for its first download), add
 `--ranker none`: the same pool in BM25 order, so read a few more hits before concluding.
+
+A query may print that a newer dispositio is released. Tell the user; run `inventio update` only
+when they agree (it downloads the model again).
 
 ## Narrow before searching: `-w`
 
