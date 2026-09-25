@@ -65,8 +65,8 @@ def load_laya(name: str):
 
 def cached(model: str, subfolder: str | None) -> str | None:
     """The downloaded snapshot of a Hugging Face checkpoint, found without the network; None for
-    a local directory or one not downloaded yet. A cached checkpoint is not refreshed: delete it
-    from the Hugging Face cache (`hf cache delete`) to fetch a newer release."""
+    a local directory or one not downloaded yet. A cached checkpoint is not refreshed here:
+    `inventio update` fetches a newer release, and `update_notice` says when there is one."""
     if os.path.exists(model):
         return None
     from huggingface_hub import snapshot_download
@@ -77,6 +77,54 @@ def cached(model: str, subfolder: str | None) -> str | None:
             prefix + f for f in ("rl_agent_config.json", "model.safetensors", "tokenizer/*", "encoder/*")])
     except Exception:  # not in the cache (or only part of it): laya.load downloads it
         return None
+
+
+CHECK_EVERY = 86_400  # seconds between two looks at the released dispositio's latest revision
+
+
+def _cached_revision() -> str | None:
+    """The revision of the released dispositio this machine loads (a snapshot directory's name)."""
+    path = cached(DISPOSITIO, None)
+    return os.path.basename(os.path.normpath(path)) if path else None
+
+
+def update_notice() -> str | None:
+    """One line when Hugging Face has a newer dispositio than the one cached here, else None.
+    Asks at most once a day and sends nothing but the model's name (no query, no document);
+    never when INVENTIO_OFFLINE or HF_HUB_OFFLINE is set, or INVENTIO_DISPOSITIO_MODEL picks
+    another checkpoint. Any failure is silent: a query must not fail over a release check."""
+    if os.environ.get("INVENTIO_OFFLINE") or os.environ.get("HF_HUB_OFFLINE") or os.environ.get("INVENTIO_DISPOSITIO_MODEL"):
+        return None
+    from .store import data_home
+
+    state_path = data_home() / "update.json"
+    try:
+        state = json.loads(state_path.read_text())
+    except (OSError, ValueError):
+        state = {}
+    try:
+        if time.time() - state.get("checked", 0) >= CHECK_EVERY:
+            from huggingface_hub import HfApi
+
+            state = {"checked": time.time(), "latest": HfApi().model_info(DISPOSITIO, timeout=3).sha}
+            state_path.parent.mkdir(parents=True, exist_ok=True)
+            state_path.write_text(json.dumps(state))
+        have = _cached_revision()
+    except Exception:
+        return None
+    if have and state.get("latest") and state["latest"] != have:
+        return "inventio: a newer dispositio is released; `inventio update` fetches it (INVENTIO_OFFLINE=1 stops this check)"
+    return None
+
+
+def update() -> tuple[str | None, str]:
+    """Fetch the released dispositio's latest revision into the Hugging Face cache; the revisions
+    before and after. The earlier snapshot stays in the cache until `hf cache delete`."""
+    from huggingface_hub import snapshot_download
+
+    before = _cached_revision()
+    path = snapshot_download(DISPOSITIO, allow_patterns=["rl_agent_config.json", "model.safetensors", "tokenizer/*", "encoder/*"])
+    return before, os.path.basename(os.path.normpath(path))
 
 
 def ranker_tag(name: str) -> str:
