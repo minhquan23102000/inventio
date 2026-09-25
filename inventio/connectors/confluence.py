@@ -316,7 +316,7 @@ class _Page:
             text = " ".join(self.inlines(n.kids).split())
             return [f"{'#' * min(int(t[1]) + 1, 6)} {text}", ""] if text else []  # h1 sits under the page title
         if t in ("ul", "ol"):
-            return self.list(n, t == "ol")
+            return self.list_items(n, t == "ol")
         if t == "table":
             return self.table(n)
         if t == "pre":
@@ -334,7 +334,7 @@ class _Page:
             return []
         return self.blocks(n.kids)  # p, div, layouts, sections
 
-    def list(self, n: _Node, ordered: bool) -> list[str]:
+    def list_items(self, n: _Node, ordered: bool) -> list[str]:
         out, i = [], 0
         for li in (k for k in n.nodes() if k.tag == "li"):
             lines = [l for l in self.blocks(li.kids) if l]
