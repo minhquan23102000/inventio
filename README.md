@@ -406,6 +406,29 @@ embedders over the whole corpus, while Inventio with a ranker is two-stage.
   incident report and code, written after training (`python benchmarks/example_bench.py none
   dispositio typesafe`): the answer is first for 9 with dispositio, 6 with BM25, 13 with Jev.
 
+### Speed on real sources
+
+One team's sources, indexed into one map on an Apple M3 laptop (16 GB), 2026-09-25. Times are
+the ones `init` and `sync` print.
+
+| Source | Items | Chunks | First `init` | `sync`, nothing changed |
+|---|---|---|---|---|
+| dbt project (folder) | 55 files | 153 | 1.0 s | 0.3 s |
+| Airflow DAG repository (folder) | 1,177 files | 4,786 | 6.8 s | 0.3 s |
+| Confluence space | 1,180 pages | 7,200 | 315.6 s | 3.3 s |
+| Jira project, `updated >= -365d` | 1,396 tickets | 2,836 | 30.1 s | 6.6 s |
+
+- Folders are read locally: 1,177 files in under 7 s. Confluence and Jira spend their time
+  fetching: about 4 pages a second from Confluence, 46 tickets a second from Jira. `sync` lists
+  versions only, so a source with no change comes back in seconds.
+- The whole map was 62 MB on disk, with 16 MB of Markdown mirrors beside it.
+- A query with BM25 alone (`--ranker none`) took 0.2 s over the 15,000 chunks. With
+  dispositio one `inventio query` took 8.7 to 10 s: about 1.8 s importing PyTorch and Laya,
+  3.2 s loading the model, and 3 s reading the 30 candidates (for one query, 33 windows and
+  18,000 tokens through 322M parameters, about what the M3's GPU computes in that time). The
+  table's 0.4-0.9 s is the reading alone, on an RTX 5070 laptop GPU, in one process that
+  loads the model once for every query; each `inventio query` pays the import and the load.
+
 ## Privacy
 
 - Every source is private unless `init` gets `--public`.
