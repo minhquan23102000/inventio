@@ -69,7 +69,8 @@ Sources are private unless `init` gets `--public`. Never add `--public`, `--rank
    reads meaning, BM25 needs the words the documents use, so a second query with the likely
    terms (a table name, a job name, a ticket key) often finds what the first missed. BM25 does
    not cross languages: when the question is in one language (Vietnamese) and the documents may
-   be in another (English), ask again in the documents' language before concluding.
+   be in another (English), translate the whole question into the documents' language and ask
+   again before concluding; a translated question finds more than a few translated keywords.
 2. `inventio read <coordinate>` for the lines behind each promising hit; the snippet in the
    query output is cut.
 3. `inventio show <coordinate>` for where it leads: the code a runbook names, the ticket a page
