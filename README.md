@@ -135,7 +135,7 @@ Rule, with p=0.38.
 
 ```mermaid
 flowchart LR
-    Q["question"] --> B["BM25:<br/>30 best chunks"] --> P["pool"]
+    Q["question"] --> B["BM25:<br/>15 best chunks"] --> P["pool"]
     Q --> N["names it contains<br/>nightly_backup, jobs/backup.py:<br/>the chunk that defines each"] --> P
     Q -. "--types --facts<br/>--neighbours --links" .-> W["more candidates:<br/>the document types it asks for,<br/>chunks of its categories and their links,<br/>other files sharing the top hits' rare words,<br/>what the top hits cite or mention"] -.-> P
     P --> R["ranker: does this passage<br/>answer the question?<br/>dispositio · Jev · none"] --> O["passages with path:lines,<br/>grouped by type,<br/>each with its links"]
@@ -340,12 +340,19 @@ are partitions of one dataset, not datasets of their own.
 [dispositio](https://huggingface.co/minhquan2310/dispositio), the second canon of rhetoric
 after *inventio*, is [Laya](https://github.com/NandhaKishorM/laya) (mmBERT-base, 322M) fine-tuned
 for the two questions Inventio asks: does this passage answer the query, and what does this
-passage do for its reader. It runs on a laptop GPU or a CPU and nothing leaves the machine.
+passage do for its reader. It runs on a laptop GPU or a CPU and no query or document leaves the
+machine.
 
 ```sh
 inventio query "..."                      # dispositio ranks by default, downloaded once from Hugging Face
 inventio facts --source wiki              # categories, judged by dispositio
+inventio update                           # fetch a newer release
 ```
+
+Once a day a query asks Hugging Face for the released dispositio's latest revision, sending the
+model's name and nothing else, and prints one line when a newer one is out. The downloaded model
+is never replaced on its own: `inventio update` fetches the new one and stops the model server so
+the next query loads it. `INVENTIO_OFFLINE=1` (or `HF_HUB_OFFLINE=1`) turns the check off.
 
 `--ranker laya` is Laya as published, `--ranker none` BM25 order. `INVENTIO_DISPOSITIO_MODEL`
 points `dispositio` at another checkpoint: a directory or a Hugging Face id, such as a fine-tune
@@ -424,8 +431,9 @@ embedders over the whole corpus, while Inventio with a ranker is two-stage.
 - Every source is private unless `init` gets `--public`.
 - Jev refuses (exit code 3) and sends nothing when any candidate comes from a private source;
   `facts --judge typesafe` refuses a private source the same way.
-- With dispositio as ranker and judge the whole path runs offline;
-  `python benchmarks/local_proof.py <dir> "<question>"` fails if any connection is attempted.
+- With dispositio as ranker and judge the whole path runs offline, apart from the daily release
+  check above, which carries no query or text; `python benchmarks/local_proof.py <dir>
+  "<question>"` (Hugging Face offline) fails if any connection is attempted.
 - The map holds source text. Keep it out of indexed trees and version control. Mirrors of
   Confluence, Jira and GitHub live beside it in the data directory; `drop` deletes a source's mirror.
 - Logins live in the operating system's keychain (`inventio login`), never in the map or a mirror.

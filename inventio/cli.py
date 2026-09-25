@@ -395,6 +395,12 @@ def cmd_query(args) -> int:
     except CloudRefused as e:
         print(str(e), file=sys.stderr)
         return 3
+    if args.ranker == "dispositio":
+        from .rankers import update_notice
+
+        notice = update_notice()
+        if notice:
+            print(notice, file=sys.stderr)
     if args.json:
         rows = [{**h.as_dict(), "url": web_url(h.root, h.path, h.heading_path)} for h in hits]
         print(json.dumps(rows, ensure_ascii=False, indent=2))
@@ -474,6 +480,24 @@ def cmd_serve(args) -> int:
         print("stopped" if serve.stop() else "no server running")
         return 0
     return serve.serve(args.idle)
+
+
+def cmd_update(args) -> int:
+    from . import serve
+    from .rankers import update
+
+    try:
+        before, after = update()
+    except ImportError:
+        print("dispositio is not installed: install inventio with the `laya` extra", file=sys.stderr)
+        return 2
+    if before == after:
+        print(f"dispositio is up to date ({after[:12]})")
+        return 0
+    stopped = serve.stop()  # a running server still holds the old weights
+    print(f"dispositio {before[:12] if before else '(none)'} -> {after[:12]}"
+          + ("; model server stopped, the next query loads the new one" if stopped else ""))
+    return 0
 
 
 def main(argv=None) -> int:
@@ -624,6 +648,9 @@ there. Every command prints source:path:start-end coordinates that read and show
                    help="exit after this many seconds without a request (default 900)")
     s.add_argument("--stop", action="store_true", help="stop the running server")
     s.set_defaults(fn=cmd_serve)
+
+    s = sub.add_parser("update", help="fetch the latest released dispositio (queries say when there is one)")
+    s.set_defaults(fn=cmd_update)
 
     s = sub.add_parser("bench", help="measure a configuration on questions with known answers")
     s.add_argument("file", help="JSON Lines: question, source, path, start_line, end_line")
