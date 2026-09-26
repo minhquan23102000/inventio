@@ -75,5 +75,33 @@
     "recall@30chunks": 0.8151,
     "sec_per_query": 0.2,
     "timed_queries": 119
+  },
+  "abl-instr": {
+    "queries": 119,
+    "ndcg@10": 0.4077,
+    "recall@30chunks": 0.8151,
+    "sec_per_query": 0.188,
+    "timed_queries": 119
+  },
+  "abl-synth6": {
+    "queries": 119,
+    "ndcg@10": 0.4353,
+    "recall@30chunks": 0.8151,
+    "sec_per_query": 0.191,
+    "timed_queries": 119
+  },
+  "abl-synth1": {
+    "queries": 119,
+    "ndcg@10": 0.401,
+    "recall@30chunks": 0.8151,
+    "sec_per_query": 0.2,
+    "timed_queries": 119
+  },
+  "abl-base": {
+    "queries": 119,
+    "ndcg@10": 0.4185,
+    "recall@30chunks": 0.8151,
+    "sec_per_query": 0.188,
+    "timed_queries": 119
   }
 }

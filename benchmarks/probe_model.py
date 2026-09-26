@@ -13,6 +13,9 @@ synth_held keeps back):
   answer stays above it.
 - mask: an answer rewritten to share few words with the query must keep its score (mean change),
   and rewritten answers must still rank above rewritten non-answers (AUC).
+- link: the held-out seventh of the link questions (`link_both_top5_<tag>`), against BM25's order.
+  A model that trained on the link rows scores them far higher than on the held-out ones, which is
+  memory, not the skill: read the two numbers together.
 """
 
 import json
@@ -39,6 +42,37 @@ def auc(s, t) -> float:
     s, t = np.asarray(s, float), np.asarray(t, bool)
     p, n = s[t], s[~t]
     return float((p[:, None] > n[None]).mean() + 0.5 * (p[:, None] == n[None]).mean())
+
+
+def links(tag: str) -> dict:
+    """Link questions (finetune_laya.synth_rows, `link`): a question only passages A and B answer
+    together, both labelled PART_P. They are how the model learns to answer a fact link. Scored on
+    the held-out seventh alone: whether both halves reach the top 5 of a pool of A, B and BM25's 20
+    says the model learned to read the pair, and BM25's own order says what that has to beat."""
+    from inventio.rankers import LayaRanker
+    from inventio.search import HIT_SQL, Hit, bm25
+    from inventio.store import connect
+
+    rows = [r for r in map(json.loads, (data_dir(None) / "synth" / "link_questions.jsonl").open(encoding="utf-8"))
+            if synth_held(r["id"]) and r["out"]["possible"] and r["out"]["question"].strip()]
+    pools, cons = [], {}
+    for r in rows:
+        con = cons.setdefault(r["src"], connect(data_dir(None) / "beir" / r["src"] / "inventio.db"))
+        halves = [con.execute(HIT_SQL + " WHERE f.path = ? AND c.text = ?", (r[f"{k}_path"], r[k])).fetchone()
+                  for k in "ab"]
+        if not all(halves):
+            continue
+        q = r["out"]["question"]
+        bm = bm25(con, q, 20)
+        rank = {h.id: h.bm25_rank for h in bm}
+        halves = [Hit(**{**dict(h), "public": bool(h["public"]), "bm25_rank": rank.get(h["id"])}) for h in halves]
+        pools.append((q, [h for h in bm if h.id not in {x.id for x in halves}] + halves, {x.id for x in halves}))
+    ranker = LayaRanker("dispositio")
+    orders = {"bm25": [[h.id for h in sorted(p, key=lambda h: h.bm25_rank or 99)] for _, p, _ in pools],
+              tag: [[h.id for h, _ in sorted(zip(p, ranker.score(q, p)), key=lambda x: -x[1])]
+                    for q, p, _ in pools]}
+    return {f"link_both_top5_{k}": sum(all(x in rk[:5] for x in g) for rk, (_, _, g) in zip(v, pools))
+            for k, v in orders.items()} | {"link_n": len(pools)}
 
 
 def probe(agent, holdout: Path) -> dict:
@@ -96,7 +130,7 @@ def main() -> int:
     for d in sys.argv[1:]:
         os.environ["INVENTIO_DISPOSITIO_MODEL"] = d
         agent, tag = load_laya("dispositio")
-        res = probe(agent, holdout)
+        res = probe(agent, holdout) | links(tag.split("/")[-1])
         ok = {k: bool(eval(f"{res[k]} {rule}")) for k, rule in PASS.items() if res.get(k) is not None}
         print(tag, json.dumps(res))
         print("  passes:", ok, "ALL" if all(ok.values()) else "NOT ALL", flush=True)
