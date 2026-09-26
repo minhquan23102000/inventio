@@ -150,7 +150,7 @@ The pool of each query is built three ways: `base` (BM25 30), `facts` (base plus
 chunks of the query's predicted categories and the chunks linked to the top hits by judged
 `about` links) and `control` (BM25 with as many candidates as `facts`). With `--mlt`, two more:
 `about` (base plus the judged links only) and `mlt` (base plus the same link candidates,
-unjudged: `search.widen_by_neighbours`, the code behind `--neighbours`). Each distinct chunk
+unjudged: `search.widen_by_neighbours`, on by default with a ranker, `--no-neighbours`). Each distinct chunk
 is scored once per query, so the arms differ only in their pools. `facts_vs_control` and
 `about_vs_mlt` are paired per-query comparisons with a bootstrap 95% interval. Per-query rows
 are in `results/beir-<name>/arms.jsonl`, totals in its `summary.json` under `arms`.
@@ -177,7 +177,7 @@ StackOverflow QA 80.5%, **83.1%**, 82.4%. Pools grow from 30 to about 47 candida
   chunks), so its category pool was close to more BM25; the new set partitions (the largest
   category holds 31-79% on four unseen collections) and has yet to be measured here.
 
-Judged links against the same candidates unjudged (`--neighbours`):
+Judged links against the same candidates unjudged (the default neighbours):
 
 | Benchmark | Ranker | about links (judged) | neighbours (unjudged) | neighbours − about (95% CI) |
 |---|---|---|---|---|
