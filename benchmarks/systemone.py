@@ -418,33 +418,45 @@ def cmd_disp(a):
             "ms_p90": round(ms[int(len(ms) * 0.9)], 1)})
 
 
-def cmd_gate(a):
-    kev = {r["qid"]: r for r in map(json.loads, open(ROWS / f"{a.kev}-{a.set}.jsonl", encoding="utf-8"))}
-    v3 = {r["qid"]: r for r in map(json.loads, open(ROWS / f"{a.v3}-{a.set}-disp.jsonl", encoding="utf-8"))}
-
-    has_line = any("where_line" in r["pos"] for r in kev.values())
-
-    def kev_top1(r):
+def load_run(tag, set):
+    """Per-query top-1 correctness and `exists` scores, from a spike run or a dispositio run.
+    `top1` is the passage holding the top-ranked line when the run asked the line question, else the
+    top-ranked passage, and None when the query's answer was not in the pool."""
+    disp = ROWS / f"{tag}-{set}-disp.jsonl"
+    if disp.exists():
+        return {r["qid"]: {"top1": r["top1"], "pos": r["exists_pos"], "neg": r["exists_neg"], "line": False}
+                for r in map(json.loads, disp.open(encoding="utf-8"))}
+    out = {}
+    for r in map(json.loads, (ROWS / f"{tag}-{set}.jsonl").open(encoding="utf-8")):
         p = r["pos"]
-        return (p["top_line_owner"] if "top_line_owner" in p else p["top_passage"]) in p["gold"]
+        line = "top_line_owner" in p
+        top1 = None if not p["gold"] else ((p["top_line_owner"] if line else p["top_passage"]) in p["gold"])
+        out[r["qid"]] = {"top1": top1, "pos": p["exists"], "neg": r["neg"]["exists"], "line": line}
+    return out
 
-    # one metric per comparison: the top-ranked line's passage when the run asked the line question,
-    # and only rows that answered it (a query whose pool exceeds 255 lines gets no line question)
-    both = [q for q in kev if q in v3 and kev[q]["pos"]["gold"] and v3[q]["top1"] is not None
-            and (not has_line or "top_line_owner" in kev[q]["pos"])]
-    dropped = [q for q in kev if q in v3 and kev[q]["pos"]["gold"] and (has_line and "top_line_owner" not in kev[q]["pos"])]
-    x = [kev_top1(kev[q]) for q in both]
-    y = [v3[q]["top1"] for q in both]
+
+def cmd_gate(a):
+    A, B = load_run(a.kev, a.set), load_run(a.v3, a.set)
+    has_line = any(v["line"] for v in A.values())
+    # one metric per comparison: `top1` from both runs, on the queries that answered the line question
+    both = [q for q in A if q in B and A[q]["top1"] is not None and B[q]["top1"] is not None
+            and (not has_line or A[q]["line"])]
+    dropped = [q for q in A if q in B and A[q]["top1"] is not None and has_line and not A[q]["line"]]
+    x = [A[q]["top1"] for q in both]
+    y = [B[q]["top1"] for q in both]
     d = [i - j for i, j in zip(x, y)]
     rng = random.Random(0)
-    boots = sorted(sum(rng.choice(d) for _ in d) / len(d) for _ in range(2000))
-    s = {"set": a.set, "n": len(both), "dropped_no_line_question": len(dropped), f"top1_{a.kev}": round(sum(x) / len(x), 3), f"top1_{a.v3}": round(sum(y) / len(y), 3),
-         "diff": round(sum(d) / len(d), 3), "diff_lo": round(boots[50], 3), "diff_hi": round(boots[1949], 3),
+    boots = sorted(sum(rng.choice(d) for _ in d) / len(d) for _ in range(2000)) if d else [0.0]
+    s = {"set": a.set, "n": len(both), "dropped_no_line_question": len(dropped),
+         f"top1_{a.kev}": round(sum(x) / len(x), 3) if x else None,
+         f"top1_{a.v3}": round(sum(y) / len(y), 3) if y else None,
+         "diff": round(sum(d) / len(d), 3) if d else None,
+         "diff_lo": round(boots[50], 3), "diff_hi": round(boots[1949], 3),
          "wins": sum(i > 0 for i in d), "losses": sum(i < 0 for i in d),
-         "exists_auc_kev": round(auc([kev[q]["pos"]["exists"] for q in kev if kev[q]["pos"]["gold"]],
-                                     [kev[q]["neg"]["exists"] for q in kev]), 3),
-         "exists_auc_v3": round(auc([r["exists_pos"] for r in v3.values() if r["top1"] is not None],
-                                    [r["exists_neg"] for r in v3.values()]), 3)}
+         f"exists_auc_{a.kev}": round(auc([v["pos"] for v in A.values() if v["top1"] is not None],
+                                          [v["neg"] for v in A.values()]), 3),
+         f"exists_auc_{a.v3}": round(auc([v["pos"] for v in B.values() if v["top1"] is not None],
+                                         [v["neg"] for v in B.values()]), 3)}
     record("gate", f"{a.kev}-vs-{a.v3}", a.set, s)
 
 

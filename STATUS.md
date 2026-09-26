@@ -206,12 +206,13 @@ repository because they name internal documents.
   paragraphs being where the answer is read. (b) The builder was missing `data.py`'s filter for
   vague queries ("I have a question"), so ~100 more topics were in it. Both fixed in
   `benchmarks/systemone.py`: the file is now MD2D 2,955 positive + 4,365 negative, SWE 107 + 107.
-  v1 trains on the earlier file (`<data>/s1/data/train_v1s.jsonl` in `%TEMP%/s1/data`, kept as
-  `*.run1.jsonl`); a v1.1 would train on the fixed one.
+  v1 trained on the earlier file, kept beside the run as `runs/s1-v1/records.jsonl`
+  (sha256 `4202a8f6…`, 58.7 MB); a v1.1 would train on the fixed one.
 - **D4 result: the first fine-tune (`runs/s1-v1`) — 1 of 3 gates met.** Kev-0.8B + LoRA (11.3M
   trainable), 3,963 records, 1 epoch, 98 min on the 5070 (14.0M forward tokens, 3.6 GB peak). Its
-  exact flags are `runs/s1-v1/training_config.json`; the data was `train_v1s.jsonl`
-  (sha256 `4202a8f6…`, 58.7 MB, pre-label-fix). Same pools and question strings as the spike.
+  exact flags are `runs/s1-v1/training_config.json` (written by the trainer; `recipe.json` next to a
+  run is new and also pins the Kev commit); the data was `runs/s1-v1/records.jsonl`, the pre-label-fix
+  file (sha256 `4202a8f6…`). Same pools and question strings as the spike.
   `top line's passage@1` = the passage holding the top-ranked line answers; `exact line@1` needs the
   annotator's span, which only MultiDoc2Dial has (MultiDoc2Dial n=453, TechQA n=85 with 2 queries
   whose pool exceeds the line question's 255 options, webshop n=13):
