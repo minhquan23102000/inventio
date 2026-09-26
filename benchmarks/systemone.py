@@ -365,22 +365,34 @@ def swe_records():
 
 def cmd_spike(a):
     for name in a.sets.split(","):
-        rows, path = [], ROWS / f"{a.tag}-{name}.jsonl"
+        suffix = "" if a.order == "bm25" else f"-{a.order}"
+        rows, path = [], ROWS / f"{a.tag}-{name}{suffix}.jsonl"
         ROWS.mkdir(parents=True, exist_ok=True)
+
+        def arrange(hits):
+            """Same passages, same questions, different order in the state."""
+            h = list(hits)
+            if a.order == "reverse":
+                return h[::-1]
+            if a.order == "shuffle":
+                random.Random(a.seed).shuffle(h)
+            return h
+
         with path.open("w", encoding="utf-8") as f:
             for qid, q, con, scope, is_gold in SETS[name](a.limit):
                 pos, neg = pools(con, q, scope, is_gold)
                 if not pos:
                     continue
                 try:
-                    r = {"qid": qid, "query": q, **run_query(a.url, q, pos, neg, is_gold, a.model)}
+                    r = {"qid": qid, "query": q,
+                         **run_query(a.url, q, arrange(pos), arrange(neg), is_gold, a.model)}
                 except urllib.error.HTTPError as e:
                     print(f"skip {qid}: {e.code} {e.read()[:200]!r}", flush=True)
                     continue
                 rows.append(r)
                 f.write(json.dumps(r, ensure_ascii=False) + "\n")
                 f.flush()
-        record("spike", a.tag, name, spike_summary(rows, a.tag, name))
+        record("spike", a.tag, f"{name}{suffix}", spike_summary(rows, a.tag, name))
 
 
 def cmd_disp(a):
@@ -528,6 +540,7 @@ def cmd_scale(a):
 
 
 def cmd_train(a):
+    from collections import Counter
     """The run's recipe, in the repo: the balanced record file, then Kev's trainer through
     `kev_win.py` with every knob pinned, and a `recipe.json` recording the Kev commit, the base
     revision and the data's hash so the run is reproducible from this repo alone."""
@@ -541,18 +554,44 @@ def cmd_train(a):
     records = Path(a.records) if a.records else DATA / "train.jsonl"
     if not records.exists():
         raise SystemExit(f"{records} not built; run `systemone.py data` first")
-    if a.bal:
+    if a.bal or a.bal_swe:
         rows = [json.loads(l) for l in records.open(encoding="utf-8")]
-        swe = [r for r in rows if r["_meta"]["source"] != "md2d_train"]
-        pos = [r for r in rows if r["_meta"]["arm"] == "pos" and r["_meta"]["source"] == "md2d_train"]
-        neg = [r for r in rows if r["_meta"]["arm"] == "neg" and r["_meta"]["source"] == "md2d_train"]
-        n = max(0, (a.bal - len(swe)) // 2)
         rng = random.Random(a.seed)
-        kept = swe + rng.sample(pos, min(n, len(pos))) + rng.sample(neg, min(n, len(neg)))
+
+        def draw(subset, target):
+            """Whole queries, not rows. Sampling the two arms independently left 1,101 + 1,101 of
+            3,101 md2d queries with only one of them, so `exists` was never trained on the contrast
+            between a pool that answers and the same pool without the answer (data review, 2026-09-26).
+            A target of 0 keeps the source as it is."""
+            by_query = {}
+            for r in subset:
+                by_query.setdefault(r["_meta"]["group_id"], []).append(r)
+            if not target:
+                return list(subset)
+            queries = list(by_query.values())
+            rng.shuffle(queries)
+            half, kept = target // 2, []
+            npos = nneg = 0
+            for g in queries:
+                p = sum(r["_meta"]["arm"] == "pos" for r in g)
+                if npos + p > half or nneg + (len(g) - p) > half:
+                    continue
+                kept += g
+                npos, nneg = npos + p, nneg + len(g) - p
+                if npos >= half and nneg >= half:
+                    break
+            return kept
+
+        md2d = [r for r in rows if r["_meta"]["source"] == "md2d_train"]
+        code = [r for r in rows if r["_meta"]["source"] != "md2d_train"]
+        kept = draw(md2d, a.bal) + draw(code, a.bal_swe)
         rng.shuffle(kept)
-        records = DATA / f"train_bal{a.bal}.jsonl"
+        mix = Counter((r["_meta"]["source"], r["_meta"]["arm"]) for r in kept)
+        records = DATA / f"train_bal{a.bal}-{a.bal_swe}.jsonl"
         records.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in kept), encoding="utf-8")
-        print(f"balanced {a.bal}: {len(kept)} records -> {records}", flush=True)
+        print(f"balanced to {len(kept)} records: "
+              + " ".join(f"{s}/{arm} {n}" for (s, arm), n in sorted(mix.items()))
+              + f" -> {records}", flush=True)
     recipe = {"kev_dir": str(kev), "kev_commit": subprocess.run(
         ["git", "-C", str(kev), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip() or None,
         "init_from": INIT_FROM, "base": BASE, "base_revision": BASE_REVISION,
@@ -581,7 +620,13 @@ def main():
     s = sub.add_parser("train", help="fine-tune Kev on the records (recipe pinned here)")
     s.add_argument("--records", default="", help="record file (default <data>/s1/data/train.jsonl)")
     s.add_argument("--out", default="runs/s1", help="run directory, inside the Kev checkout")
-    s.add_argument("--bal", type=int, default=0, help="train on a balanced subset of about this many records")
+    s.add_argument("--bal", type=int, default=0,
+                   help="balance the MultiDoc2Dial part to about this many records; 0 keeps all. Queries "
+                        "are drawn whole, so both arms of a query stay together")
+    s.add_argument("--bal-swe", type=int, default=0,
+                   help="balance the code part to about this many records; 0 keeps all. The code arm is "
+                        "lopsided on its own (107 positives against 3,922 negatives), so a quota here is "
+                        "about the positive/negative prior the exists head sees on code-like states")
     s.add_argument("--max-state", type=int, default=6656)
     s.add_argument("--epochs", type=int, default=1); s.add_argument("--lr", type=float, default=2e-5)
     s.add_argument("--seed", type=int, default=0)
@@ -594,6 +639,10 @@ def main():
     s = sub.add_parser("spike", help="ask a served System One model over the pools")
     s.add_argument("url"); s.add_argument("tag"); s.add_argument("--model", default="jev-latest")
     s.add_argument("--sets", default="md2d"); s.add_argument("--limit", type=int, default=0)
+    s.add_argument("--order", choices=("bm25", "reverse", "shuffle"), default="bm25",
+                   help="control: permute the passages inside the state, content unchanged. A model "
+                        "that reads content keeps its accuracy; one that follows BM25's order collapses")
+    s.add_argument("--seed", type=int, default=0, help="--order shuffle")
     s.set_defaults(fn=cmd_spike)
     s = sub.add_parser("disp", help="dispositio on the same pools")
     s.add_argument("tag"); s.add_argument("--sets", default="md2d"); s.add_argument("--limit", type=int, default=0)
