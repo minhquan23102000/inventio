@@ -422,17 +422,23 @@ def cmd_gate(a):
     kev = {r["qid"]: r for r in map(json.loads, open(ROWS / f"{a.kev}-{a.set}.jsonl", encoding="utf-8"))}
     v3 = {r["qid"]: r for r in map(json.loads, open(ROWS / f"{a.v3}-{a.set}-disp.jsonl", encoding="utf-8"))}
 
+    has_line = any("where_line" in r["pos"] for r in kev.values())
+
     def kev_top1(r):
         p = r["pos"]
         return (p["top_line_owner"] if "top_line_owner" in p else p["top_passage"]) in p["gold"]
 
-    both = [q for q in kev if q in v3 and kev[q]["pos"]["gold"] and v3[q]["top1"] is not None]
+    # one metric per comparison: the top-ranked line's passage when the run asked the line question,
+    # and only rows that answered it (a query whose pool exceeds 255 lines gets no line question)
+    both = [q for q in kev if q in v3 and kev[q]["pos"]["gold"] and v3[q]["top1"] is not None
+            and (not has_line or "top_line_owner" in kev[q]["pos"])]
+    dropped = [q for q in kev if q in v3 and kev[q]["pos"]["gold"] and (has_line and "top_line_owner" not in kev[q]["pos"])]
     x = [kev_top1(kev[q]) for q in both]
     y = [v3[q]["top1"] for q in both]
     d = [i - j for i, j in zip(x, y)]
     rng = random.Random(0)
     boots = sorted(sum(rng.choice(d) for _ in d) / len(d) for _ in range(2000))
-    s = {"set": a.set, "n": len(both), f"top1_{a.kev}": round(sum(x) / len(x), 3), f"top1_{a.v3}": round(sum(y) / len(y), 3),
+    s = {"set": a.set, "n": len(both), "dropped_no_line_question": len(dropped), f"top1_{a.kev}": round(sum(x) / len(x), 3), f"top1_{a.v3}": round(sum(y) / len(y), 3),
          "diff": round(sum(d) / len(d), 3), "diff_lo": round(boots[50], 3), "diff_hi": round(boots[1949], 3),
          "wins": sum(i > 0 for i in d), "losses": sum(i < 0 for i in d),
          "exists_auc_kev": round(auc([kev[q]["pos"]["exists"] for q in kev if kev[q]["pos"]["gold"]],

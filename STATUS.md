@@ -208,6 +208,37 @@ repository because they name internal documents.
   `benchmarks/systemone.py`: the file is now MD2D 2,955 positive + 4,365 negative, SWE 107 + 107.
   v1 trains on the earlier file (`<data>/s1/data/train_v1s.jsonl` in `%TEMP%/s1/data`, kept as
   `*.run1.jsonl`); a v1.1 would train on the fixed one.
+- **D4 result: the first fine-tune (`runs/s1-v1`) — 1 of 3 gates met.** Kev-0.8B + LoRA (11.3M
+  trainable), 3,963 records, 1 epoch, 98 min on the 5070 (14.0M forward tokens, 3.6 GB peak). Its
+  exact flags are `runs/s1-v1/training_config.json`; the data was `train_v1s.jsonl`
+  (sha256 `4202a8f6…`, 58.7 MB, pre-label-fix). Same pools and question strings as the spike.
+  `top line's passage@1` = the passage holding the top-ranked line answers; `exact line@1` needs the
+  annotator's span, which only MultiDoc2Dial has (MultiDoc2Dial n=453, TechQA n=85 with 2 queries
+  whose pool exceeds the line question's 255 options, webshop n=13):
+
+  | set | metric | fine-tuned | zero-shot | dispositio v3 | BM25 |
+  |---|---|---|---|---|---|
+  | MultiDoc2Dial | top line's passage@1 | 0.642 | 0.358 | 0.614 | 0.375 |
+  | MultiDoc2Dial | `where_passage`@1 | 0.547 | 0.393 | 0.614 | 0.375 |
+  | MultiDoc2Dial | exact line@1 | 0.603 | 0.252 | – | – |
+  | MultiDoc2Dial | `exists` AUC | 0.714 | 0.569 | 0.744 | – |
+  | TechQA | top line's passage@1 | 0.235 | 0.282 | 0.200 | 0.149 |
+  | TechQA | `exists` AUC | 0.645 | 0.609 | 0.576 | – |
+  | webshop | line in the answer passage | 11/13 | 12/13 | 4/13 | 6/13 |
+  | webshop | `exists` AUC | 0.769 | 0.763 | 0.559 | – |
+
+  Gate 3 met (11/13). Gate 1 not met: paired against v3, +0.029 (-0.020, +0.075) — inside the noise.
+  Gate 2 not met: 0.714 against 0.744. What the fine-tune did buy is the shape itself: exact line
+  0.252 -> 0.603 and `exists` AUC 0.569 -> 0.714 on MultiDoc2Dial, and on the 13 real on-call
+  questions it points inside the right section 11/13 where BM25 gets 6 and v3 gets 4. Time per pool:
+  167 ms (MultiDoc2Dial, 3.3k tokens), 68 ms (webshop), 373 ms (TechQA, 6.5k tokens) — flat to 16
+  questions on one state (`scale`).
+- **Two forks the result opens.** (1) Wire it into `inventio` as a ranker now (it is at parity with
+  v3 on passages within the noise, and it is the only thing that can name a line or say "not in the
+  map"), or train again first. (2) `exists` is where it loses, and its negatives are all
+  gold-removed (the easy kind); the hard kind is a passage that shares words and does not answer —
+  mining those from BM25's 16-30 is the untried lever. The 255-option limit for code pools is a
+  second, separate one (see the SWE count above).
 - **Correction to what stood here.** The list said to mine negatives from the teacher's top ranks
   instead of BM25's 1-30, "which contain false negatives", citing Rank1. Rank1's ~80% is mT5-13B
   negatives, not BM25. Measured on our own cache (teacher v2 over the written negatives of the v3
