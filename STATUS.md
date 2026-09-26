@@ -1,7 +1,62 @@
 # Status
 
-Where the work stands, for picking it up on another machine. Last updated 2026-09-25, at
-`b75f2b5`.
+Where the work stands, for picking it up on another machine. Last updated 2026-09-26, on branch
+`dispositio-small` (not pushed, nothing published).
+
+## Branch `dispositio-small`
+
+| Commit | Change |
+|---|---|
+| `f0e1d71` | `inventio update`; a query says once a day when a newer dispositio is released (model name only; `INVENTIO_OFFLINE=1` or `HF_HUB_OFFLINE=1` turns it off) |
+| `744ad77` | Skill: one more try with `--pool 30` when rephrasing finds nothing; relay the update notice |
+| (next) | `finetune_laya.py --student/--teacher` (distillation), `instr` and `synth` sources; `probe_model.py`; `synth_data.py` |
+
+Checkpoints in `%LOCALAPPDATA%\inventio\`: `dispositio-small` (step 1), `dispositio-small-mt2` (step 3).
+
+### Step 1: dispositio v2 distilled into mmBERT-small
+
+Teacher dispositio v2; targets 0.5 teacher + 0.5 written label; 3 epochs, 56 min on an RTX 5070.
+nDCG@10 on every BEIR test query, pool 30, same path as the README (`beir_bench.py`):
+
+| Set | BM25 | v2 | small | small / v2 |
+|---|---|---|---|---|
+| SciFact | 0.670 | 0.737 | 0.733 | 0.99 |
+| StackOverflow QA | 0.670 | 0.676 | 0.691 | 1.02 |
+| Zalo legal | 0.756 | 0.820 | 0.838 | 1.02 |
+| MultiDoc2Dial | 0.470 | 0.638 | 0.622 | 0.98 |
+| TechQA | 0.370 | 0.405 | 0.416 | 1.03 |
+
+- Ranker only, 15 candidates, 100 queries on the 5070: 293 ms (v2) against 154 ms (small).
+  Weights 615 MB against 276 MB.
+- Not measured: the M3, and the 40 private questions (both on the Mac).
+- The cached `scores-dispositio.jsonl` is not v2: v2 scored fresh gives 0.737 on SciFact against
+  the cache's 0.728, 0.676 on StackOverflow QA against 0.590.
+
+### Step 3: reading the question, counterfactual passages
+
+`benchmarks/probe_model.py`, on pairs and question wordings no model trained on:
+
+| Probe (pass mark) | v2 | small | small-mt2 |
+|---|---|---|---|
+| A relevance AUC (>= 0.88) | 0.882 | 0.911 | 0.914 |
+| corr(A, "does it fail to answer?") (< 0) | +0.99 | +1.00 | -0.72 |
+| "is it in Vietnamese?" AUC (>= 0.9) | 0.45 | 0.41 | 0.94 |
+| "is it in English?" AUC (>= 0.9) | 0.59 | 0.60 | 0.97 |
+| answer units deleted: falls below 0.5 (>= 0.7) | 0.25 | 0.28 | 0.68 |
+| query words paraphrased away: mean change (<= 0.15) | 0.28 | 0.35 | 0.05 |
+| paraphrased answers vs non-answers AUC (>= 0.85) | 0.74 | 0.68 | 0.99 |
+
+- A first run (`-mt`) with two to four fixed wordings per question passed the probes in those
+  wordings and failed new ones ("is it in English?" AUC 0.03). `-mt2` trains on 24 generated
+  wordings per question and its opposite, one in four held out.
+- Still leans on the criteria text: "in English? / false: another language" gives 0.28;
+  "false: in Vietnamese" gives 0.98.
+- Relevance against step 1: SciFact 0.730 (-0.4%), StackOverflow 0.690, Zalo 0.831 (-0.8%),
+  MultiDoc2Dial 0.609 (-2.2%), TechQA 0.402 (-3.3%, 119 queries).
+- memoria's 100 labelled messages (local, never trained on), hit@2 of 36: BM25 15, v2 17-18,
+  small 14-15, mt2 12-13.
+
+Smol (Gemini Flash) calls: about 1,000, in batches of 20.
 
 ## Recent changes on `main`
 
@@ -54,6 +109,9 @@ repository because they name internal documents.
 
 ## Next
 
+- Decide: release small (step 1) as v3 after the M3 and 40-question check; step 3 misses two marks
+  (answer deletion 0.68 < 0.7; MultiDoc2Dial and TechQA below step 1).
+- memoria: no model beats v2 there; reading instructions is not yet judging what to recall.
 - Try other checkpoints: `INVENTIO_DISPOSITIO_MODEL=<dir or hf id> inventio query ...`; compare on
   the same question set.
 - Decide the mirror isolation fix.

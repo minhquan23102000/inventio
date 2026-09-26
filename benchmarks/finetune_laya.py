@@ -5,6 +5,15 @@
     python benchmarks/finetune_laya.py --init <dir> --out <dir2> \\
         --mix coir-stackoverflow-qa=16000,multidoc2dial=4000,swe=3000,scifact=2000,zalo-legal=2000,category=2000
     set INVENTIO_DISPOSITIO_MODEL=<dir2>                    # then --ranker dispositio loads it
+    python benchmarks/finetune_laya.py --init <v2 dir> --student jhu-clsp/mmBERT-small \\
+        --teacher <v2 dir> --name dispositio-small --epochs 3 --micro-batch 16 --accum 4
+    python benchmarks/finetune_laya.py --init <small dir> --teacher <v2 dir> --name dispositio-small-mt2 \\
+        --mix <MIX>,synth=6,instr=25000 --epochs 2 --micro-batch 16 --accum 4
+
+`--student` trains a smaller encoder of the same tokenizer with a new head, the teacher's p mixed
+into every relevance target (distillation). `instr` asks the same pairs other questions so the model
+has to read the question; `synth` adds counterfactual passages (see those sections below);
+benchmarks/probe_model.py checks both.
 
 The released dispositio is those two stages: the second puts back the programming Q&A the first,
 starting from the published model, had too little of (StackOverflow QA fell below BM25).
@@ -56,6 +65,7 @@ import json
 import math
 import os
 import random
+import re
 import sys
 import time
 import zlib
@@ -73,7 +83,7 @@ from inventio.store import connect  # noqa: E402
 
 DATASETS = ("scifact", "coir-stackoverflow-qa", "zalo-legal", "multidoc2dial")
 TITLES = ("scifact", "zalo-legal")  # corpora whose documents carry a real title
-SOURCES = (*DATASETS, *(f"{t}:title" for t in TITLES), "swe", "category")
+SOURCES = (*DATASETS, *(f"{t}:title" for t in TITLES), "swe", "category", "instr", "synth")
 MIX = "multidoc2dial=18000,zalo-legal=10000,coir-stackoverflow-qa=12000,scifact=3700,swe=10000,category=4400"
 HOLDOUT = 0.10
 POOL = 30
@@ -255,12 +265,130 @@ def category_rows(rng) -> tuple[list[dict], list[dict]]:
             for r in map(json.loads, (d / "test.jsonl").open(encoding="utf-8"))]
     return train, test
 
+# ------------------------------------------------------------------------------ reading the question
+# One question learnt alone is not read: dispositio v2 answers "does the passage FAIL to answer the
+# query?" and "is the passage in Vietnamese?" with the same number as its own question (correlation
+# +0.99 and +0.98, benchmarks/probe_model.py). `instr` asks other questions about the same (query,
+# passage) pairs whose answers differ from relevance, so the only way to answer is to read the
+# question. Their labels come from the data (source, script, digits), never from the teacher, which
+# does not read questions.
+#
+# A handful of fixed wordings is not enough: trained on six question kinds with two to four
+# wordings each, the small model passed every probe asked in those wordings and failed the same
+# questions worded anew ("is the passage in English?" came out as "in Vietnamese?", AUC 0.0).
+# The bank (benchmarks/synth_data.py `asks`, <data>/synth/asks.json) holds 24 wordings, each with its
+# own criteria, for every attribute AND its opposite (Vietnamese / English, code / prose, answers /
+# fails to answer); one wording in four is never trained on and is what the probe asks.
+
+ASK_SHARE = {"rel": 0.3, "lang": 0.2, "qlang": 0.1, "code": 0.2, "digits": 0.2}
+
+
+def ask_held(instructions: str) -> bool:
+    return int(sha("ask\t" + instructions)[:8], 16) % 4 == 0
+
+
+def asks(held_out: bool = False) -> dict[tuple[str, str], list[dict]]:
+    """(attribute, polarity) -> [{"instructions", "criteria"}]; polarity `pos` asks whether the
+    attribute holds, `neg` whether it does not. `held_out` gives the wordings training never sees."""
+    bank = json.loads((data_dir(None) / "synth" / "asks.json").read_text(encoding="utf-8"))
+    return {(kind, pol): [{"instructions": q["instructions"], "criteria": {"true": q["true"], "false": q["false"]}}
+                          for q in qs if ask_held(q["instructions"]) == held_out]
+            for kind, by_pol in bank.items() for pol, qs in by_pol.items()}
+
+
+def is_vi(text: str) -> bool:
+    from inventio.search import VIETNAMESE
+
+    return len(VIETNAMESE.findall(text)) >= 3
+
+
+def attribute(kind: str, r: dict) -> bool | None:
+    """Whether a relevance row has the attribute; None when the row cannot say (StackOverflow
+    answers mix code and prose)."""
+    src = r["src"].split(":")[0]
+    return {"rel": float(r["p"]) >= 0.5,
+            "lang": is_vi(r["body"]),
+            "qlang": is_vi(r["query"]),
+            "code": True if src == "swe" else False if src in ("scifact", "zalo-legal", "multidoc2dial") else None,
+            "digits": bool(re.search(r"\d", r["body"]))}[kind]
+
+
+def instr_rows(train: list[dict], quota: int, rng) -> list[dict]:
+    """`quota` rows: a relevance row asked, in one of the bank's trained wordings, whether an
+    attribute holds or does not (half each), by ASK_SHARE."""
+    bank = asks()
+    rel = [r for r in train if r.get("kind") != "category" and not r.get("q") and float(r["p"]) != SIB]
+    kinds, weights = zip(*ASK_SHARE.items())
+    out = []
+    while len(out) < quota and rel:
+        r, kind, pol = rng.choice(rel), rng.choices(kinds, weights)[0], rng.choice(("pos", "neg"))
+        has = attribute(kind, r)
+        if has is None:
+            continue
+        out.append({**r, "src": f"instr:{kind}:{pol}", "q": rng.choice(bank[(kind, pol)]),
+                    "p": POS if has == (pol == "pos") else NEG, "synthetic": True})
+    return out
+
+
+# ------------------------------------------------------------------------------ counterfactual passages
+# Written by a small general model (Gemini Flash, benchmarks/synth_data.py) from train queries only:
+# - answer_units: an answer with the units that state the answer deleted is no longer an answer
+#   (the cause removed, the label changes), while topic and words stay;
+# - lexical_mask: a passage rewritten to share few words with the query keeps its label (the
+#   surface removed, the label stays), so matching words is not what makes an answer;
+# - link_questions: a question only two passages together answer; each is a partial answer.
+
+CUT_P, PART_P = 0.1, 0.75  # the answer deleted: a small model's judgment, so not 0; half an answer
+
+
+def synth_held(key: str) -> bool:
+    """One synthetic item in seven is kept for the probe (benchmarks/probe_model.py), never trained on."""
+    return int(sha("synth\t" + key)[:8], 16) % 7 == 0
+
+
+def synth_rows(rng, reps: int) -> list[dict]:
+    d = data_dir(None) / "synth"
+    load = lambda n: [json.loads(l) for l in (d / n).open(encoding="utf-8")] if (d / n).exists() else []  # noqa: E731
+    head = lambda path, heading: f"[{path} > {heading}]\n" if heading else f"[{path}]\n"  # noqa: E731
+    doc_head = lambda r: head(f"docs/{safe_name(r['doc'])}.md", r.get("title", ""))  # noqa: E731
+    base = lambda r, src: {"src": src, "query": r["query"], "at": None, "synthetic": True}  # noqa: E731
+    fails = asks()[("rel", "neg")]  # "does the passage fail to answer?", in trained wordings
+    out = []
+    for r in load("answer_units.jsonl"):
+        o = r["out"]
+        if synth_held(r["id"]) or not (o["answerable"] and o["answer_units"]) or o["rest_still_answers"]:
+            continue
+        cut = set(o["answer_units"])
+        rest = "\n".join(u for i, u in enumerate(r["units"]) if i not in cut)
+        h = doc_head(r)
+        out += [{**base(r, "synth:cut"), "head": h, "body": r["text"], "p": POS},
+                {**base(r, "synth:cut"), "head": h, "body": rest, "p": CUT_P},
+                {**base(r, "synth:cut"), "head": h, "body": rest, "p": 1 - CUT_P,
+                 "q": rng.choice(fails)}]
+    for r in load("lexical_mask.jsonl"):
+        if synth_held(r["id"]) or not r["out"]["facts_unchanged"]:
+            continue
+        p = POS if r["label"] == "pos" else NEG
+        out += [{**base(r, "synth:mask"), "head": "", "body": r["text"], "p": p},
+                {**base(r, "synth:mask"), "head": "", "body": r["out"]["rewrite"], "p": p}]
+    for r in load("link_questions.jsonl"):
+        o = r["out"]
+        if synth_held(r["id"]) or not o["possible"] or not o["question"].strip():
+            continue
+        q = {**base({"query": o["question"]}, "synth:link")}
+        out += [{**q, "head": head(r["a_path"], r["a_head"]), "body": r["a"], "p": PART_P},
+                {**q, "head": head(r["b_path"], r["b_head"]), "body": r["b"], "p": PART_P}]
+    return [dict(x) for x in out for _ in range(reps)]
+
+
 
 def build(mix: dict[str, int], eval_groups: int, rng) -> tuple[list[dict], list[dict], dict]:
     """Up to `mix[source]` training items from each source (a source short of its quota just gives
     what it has). Held-out groups are scored whole and never trained on."""
     sources = []
     for name, quota in mix.items():
+        if name in ("instr", "synth"):
+            continue
         if name == "swe":
             sources.append(("swe:relevance", swe_groups(rng), quota))
             continue
@@ -304,6 +432,14 @@ def build(mix: dict[str, int], eval_groups: int, rng) -> tuple[list[dict], list[
         report[src] = {"train_items": n_train, "train_groups": n_groups, "eval_groups": n_eval,
                        "same_document_negatives": sum(it["p"] == SIB for it in train if it["src"] == src)}
         print(src, report[src], flush=True)
+    if mix.get("synth"):
+        rows = synth_rows(rng, mix["synth"])
+        train += rows
+        report["synth"] = {"train_items": len(rows), "reps": mix["synth"]}
+    if mix.get("instr"):
+        rows = instr_rows(train, mix["instr"], rng)
+        train += rows
+        report["instr"] = {"train_items": len(rows)}
     rng.shuffle(train)
     return train, held_out, report
 
@@ -332,8 +468,8 @@ def tokenize(rows, tok, cfg, *, whole=False):
     the right as Laya cuts it there: the opening of a passage says what it does."""
     from laya.common import QTYPES, build_sequence, render_options
 
-    q = {"t": "noul", "ins": INSTRUCTIONS, "crit": CRITERIA}
-    k = len(render_options(q))
+    base_q = {"t": "noul", "ins": INSTRUCTIONS, "crit": CRITERIA}
+    k = len(render_options(base_q))
     cq = {"t": "choice", "ins": category_question()["instructions"], "crit": CATEGORIES}
     labels = list(CATEGORIES)
     max_len, head_len = cfg["max_len"], cfg["head_max_len"]
@@ -348,10 +484,11 @@ def tokenize(rows, tok, cfg, *, whole=False):
             items.append({**r, "passage": text, "key": n, "windows": 1, "ids": seq, "markers": markers,
                           "qtype": QTYPES["choice"], "target": [CAT_ON if c == r["label"] else CAT_OFF for c in labels]})
             continue
-        if r["query"] not in rooms:
+        q = {"t": "noul", "ins": r["q"]["instructions"], "crit": r["q"]["criteria"]} if r.get("q") else base_q
+        if (r["query"], q["ins"]) not in rooms:
             capped = cap_query(tok, r["query"])
-            rooms[r["query"]] = capped, passage_room(tok, capped, q, max_len, head_len)
-        query, room = rooms[r["query"]]
+            rooms[(r["query"], q["ins"])] = capped, passage_room(tok, capped, q, max_len, head_len)
+        query, room = rooms[(r["query"], q["ins"])]
         wins, p = windows(tok, r["head"], r["body"], room), float(r["p"])
         if whole or len(wins) == 1:
             keep = wins
@@ -488,23 +625,76 @@ def report(logits, items, temp: float) -> dict:
     return out
 
 
-def train(items, calib, test, base_dir, out_dir: Path, *, name, epochs, micro, accum, time_steps=0):
-    import torch
+def load_checkpoint(d: str, dev):
+    """A Laya checkpoint directory's model on `dev`, and its config."""
     from safetensors.torch import load_file
+    from laya.common import build_model
+
+    cfg = json.load(open(os.path.join(d, "rl_agent_config.json")))
+    model = build_model(cfg, encoder_dir=os.path.join(d, "encoder"))
+    model.load_state_dict(load_file(os.path.join(d, "model.safetensors")), strict=True)
+    return model.to(dev), cfg
+
+
+def noul_temp(cfg) -> float:
+    return float(cfg.get("temperature", [1.0, 1.0, 1.0])[2])
+
+
+def distill(items, teacher_dir: str, weight: float, tok, dev) -> dict:
+    """Each relevance target becomes `weight` * the teacher's p(true) + (1 - weight) * the written
+    label: mixed, not replaced, because the teacher is wrong where the labels are right (it ranks
+    below BM25 on StackOverflow QA) and the labels are wrong where the teacher is right (an unmarked
+    answer among the BM25 negatives). Category items keep their label."""
+    import torch
+
+    model, cfg = load_checkpoint(teacher_dir, dev)
+    t = noul_temp(cfg)
+    # the teacher answers only its own question and has never seen a counterfactual passage
+    rel = sorted((i for i, it in enumerate(items) if it.get("kind") != "category" and not it.get("synthetic")),
+                 key=lambda i: len(items[i]["ids"]))
+    moved = []
+    for i, lg in zip(rel, logits_of(model, [items[i] for i in rel], tok, dev)):
+        p = float(torch.softmax(torch.tensor(lg[:2]) / t, -1)[1])
+        gold = items[i]["target"][1]
+        mixed = weight * p + (1 - weight) * gold
+        items[i]["target"] = [1 - mixed, mixed]
+        moved.append(abs(mixed - gold))
+    del model
+    torch.cuda.empty_cache()
+    return {"teacher": teacher_dir, "weight": weight, "items": len(moved),
+            "mean_shift": round(sum(moved) / max(1, len(moved)), 4),
+            "shifted_over_0.3": sum(m > 0.3 for m in moved)}
+
+
+def train(items, calib, test, base_dir, out_dir: Path, *, name, epochs, micro, accum, time_steps=0,
+          student: str | None = None, teacher: str | None = None):
+    """`student`: a Hugging Face encoder id; the model is that encoder with a new Laya head (config
+    from `base_dir`) instead of `base_dir`'s weights. `teacher`: a checkpoint scored on the report
+    set first, the mark the student is measured against."""
+    import torch
     from transformers import AutoTokenizer
     from laya.common import build_model, proper_reward
 
-    cfg = json.load(open(os.path.join(base_dir, "rl_agent_config.json")))
     tok = AutoTokenizer.from_pretrained(os.path.join(base_dir, "tokenizer"))
-    model = build_model(cfg, encoder_dir=os.path.join(base_dir, "encoder"))
-    model.load_state_dict(load_file(os.path.join(base_dir, "model.safetensors")), strict=True)
     dev = torch.device("cuda")
-    model.to(dev)
-    base_temp = float(cfg.get("temperature", [1.0, 1.0, 1.0])[2])
+    if student:
+        cfg = json.load(open(os.path.join(base_dir, "rl_agent_config.json")))
+        cfg = dict(cfg, encoder=student)
+        cfg.pop("temperature_by_options", None)
+        model = build_model(cfg).to(dev)
+    else:
+        model, cfg = load_checkpoint(base_dir, dev)
     before = None
     if not time_steps:
-        before = report(logits_of(model, test, tok, dev), test, base_temp)
-        print(f"starting model ({base_dir}) on held-out:", json.dumps(before), flush=True)
+        if teacher:
+            tm, tcfg = load_checkpoint(teacher, dev)
+            before = report(logits_of(tm, test, tok, dev), test, noul_temp(tcfg))
+            del tm
+            torch.cuda.empty_cache()
+            print(f"teacher ({teacher}) on held-out:", json.dumps(before), flush=True)
+        elif not student:
+            before = report(logits_of(model, test, tok, dev), test, noul_temp(cfg))
+            print(f"starting model ({base_dir}) on held-out:", json.dumps(before), flush=True)
     model.encoder.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
     model.head_checkpointing = True
     for p in model.encoder.embeddings.tok_embeddings.parameters():
@@ -515,7 +705,9 @@ def train(items, calib, test, base_dir, out_dir: Path, *, name, epochs, micro, a
     items = sorted(items, key=lambda it: len(it["ids"]))
     enc = [p for n, p in model.named_parameters() if n.startswith("encoder.") and p.requires_grad]
     head = [p for n, p in model.named_parameters() if not n.startswith("encoder.") and p.requires_grad]
-    opt = torch.optim.AdamW([{"params": enc, "lr": 2.5e-5}, {"params": head, "lr": 1.0e-4}], weight_decay=0.01)
+    # a student's head starts from nothing and its encoder has never ranked: a larger step
+    lr_enc, lr_head = (8e-5, 3e-4) if student else (2.5e-5, 1.0e-4)
+    opt = torch.optim.AdamW([{"params": enc, "lr": lr_enc}, {"params": head, "lr": lr_head}], weight_decay=0.01)
     batches = [items[i:i + micro] for i in range(0, len(items), micro)]
     total = max(1, math.ceil(len(batches) / accum) * epochs)
     warm = max(1, total // 20)
@@ -613,6 +805,10 @@ def main() -> int:
     ap.add_argument("--micro-batch", type=int, default=8)
     ap.add_argument("--accum", type=int, default=8, help="micro-batches per optimiser step (effective batch 64)")
     ap.add_argument("--time-steps", type=int, default=0, help="time this many micro-batches, print the projection, exit")
+    ap.add_argument("--student", help="Hugging Face encoder to train with a new head instead of --init's weights "
+                                      "(same tokenizer as --init, e.g. jhu-clsp/mmBERT-small)")
+    ap.add_argument("--teacher", help="checkpoint directory whose p(true) is mixed into every relevance target")
+    ap.add_argument("--teacher-weight", type=float, default=0.5, help="share of the teacher in a target (default 0.5)")
     args = ap.parse_args()
 
     rng = random.Random(SEED)
@@ -638,10 +834,15 @@ def main() -> int:
             f.write(json.dumps({k: it[k] for k in ("src", "query", "key", "passage", "p", "rank")}, ensure_ascii=False) + "\n")
     meta = {"name": args.name, "start": str(base), "mix": mix, "per_source": per_source,
             "train_items": len(items), "cut": cut, "held_out_items": len(evals),
-            "cut_held_out": cut_eval, "epochs": args.epochs, "micro_batch": args.micro_batch, "accum": args.accum}
+            "cut_held_out": cut_eval, "epochs": args.epochs, "micro_batch": args.micro_batch, "accum": args.accum,
+            "student": args.student}
+    if args.teacher and not args.time_steps:
+        import torch
+
+        meta["distill"] = distill(items, args.teacher, args.teacher_weight, tok, torch.device("cuda"))
     print(json.dumps(meta, indent=1), flush=True)
     res = train(items, calib, test, base, out, name=args.name, epochs=args.epochs, micro=args.micro_batch,
-                accum=args.accum, time_steps=args.time_steps)
+                accum=args.accum, time_steps=args.time_steps, student=args.student, teacher=args.teacher)
     if res is not None:
         meta["result"] = res
         (out / "train_meta.json").write_text(json.dumps(meta, indent=1))

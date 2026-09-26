@@ -47,5 +47,33 @@
     "recall@30chunks": 0.9454,
     "sec_per_query": 0.874,
     "timed_queries": 788
+  },
+  "dispositio-small": {
+    "queries": 788,
+    "ndcg@10": 0.8378,
+    "recall@30chunks": 0.9454,
+    "sec_per_query": 0.783,
+    "timed_queries": 788
+  },
+  "dispositio-v2": {
+    "queries": 788,
+    "ndcg@10": 0.8201,
+    "recall@30chunks": 0.9454,
+    "sec_per_query": 1.005,
+    "timed_queries": 788
+  },
+  "dispositio-small-mt": {
+    "queries": 788,
+    "ndcg@10": 0.826,
+    "recall@30chunks": 0.9454,
+    "sec_per_query": 1.001,
+    "timed_queries": 788
+  },
+  "dispositio-small-mt2": {
+    "queries": 788,
+    "ndcg@10": 0.831,
+    "recall@30chunks": 0.9454,
+    "sec_per_query": 0.751,
+    "timed_queries": 788
   }
 }
