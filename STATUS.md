@@ -9,7 +9,7 @@ Where the work stands, for picking it up on another machine. Last updated 2026-0
 |---|---|
 | `f0e1d71` | `inventio update`; a query says once a day when a newer dispositio is released (model name only; `INVENTIO_OFFLINE=1` or `HF_HUB_OFFLINE=1` turns it off) |
 | `744ad77` | Skill: one more try with `--pool 30` when rephrasing finds nothing; relay the update notice |
-| (next) | `finetune_laya.py --student/--teacher` (distillation), `instr` and `synth` sources; `probe_model.py`; `synth_data.py` |
+| `4b4b7c7` | `finetune_laya.py --student/--teacher` (distillation), `instr` and `synth` sources; `probe_model.py`; `synth_data.py` |
 
 Checkpoints in `%LOCALAPPDATA%\inventio\`: `dispositio-small` (step 1), `dispositio-small-mt2` (step 3).
 
