@@ -29,7 +29,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from data import data_dir  # noqa: E402
-from finetune_laya import CRITERIA, INSTRUCTIONS, asks, is_vi, synth_held  # noqa: E402
+from finetune_laya import CRITERIA, INSTRUCTIONS, SIBLINGS, asks, is_vi, synth_held  # noqa: E402
 from beir_bench import safe_name  # noqa: E402
 
 A = {"type": "noul", "instructions": INSTRUCTIONS, "criteria": CRITERIA}
@@ -73,6 +73,47 @@ def links(tag: str) -> dict:
                     for q, p, _ in pools]}
     return {f"link_both_top5_{k}": sum(all(x in rk[:5] for x in g) for rk, (_, _, g) in zip(v, pools))
             for k, v in orders.items()} | {"link_n": len(pools)}
+
+
+def same_file(agent, holdout: Path) -> dict:
+    """Right file, wrong section: among the held-out queries whose answer's own file also has
+    another chunk in the pool, how often the ranker puts the answer chunk above them, and BM25 too.
+    The pool is the group's natural 30 candidates, so this is the failure as it happens at query
+    time. A source with no such query is left out."""
+    rows = [json.loads(l) for l in holdout.open(encoding="utf-8") if "relevance" in l]
+    head = lambda r: r["passage"].split("]")[0].lstrip("[")  # noqa: E731  "[path > heading]"
+    path = lambda r: head(r).split(" > ")[0]  # noqa: E731
+
+    def family(r):
+        """The document a chunk belongs to, as finetune_laya groups it: a MultiDoc2Dial section's
+        page (`docs/dmv-3-1.md` belongs to `dmv-3`), elsewhere the file itself."""
+        corpus = r["src"].partition(":")[0]
+        return SIBLINGS[corpus][0](Path(path(r)).stem) if corpus in SIBLINGS else path(r)
+
+    groups: dict[tuple, list] = {}
+    for r in rows:
+        groups.setdefault((r["src"], r["query"]), []).append(r)
+    out: dict[str, dict] = {}
+    for (src, _), g in groups.items():
+        ans = [r for r in g if float(r["p"]) >= 0.5]
+        if not ans:
+            continue
+        mine = [r for r in g if family(r) == family(ans[0])]
+        if len(mine) < 2:
+            continue
+
+        def score(r, query=g[0]["query"]):
+            return float(agent.predict({"query": query, "passage": r["passage"]},
+                                       {"rel": A})["answers"]["rel"]["noul"])
+
+        first = max(mine, key=score)
+        bm = min(mine, key=lambda r: r["rank"] or 99)
+        s = out.setdefault(src, {"n": 0, "ranker": 0, "bm25": 0})
+        s["n"] += 1
+        s["ranker"] += bool(float(first["p"]) >= 0.5)
+        s["bm25"] += bool(float(bm["p"]) >= 0.5)
+    return {k: v | {"ranker": round(v["ranker"] / v["n"], 3), "bm25": round(v["bm25"] / v["n"], 3)}
+            for k, v in sorted(out.items())}
 
 
 def probe(agent, holdout: Path) -> dict:
@@ -130,7 +171,7 @@ def main() -> int:
     for d in sys.argv[1:]:
         os.environ["INVENTIO_DISPOSITIO_MODEL"] = d
         agent, tag = load_laya("dispositio")
-        res = probe(agent, holdout) | links(tag.split("/")[-1])
+        res = probe(agent, holdout) | links(tag.split("/")[-1]) | {"same_file": same_file(agent, holdout)}
         ok = {k: bool(eval(f"{res[k]} {rule}")) for k, rule in PASS.items() if res.get(k) is not None}
         print(tag, json.dumps(res))
         print("  passes:", ok, "ALL" if all(ok.values()) else "NOT ALL", flush=True)

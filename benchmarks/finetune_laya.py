@@ -13,7 +13,8 @@
 `--student` trains a smaller encoder of the same tokenizer with a new head, the teacher's p mixed
 into every relevance target (distillation). `instr` asks the same pairs other questions so the model
 has to read the question; `synth` adds counterfactual passages (see those sections below);
-benchmarks/probe_model.py checks both.
+benchmarks/probe_model.py checks both. A `link=N` in `--mix` sets how often `synth`'s link rows are
+repeated, when they need a different count from the rest (`synth=6,link=1`).
 
 The released dispositio is those two stages: the second puts back the programming Q&A the first,
 starting from the published model, had too little of (StackOverflow QA fell below BM25).
@@ -86,6 +87,7 @@ from inventio.store import connect  # noqa: E402
 DATASETS = ("scifact", "coir-stackoverflow-qa", "zalo-legal", "multidoc2dial")
 TITLES = ("scifact", "zalo-legal")  # corpora whose documents carry a real title
 SOURCES = (*DATASETS, *(f"{t}:title" for t in TITLES), "swe", "category", "instr", "synth")
+LINK = "link"  # a mix key, not a source: the repeat count of `synth`'s link rows (synth_rows)
 MIX = "multidoc2dial=18000,zalo-legal=10000,coir-stackoverflow-qa=12000,scifact=3700,swe=10000,category=4400"
 HOLDOUT = 0.10
 POOL = 30
@@ -348,7 +350,11 @@ def synth_held(key: str) -> bool:
     return int(sha("synth\t" + key)[:8], 16) % 7 == 0
 
 
-def synth_rows(rng, reps: int) -> list[dict]:
+def synth_rows(rng, reps: int, link_reps: int | None = None) -> list[dict]:
+    """`reps` copies of each synthetic row, except the link rows, which get `link_reps` (default
+    `reps`). Repeating a rewrite teaches the rule and is measured on the held-out seventh; repeating
+    a link question only teaches that question: at 6 repeats the trained pairs reach the top 5 for
+    117 of 132 against BM25's 11 of 23 on the held-out ones."""
     d = data_dir(None) / "synth"
     load = lambda n: [json.loads(l) for l in (d / n).open(encoding="utf-8")] if (d / n).exists() else []  # noqa: E731
     head = lambda path, heading: f"[{path} > {heading}]\n" if heading else f"[{path}]\n"  # noqa: E731
@@ -373,14 +379,16 @@ def synth_rows(rng, reps: int) -> list[dict]:
         p = POS if r["label"] == "pos" else NEG
         out += [{**base(r, "synth:mask"), "head": "", "body": r["text"], "p": p},
                 {**base(r, "synth:mask"), "head": "", "body": r["out"]["rewrite"], "p": p}]
+    link = []
     for r in load("link_questions.jsonl"):
         o = r["out"]
         if synth_held(r["id"]) or not o["possible"] or not o["question"].strip():
             continue
         q = {**base({"query": o["question"]}, "synth:link")}
-        out += [{**q, "head": head(r["a_path"], r["a_head"]), "body": r["a"], "p": PART_P},
-                {**q, "head": head(r["b_path"], r["b_head"]), "body": r["b"], "p": PART_P}]
-    return [dict(x) for x in out for _ in range(reps)]
+        link += [{**q, "head": head(r["a_path"], r["a_head"]), "body": r["a"], "p": PART_P},
+                 {**q, "head": head(r["b_path"], r["b_head"]), "body": r["b"], "p": PART_P}]
+    link_reps = reps if link_reps is None else link_reps
+    return [dict(x) for x in out for _ in range(reps)] + [dict(x) for x in link for _ in range(link_reps)]
 
 
 
@@ -389,7 +397,7 @@ def build(mix: dict[str, int], eval_groups: int, rng) -> tuple[list[dict], list[
     what it has). Held-out groups are scored whole and never trained on."""
     sources = []
     for name, quota in mix.items():
-        if name in ("instr", "synth"):
+        if name in ("instr", "synth", LINK):
             continue
         if name == "swe":
             sources.append(("swe:relevance", swe_groups(rng), quota))
@@ -435,9 +443,9 @@ def build(mix: dict[str, int], eval_groups: int, rng) -> tuple[list[dict], list[
                        "same_document_negatives": sum(it["p"] == SIB for it in train if it["src"] == src)}
         print(src, report[src], flush=True)
     if mix.get("synth"):
-        rows = synth_rows(rng, mix["synth"])
+        rows = synth_rows(rng, mix["synth"], mix.get(LINK, mix["synth"]))
         train += rows
-        report["synth"] = {"train_items": len(rows), "reps": mix["synth"]}
+        report["synth"] = {"train_items": len(rows), "reps": mix["synth"], "link_reps": mix.get(LINK, mix["synth"])}
     if mix.get("instr"):
         rows = instr_rows(train, mix["instr"], rng)
         train += rows
@@ -862,7 +870,8 @@ def main() -> int:
     ap.add_argument("--name", default="dispositio", help="model name, and the checkpoint directory's")
     ap.add_argument("--out", help="checkpoint directory (default: <user cache>/inventio/<name>)")
     ap.add_argument("--init", help="start from this checkpoint directory instead of the published Laya")
-    ap.add_argument("--mix", default=MIX, help=f"training items per source, source=N,... from {', '.join(SOURCES)}")
+    ap.add_argument("--mix", default=MIX, help=f"training items per source, source=N,... from {', '.join(SOURCES)}, "
+                                                f"and {LINK}=N for the repeat count of synth's link rows")
     ap.add_argument("--eval-groups", type=int, default=60, help="held-out groups scored per source (30 candidates each)")
     ap.add_argument("--epochs", type=int, default=1)
     ap.add_argument("--micro-batch", type=int, default=8)
@@ -876,7 +885,7 @@ def main() -> int:
 
     rng = random.Random(SEED)
     mix = {k: int(v) for k, v in (p.split("=") for p in args.mix.split(","))}
-    unknown = set(mix) - set(SOURCES)
+    unknown = set(mix) - set(SOURCES) - {LINK}
     if unknown:
         ap.error(f"unknown sources {sorted(unknown)}; choose from {', '.join(SOURCES)}")
     base = args.init or load_base()

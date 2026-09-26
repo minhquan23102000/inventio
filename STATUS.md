@@ -131,8 +131,9 @@ repository because they name internal documents.
   highest where BM25 often ranks the answer 16-30 (StackOverflow QA, SWE-bench `mixed`).
 - **Cross-language questions** are handled only in the skill. A person typing a question in
   one language about documents in another still gets nothing from BM25.
-- **Right file, wrong section**: on some questions dispositio picks the section next to the
-  answer.
+- **Right file, wrong section**: measured now on MultiDoc2Dial's held-out queries whose page has
+  another section in the pool (n=46): the answer section is ranked first for **0.696** (BM25 0.304),
+  `benchmarks/probe_model.py --same_file`. v4's target is 0.80 (`V4PLAN.md` §1).
 - **No link from a page to code when a table name appears only inside SQL strings**: `mentions`
   links need a definition in the map. Schema cards might fill this; untested.
 - **`mirror_dir()` ignores `--db`** and writes into the real data directory, so
@@ -145,35 +146,28 @@ repository because they name internal documents.
 
 ## Next
 
-- **v3, waiting on Zero.** (a) publish `dispositio-small` (step 1): quality at or above v2 on the
-  five sets, 1.9x faster, 276 MB, but it does not read the question and it leans on shared words.
-  (b) publish step 3: reads the question and judges counterfactual passages, at 0.9-1.8 nDCG
-  points below (a) on MultiDoc2Dial/TechQA/SciFact and no better on memoria. The ablation above
-  says the cost is `instr` and the 6 repeats, not the idea, so (c) is a round on better data first.
-- **The data fixes the literature points to** (Promptriever 2409.11136, Huang 2010.04762, System 2
-  -> System 1 2407.06023, Rank1 2502.18418): replace the attribute questions (`is it in Vietnamese?`,
-  `has digits?`) with instruction negatives, where the *same* pair stops being relevant when the
-  instruction changes; keep the relevance data at full volume and add instruction data up to 1:1;
-  drop the 6 repeats to a paired 1x at a few percent of the items, length-matched; keep a generated
-  item only when 2 of 3 LLM samples and the teacher agree on its label; mine negatives from the
-  teacher's top ranks instead of BM25's 1-30, which contain false negatives. Then rerun the
-  ablation with the same seed and step budget.
+- **v3 (step 4) is training now**: `dispositio-small-mask`, the MIX plus the masking rows, 2 epochs
+  from `dispositio-small` — step 3's ability to read the question without the attribute questions
+  that cost it 0.9-1.3 points. Then BEIR (~8 min) and the probes. Publishing it still needs
+  SWE-bench Lite `mixed` (~70 min) or a card that says that row was not re-run, and tag `v2` before
+  the upload.
+- **v4's data plan is `V4PLAN.md`.** It replaces the ad-hoc list that stood here: failure targets,
+  the row-by-row data set, the evaluation and the gates are fixed before any training runs.
+- **Correction to what stood here.** The list said to mine negatives from the teacher's top ranks
+  instead of BM25's 1-30, "which contain false negatives", citing Rank1. Rank1's ~80% is mT5-13B
+  negatives, not BM25. Measured on our own cache (teacher v2 over the written negatives of the v3
+  data): above 0.1, SciFact 4.7%, Zalo 4.1%, StackOverflow QA 4.5%, MultiDoc2Dial 7.6%, **SWE-bench
+  22.2%** (above 0.5: 2-3% on the text sets, 10.3% on SWE-bench). Denoising stays in the plan,
+  aimed at SWE-bench.
+- **Instruction negatives are out**, and with them the "instruction data up to 1:1" that stood
+  here: they need instance instructions, and ours is one fixed sentence. The 15%/two-thirds defect
+  rates Promptriever reports are still the priors for anything LLM-made.
 - memoria: no model beats v2 there; reading instructions is not yet judging what to recall.
 - Release step: `local_files_only` keeps a user on whatever they downloaded, so a v3 needs
   `inventio update` (already in) plus a note in README/model card; `main` is not pushed yet.
 - M3: the 40 private questions and the MLX prototype are still unmeasured (both need the Mac).
-- Public benchmarks not rerun with pool 15 (README still quotes pool 30).
-- Cross-language questions are handled only in the skill.
-- Right file, wrong section: on some questions dispositio picks the section next to the answer.
-- **No link from a page to code when a table name appears only inside SQL strings**: `mentions`
-  links need a definition in the map. Schema cards might fill this; untested.
-- **`mirror_dir()` ignores `--db`** and writes into the real data directory, so
-  `tests/test_connectors.py::test_where_scopes_every_term_before_bm25` fails from the second run
-  on. Undecided: mirrors follow `--db`, or isolate them in tests only. Until then, delete
-  `<data dir>/mirrors/notes` after a test run.
-- Smaller: printed ranks can appear out of order (results are grouped by document type); the
-  first query is slow without warning; `--db` after the subcommand gives a generic argparse error.
-- Untested: the server on Windows, and two first queries starting it at once.
+- Quantising the small ranker (int8/ONNX) is untried; the M3 measurement says the cost is candidates
+  per query, not weights, so the first question is whether it helps at all.
 
 ## Commands
 
