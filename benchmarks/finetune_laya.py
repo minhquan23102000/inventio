@@ -61,9 +61,11 @@ base model learned them.
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import math
 import os
+import pickle
 import random
 import re
 import sys
@@ -647,20 +649,16 @@ def distill(items, teacher_dir: str, weight: float, tok, dev) -> dict:
     answer among the BM25 negatives). Category items keep their label."""
     import torch
 
-    model, cfg = load_checkpoint(teacher_dir, dev)
-    t = noul_temp(cfg)
+    t = noul_temp(json.load(open(os.path.join(teacher_dir, "rl_agent_config.json"))))
     # the teacher answers only its own question and has never seen a counterfactual passage
-    rel = sorted((i for i, it in enumerate(items) if it.get("kind") != "category" and not it.get("synthetic")),
-                 key=lambda i: len(items[i]["ids"]))
+    rel = [i for i, it in enumerate(items) if it.get("kind") != "category" and not it.get("synthetic")]
     moved = []
-    for i, lg in zip(rel, logits_of(model, [items[i] for i in rel], tok, dev)):
+    for i, lg in zip(rel, teacher_logits(teacher_dir, [items[i] for i in rel], tok, dev)):
         p = float(torch.softmax(torch.tensor(lg[:2]) / t, -1)[1])
         gold = items[i]["target"][1]
         mixed = weight * p + (1 - weight) * gold
         items[i]["target"] = [1 - mixed, mixed]
         moved.append(abs(mixed - gold))
-    del model
-    torch.cuda.empty_cache()
     return {"teacher": teacher_dir, "weight": weight, "items": len(moved),
             "mean_shift": round(sum(moved) / max(1, len(moved)), 4),
             "shifted_over_0.3": sum(m > 0.3 for m in moved)}
@@ -687,16 +685,22 @@ def train(items, calib, test, base_dir, out_dir: Path, *, name, epochs, micro, a
     before = None
     if not time_steps:
         if teacher:
-            tm, tcfg = load_checkpoint(teacher, dev)
-            before = report(logits_of(tm, test, tok, dev), test, noul_temp(tcfg))
-            del tm
-            torch.cuda.empty_cache()
+            tcfg = json.load(open(os.path.join(teacher, "rl_agent_config.json")))
+            before = report(teacher_logits(teacher, test, tok, dev), test, noul_temp(tcfg))
             print(f"teacher ({teacher}) on held-out:", json.dumps(before), flush=True)
         elif not student:
             before = report(logits_of(model, test, tok, dev), test, noul_temp(cfg))
             print(f"starting model ({base_dir}) on held-out:", json.dumps(before), flush=True)
+    # the memory checkpointing saves is what lets a 1024-token batch fit in 8 GB: without it an RTX
+    # 5070 laptop pages to system memory and trains at 33 items/s against 67 with it (micro-batch 8/16)
     model.encoder.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
-    model.head_checkpointing = True
+    if importlib.util.find_spec("triton"):  # Windows: the triton-windows package
+        # each layer on its own, so the attention masks are built once, outside the compiled graphs;
+        # fused elementwise kernels: 53 -> 67 items/s for mmBERT-small on an RTX 5070 laptop
+        for layer in model.encoder.layers:
+            layer.compile(dynamic=True)
+    else:
+        print("triton is not installed: training without torch.compile (about 20% slower)", flush=True)
     for p in model.encoder.embeddings.tok_embeddings.parameters():
         p.requires_grad = False
     model.train()
@@ -778,6 +782,65 @@ def train(items, calib, test, base_dir, out_dir: Path, *, name, epochs, micro, a
             "start": str(base_dir), "before": before, "after": after}
 
 
+CACHE = Path(os.environ.get("LOCALAPPDATA", Path.home() / ".cache")) / "inventio" / "train-cache"
+
+
+def cached(name: str, make):
+    """make()'s value, kept on disk under `name` so a rerun reads it back instead of making it."""
+    f = CACHE / f"{name}.pkl"
+    if f.exists():
+        print(f"cached: {f}", flush=True)
+        return pickle.loads(f.read_bytes())
+    value = make()
+    CACHE.mkdir(parents=True, exist_ok=True)
+    tmp = f.with_suffix(".tmp")
+    tmp.write_bytes(pickle.dumps(value))
+    tmp.replace(f)
+    return value
+
+
+def inputs_key(*args) -> str:
+    """What the training data is made from: this script and inventio's code, the data files build()
+    reads (name, size, time; SQLite's -wal/-shm files change on every read and are left out), and
+    the arguments. Any of them changing makes a new key, so a cached build is never stale."""
+    root = Path(__file__).resolve().parent.parent
+    d = data_dir(None)
+    files = [p for sub in ("synth", "categories", "swe-train/groups") for p in (d / sub).glob("*")]
+    files += list((d / "beir").glob("*/*"))
+    h = hashlib.sha1(json.dumps(args, sort_keys=True).encode())
+    for p in sorted([Path(__file__).resolve(), *(root / "inventio").glob("*.py")]):
+        h.update(p.read_bytes())
+    for p in sorted(files):
+        if p.is_file() and not p.name.endswith(("-wal", "-shm")):
+            s = p.stat()
+            h.update(f"{p}\t{s.st_size}\t{s.st_mtime_ns}\n".encode())
+    return h.hexdigest()[:16]
+
+
+def teacher_logits(teacher_dir: str, items, tok, dev) -> list:
+    """logits_of for a checkpoint, remembered per item on disk: a rerun, or a mix that changed,
+    scores only the items this checkpoint has not read yet."""
+    import torch
+
+    st = (Path(teacher_dir) / "model.safetensors").stat()
+    f = CACHE / f"teacher-{sha(f'{Path(teacher_dir).resolve()}\t{st.st_size}\t{st.st_mtime_ns}')[:16]}.pkl"
+    memo = pickle.loads(f.read_bytes()) if f.exists() else {}
+    keys = [sha(json.dumps([it["ids"], it["markers"], it["qtype"]])) for it in items]
+    todo = sorted({k: i for i, k in enumerate(keys) if k not in memo}.values(), key=lambda i: len(items[i]["ids"]))
+    print(f"teacher: {len(items) - len(todo)} of {len(items)} items cached, scoring {len(todo)}", flush=True)
+    if todo:
+        model, _ = load_checkpoint(teacher_dir, dev)
+        for i, lg in zip(todo, logits_of(model, [items[i] for i in todo], tok, dev)):
+            memo[keys[i]] = lg
+        del model
+        torch.cuda.empty_cache()
+        CACHE.mkdir(parents=True, exist_ok=True)
+        tmp = f.with_suffix(".tmp")
+        tmp.write_bytes(pickle.dumps(memo))
+        tmp.replace(f)
+    return [memo[k] for k in keys]
+
+
 def save(model, tok, cfg, d: Path, temps, name: str):
     from safetensors.torch import save_file
 
@@ -816,12 +879,15 @@ def main() -> int:
     unknown = set(mix) - set(SOURCES)
     if unknown:
         ap.error(f"unknown sources {sorted(unknown)}; choose from {', '.join(SOURCES)}")
-    rows, held_out, per_source = build(mix, args.eval_groups, rng)
     base = args.init or load_base()
     cfg = json.load(open(os.path.join(base, "rl_agent_config.json")))
     tok = AutoTokenizer.from_pretrained(os.path.join(base, "tokenizer"))
-    items, cut = tokenize(rows, tok, cfg)
-    evals, cut_eval = tokenize(held_out, tok, cfg, whole=True)
+
+    def setup():
+        rows, held_out, per_source = build(mix, args.eval_groups, rng)
+        return (*tokenize(rows, tok, cfg), *tokenize(held_out, tok, cfg, whole=True), per_source)
+
+    items, cut, evals, cut_eval, per_source = cached(f"data-{inputs_key(mix, args.eval_groups, SEED, str(base))}", setup)
     split = lambda it: it["query"] or it["passage"]  # noqa: E731  (a category item has no query)
     by_query = sorted({split(it) for it in evals})
     cal_q = set(by_query[::2])  # half the held-out queries fit the temperature, the other half is the report
@@ -851,4 +917,9 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    code = main()
+    sys.stdout.flush()
+    sys.stderr.flush()
+    # torch.compile's state crashes Python 3.14's shutdown on Windows (0xC0000005) after everything is
+    # saved, turning a finished run into a failed exit code; skip the interpreter teardown
+    os._exit(code)
