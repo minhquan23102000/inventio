@@ -1,12 +1,13 @@
 # Status
 
-Where the work stands, for picking it up on another machine. Last updated 2026-09-26, on branch
-`dispositio-small` (not pushed, nothing published).
+Where the work stands, for picking it up on another machine. Last updated 2026-09-26, on `main`
+(the former `dispositio-small` branch merged at `8b44f14`; nothing pushed, nothing published).
 
-## Branch `dispositio-small`
+## Training the small ranker
 
 | Commit | Change |
 |---|---|
+| `2dacd47` | Cached build/teacher scores, `torch.compile`, the link probe; the ablation below |
 | `f0e1d71` | `inventio update`; a query says once a day when a newer dispositio is released (model name only; `INVENTIO_OFFLINE=1` or `HF_HUB_OFFLINE=1` turns it off) |
 | `744ad77` | Skill: one more try with `--pool 30` when rephrasing finds nothing; relay the update notice |
 | `4b4b7c7` | `finetune_laya.py --student/--teacher` (distillation), `instr` and `synth` sources; `probe_model.py`; `synth_data.py` |
@@ -57,6 +58,41 @@ nDCG@10 on every BEIR test query, pool 30, same path as the README (`beir_bench.
   small 14-15, mt2 12-13.
 
 Smol (Gemini Flash) calls: about 1,000, in batches of 20.
+
+### A run's speed, and the ablation behind step 3's numbers
+
+| Change | Effect on an RTX 5070 laptop |
+|---|---|
+| `torch.compile` on the encoder's layers (triton-windows) | 53 -> 67 items/s; a 2-epoch arm trains in 29 min instead of 56 |
+| Data and teacher scores cached under `%LOCALAPPDATA%\inventio\train-cache` (1.4 GB) | a second run of the same mix reads them back: 61 s -> 30 s, identical `mean_shift` |
+| Gradient checkpointing off | 33 items/s: the memory it saves is what keeps a 1024-token batch from paging to system memory. It stays on |
+
+Flash-attention is not the lever: no Windows wheel, and the batches are sorted by length, so there
+is almost no padding. `head_checkpointing` is dead in Laya's `DecisionModel.forward`.
+
+Four arms from `dispositio-small`, teacher v2, 2 epochs, 16/4, differing only in the data added to
+the released MIX. nDCG@10, pool 30, on the sets step 3 moved:
+
+| Arm | MultiDoc2Dial | TechQA | SciFact |
+|---|---|---|---|
+| `dispositio-small` (start) | 0.6224 | 0.4155 | 0.7326 |
+| MIX only | 0.6271 | 0.4185 | 0.7391 |
+| + `instr` | 0.6183 | 0.4077 | 0.7257 |
+| + `synth` (6 repeats) | 0.6096 | **0.4353** | 0.7369 |
+| + `synth` (1 repeat) | 0.6187 | 0.4010 | 0.7310 |
+| + both (step 3) | 0.6086 | 0.4019 | 0.7295 |
+
+- Two more epochs on the same mix do not cost anything: the drop is not "more training".
+- `instr` costs 0.9-1.3 points on all three sets by itself. `synth` at 6 repeats costs 1.8 on
+  MultiDoc2Dial and *gains* 1.7 on TechQA. Together they lose more than the sum of their parts, so
+  the ingredients interact, and TechQA's gain disappears.
+- Each ingredient buys only its own competence and nothing else. `instr` fixes the question
+  (corr(A, "does it fail to answer?") -0.70, "in Vietnamese?" 0.93) and leaves masking at step 1's
+  level (0.66). `synth` fixes masking (0.996, and 0.973 at one repeat) and leaves the language
+  questions at chance (0.51, 0.42).
+- Link questions, held-out seventh, both halves in the top 5: BM25 11/23, v2 10/23, small 9/23,
+  step 3 **11/23**, while on the 132 trained ones BM25 81, step 3 117. Step 3 memorised the 155
+  questions it saw (6 repeats each); nothing generalised to the 23 it did not.
 
 ## Recent changes on `main`
 
@@ -109,12 +145,35 @@ repository because they name internal documents.
 
 ## Next
 
-- Decide: release small (step 1) as v3 after the M3 and 40-question check; step 3 misses two marks
-  (answer deletion 0.68 < 0.7; MultiDoc2Dial and TechQA below step 1).
+- **v3, waiting on Zero.** (a) publish `dispositio-small` (step 1): quality at or above v2 on the
+  five sets, 1.9x faster, 276 MB, but it does not read the question and it leans on shared words.
+  (b) publish step 3: reads the question and judges counterfactual passages, at 0.9-1.8 nDCG
+  points below (a) on MultiDoc2Dial/TechQA/SciFact and no better on memoria. The ablation above
+  says the cost is `instr` and the 6 repeats, not the idea, so (c) is a round on better data first.
+- **The data fixes the literature points to** (Promptriever 2409.11136, Huang 2010.04762, System 2
+  -> System 1 2407.06023, Rank1 2502.18418): replace the attribute questions (`is it in Vietnamese?`,
+  `has digits?`) with instruction negatives, where the *same* pair stops being relevant when the
+  instruction changes; keep the relevance data at full volume and add instruction data up to 1:1;
+  drop the 6 repeats to a paired 1x at a few percent of the items, length-matched; keep a generated
+  item only when 2 of 3 LLM samples and the teacher agree on its label; mine negatives from the
+  teacher's top ranks instead of BM25's 1-30, which contain false negatives. Then rerun the
+  ablation with the same seed and step budget.
 - memoria: no model beats v2 there; reading instructions is not yet judging what to recall.
-- Try other checkpoints: `INVENTIO_DISPOSITIO_MODEL=<dir or hf id> inventio query ...`; compare on
-  the same question set.
-- Decide the mirror isolation fix.
+- Release step: `local_files_only` keeps a user on whatever they downloaded, so a v3 needs
+  `inventio update` (already in) plus a note in README/model card; `main` is not pushed yet.
+- M3: the 40 private questions and the MLX prototype are still unmeasured (both need the Mac).
+- Public benchmarks not rerun with pool 15 (README still quotes pool 30).
+- Cross-language questions are handled only in the skill.
+- Right file, wrong section: on some questions dispositio picks the section next to the answer.
+- **No link from a page to code when a table name appears only inside SQL strings**: `mentions`
+  links need a definition in the map. Schema cards might fill this; untested.
+- **`mirror_dir()` ignores `--db`** and writes into the real data directory, so
+  `tests/test_connectors.py::test_where_scopes_every_term_before_bm25` fails from the second run
+  on. Undecided: mirrors follow `--db`, or isolate them in tests only. Until then, delete
+  `<data dir>/mirrors/notes` after a test run.
+- Smaller: printed ranks can appear out of order (results are grouped by document type); the
+  first query is slow without warning; `--db` after the subcommand gives a generic argparse error.
+- Untested: the server on Windows, and two first queries starting it at once.
 
 ## Commands
 
