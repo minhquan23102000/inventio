@@ -229,4 +229,8 @@ repository because they name internal documents.
 uv tool install -q --reinstall-package inventio "$PWD[laya]"     # install from this checkout
 uv run -q --python 3.12 --with pytest --with-editable ".[laya]" pytest -q tests
 inventio serve --stop                                          # after changing the model
+python benchmarks/systemone.py data                            # Kev records from MD2D + SWE-bench
+python benchmarks/systemone.py train --bal 4000 --out runs/s1-v1   # fine-tune (Kev f153596, checked out at KEV_DIR)
+python benchmarks/systemone.py spike http://127.0.0.1:8008 s1-v1 --sets md2d,webshop,techqa
+python benchmarks/systemone.py gate s1-v1 v3 md2d              # top-1 paired against dispositio
 ```

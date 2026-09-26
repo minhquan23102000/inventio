@@ -2,6 +2,7 @@
 holds the answer) and `exists` (does any passage answer at all), and measure that against dispositio.
 
     python benchmarks/systemone.py data                       # Kev records -> <data>/s1/data/*.jsonl
+    python benchmarks/systemone.py train --bal 4000 --out runs/s1-v1   # fine-tune Kev (recipe pinned here)
     python benchmarks/systemone.py spike <url> <tag> [--sets md2d,webshop,techqa] [--limit N]
     python benchmarks/systemone.py disp  <tag> [--sets ...]   # dispositio on the same pools
     python benchmarks/systemone.py gate  <kev tag> <v3 tag> <set>
@@ -45,6 +46,10 @@ DATA = data_dir(None) / "s1" / "data"
 K = 15
 MAX_OPTIONS = 255
 MAX_QUERY_CHARS = 1500
+# the Kev checkpoint we fine-tune from, and the base it was trained on (its own training_config.json)
+INIT_FROM = "jaredpalmer/kev-0.8b"
+BASE = "Qwen/Qwen3.5-0.8B-Base"
+BASE_REVISION = "dc7cdfe2ee4154fa7e30f5b51ca41bfa40174e68"
 norm = lambda t: " ".join(t.split())  # noqa: E731
 
 
@@ -504,10 +509,66 @@ def cmd_scale(a):
     record("scale", a.tag, a.axis, s)
 
 
+def cmd_train(a):
+    """The run's recipe, in the repo: the balanced record file, then Kev's trainer through
+    `kev_win.py` with every knob pinned, and a `recipe.json` recording the Kev commit, the base
+    revision and the data's hash so the run is reproducible from this repo alone."""
+    import hashlib
+    import os
+    import subprocess
+    kev = Path(os.environ.get("KEV_DIR", "C:/Users/LEGION/kev")).resolve()
+    python = kev / ".venv" / "Scripts" / "python.exe"
+    if not python.exists():
+        raise SystemExit(f"no Kev environment at {kev}; set KEV_DIR")
+    records = Path(a.records) if a.records else DATA / "train.jsonl"
+    if not records.exists():
+        raise SystemExit(f"{records} not built; run `systemone.py data` first")
+    if a.bal:
+        rows = [json.loads(l) for l in records.open(encoding="utf-8")]
+        swe = [r for r in rows if r["_meta"]["source"] != "md2d_train"]
+        pos = [r for r in rows if r["_meta"]["arm"] == "pos" and r["_meta"]["source"] == "md2d_train"]
+        neg = [r for r in rows if r["_meta"]["arm"] == "neg" and r["_meta"]["source"] == "md2d_train"]
+        n = max(0, (a.bal - len(swe)) // 2)
+        rng = random.Random(a.seed)
+        kept = swe + rng.sample(pos, min(n, len(pos))) + rng.sample(neg, min(n, len(neg)))
+        rng.shuffle(kept)
+        records = DATA / f"train_bal{a.bal}.jsonl"
+        records.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in kept), encoding="utf-8")
+        print(f"balanced {a.bal}: {len(kept)} records -> {records}", flush=True)
+    recipe = {"kev_dir": str(kev), "kev_commit": subprocess.run(
+        ["git", "-C", str(kev), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip() or None,
+        "init_from": INIT_FROM, "base": BASE, "base_revision": BASE_REVISION,
+        "records": str(records), "records_sha256": hashlib.sha256(records.read_bytes()).hexdigest(),
+        "max_state": a.max_state, "epochs": a.epochs, "lr": a.lr, "seed": a.seed,
+        "augmentations": "none (no none-option, no distractor: the options are exhaustive line ids)"}
+    out = Path(a.out)
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "recipe.json").write_text(json.dumps(recipe, indent=1) + "\n", encoding="utf-8")
+    cmd = [str(python), str(Path(__file__).resolve().parent / "kev_win.py"), "train",
+           "--data", str(records), "--init_from", INIT_FROM, "--base", BASE, "--base_revision", BASE_REVISION,
+           "--max_state", str(a.max_state), "--device", "cuda", "--dtype", "bf16", "--weights_dtype", "bf16",
+           "--checkpointing", "1", "--shared_prefix", "1", "--batch", "1", "--accum", "8",
+           "--lr", str(a.lr), "--epochs", str(a.epochs), "--seed", str(a.seed),
+           "--p_none", "0", "--p_none_distract", "0", "--p_distract", "0", "--out", a.out]
+    print(" ".join(cmd), flush=True)
+    if a.dry_run:
+        return 0
+    raise SystemExit(subprocess.call(cmd, cwd=kev))
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
     s = sub.add_parser("data", help="build the Kev training records"); s.set_defaults(fn=cmd_data)
+    s = sub.add_parser("train", help="fine-tune Kev on the records (recipe pinned here)")
+    s.add_argument("--records", default="", help="record file (default <data>/s1/data/train.jsonl)")
+    s.add_argument("--out", default="runs/s1", help="run directory, inside the Kev checkout")
+    s.add_argument("--bal", type=int, default=0, help="train on a balanced subset of about this many records")
+    s.add_argument("--max-state", type=int, default=6656)
+    s.add_argument("--epochs", type=int, default=1); s.add_argument("--lr", type=float, default=2e-5)
+    s.add_argument("--seed", type=int, default=0)
+    s.add_argument("--dry-run", action="store_true", help="write the recipe and print the command, then stop")
+    s.set_defaults(fn=cmd_train)
     s = sub.add_parser("scale", help="request time against questions and state length")
     s.add_argument("url"); s.add_argument("tag")
     s.add_argument("--axis", default="q,len"); s.add_argument("--pools", type=int, default=60)
