@@ -30,14 +30,14 @@ inventio query "the nightly backup has not finished, what do I do?" -k 3
 
 ```
 == Article
-1. wiki:runbook.md:8-13  Nightly backup runbook > When the nightly backup has not finished  p=0.98
+1. wiki:runbook.md:8-13  Nightly backup runbook > When the nightly backup has not finished  p=0.97
    1. Check the scheduler at 07:00. If `nightly_backup` is still running or has failed, stop it. 2. Take a fresh backup from the replica, not the primary: `make ba…
    -> mentions app:jobs/backup.py:4-9  (nightly_backup)
-3. wiki:runbook.md:3-6  Nightly backup runbook > Nightly backup  p=0.88
+3. wiki:runbook.md:3-6  Nightly backup runbook > Nightly backup  p=0.79
    The job `nightly_backup` copies the orders database to off-site storage. It starts at 01:00 and must finish before the morning order peak at 08:00.
    -> mentions app:jobs/backup.py:4-9  (nightly_backup)
 == SoftwareSourceCode
-2. app:jobs/backup.py:4-9  nightly_backup  p=0.92
+2. app:jobs/backup.py:4-9  nightly_backup  p=0.93
    def nightly_backup(db, storage, now): """Copy the orders database to off-site storage every night, before the morning order peak.""" snapshot = db.snapshot(as_o…
    -> mentions wiki:policy.md:3-8  (backup_retention_days)
    <- mentions wiki:incidents/2026-03-14.md:3-8  (nightly_backup)
@@ -73,8 +73,9 @@ inventio query "why do we check the backup scheduler at 07:00?" -k 2 --facts
 
 The why is in the incident report: the check was added after the night a backup filled its
 bucket at 03:40 and stopped without an error. From one step of a runbook the map reaches the
-code it runs, the rule it serves and the failure that put it there. Without `--judge`,
-dispositio judges offline: here it gives five of the six chunks the category Jev gives, but it
+code it runs, the rule it serves and the failure that put it there (the `p` values in this
+example are from dispositio v2; the facts path was not re-run for v3). Without `--judge`,
+dispositio v2 judges offline: here it gives five of the six chunks the category Jev gives, but it
 links every pair it is asked about (see [Limitations](#limitations)).
 
 `uv tool install` puts `inventio` on your PATH for every terminal; `uvx --from "inventio[laya] @
@@ -344,10 +345,11 @@ are partitions of one dataset, not datasets of their own.
 ## dispositio
 
 [dispositio](https://huggingface.co/minhquan2310/dispositio), the second canon of rhetoric
-after *inventio*, is [Laya](https://github.com/NandhaKishorM/laya) (mmBERT-base, 322M) fine-tuned
-for the two questions Inventio asks: does this passage answer the query, and what does this
-passage do for its reader. It runs on a laptop GPU or a CPU and no query or document leaves the
-machine.
+after *inventio*, is a [Laya](https://github.com/NandhaKishorM/laya) decision model trained for
+the two questions Inventio asks: does this passage answer the query, and what does this passage
+do for its reader. The current release (v3) is the earlier 322M model distilled into
+mmBERT-small (144M): 1.9 times as fast, 289 MB. It runs on a laptop GPU or a CPU and no query or
+document leaves the machine.
 
 ```sh
 inventio query "..."                      # dispositio ranks by default, downloaded once from Hugging Face
@@ -379,8 +381,9 @@ Relevance labels are written by people: the train splits of MultiDoc2Dial (quest
 pages of US public services: rules, eligibility, procedures), StackOverflow QA, SciFact and Zalo
 legal, and 3,923 SWE-bench train issues paired with the code their fix changed (35 repositories,
 none of them in SWE-bench Lite). Category labels, for which no human set exists, are a small
-general model's. `benchmarks/finetune_laya.py` reproduces it in two stages, about an hour on an
-RTX 5070 laptop GPU; results, training data and terms are on the model card.
+general model's. `benchmarks/finetune_laya.py` reproduces it: two stages on mmBERT-base, then a
+distillation into mmBERT-small, about two hours on an RTX 5070 laptop GPU; results, training data
+and terms are on the model card. The previous release stays fetchable as revision `v2`.
 
 ## Benchmarks
 
@@ -392,7 +395,7 @@ Method and reproduction: [benchmarks/README.md](benchmarks/README.md).
 | System | Runs on | SWE-bench Lite | SciFact | StackOverflow QA | Zalo legal | MultiDoc2Dial | TechQA |
 |---|---|---|---|---|---|---|---|
 | **Inventio + Jev** | TypeSafe cloud, ~1.2 s/query | **0.696** | **0.765** | 0.791 | not run | 0.486 | **0.655** |
-| **Inventio + dispositio** | laptop GPU, 0.4-0.9 s/query | 0.661 | 0.728 | 0.590 | **0.830** | **0.643** | 0.444 |
+| **Inventio + dispositio** | laptop GPU, 0.15 s to rank 15 | not re-run | 0.733 | 0.691 | **0.838** | 0.622 | 0.416 |
 | **Inventio**, no model | CPU, 35-140 ms/query | 0.540 | 0.670 | 0.670 | 0.756 | 0.470 | 0.370 |
 | **Inventio + Laya**, not tuned | laptop GPU, 0.6-0.9 s/query | 0.391 | 0.302 | 0.193 | 0.512 | 0.389 | 0.171 |
 | E5-Mistral 7B | 7B embedder | – | 0.764 | **0.915** | – | – | – |
@@ -412,25 +415,26 @@ embedders over the whole corpus, while Inventio with a ranker is two-stage.
 - **No model**: ahead of BGE-base and Voyage-Code-2 on SWE-bench Lite. The likely reason, not
   isolated by an ablation, is that chunks follow functions and carry their file path. On plain
   text it stays below the embedders.
-- **dispositio**, on a laptop: ahead of BM25 with the 95% interval above zero on SWE-bench Lite
-  (+0.121), MultiDoc2Dial (+0.172), Zalo (+0.074), TechQA (+0.074) and SciFact (+0.058), and
-  ahead of every embedder listed on SWE-bench Lite, whose 12 repositories it never trained on.
-  On the student aid pages of MultiDoc2Dial, held out of training whole, it gains +0.143 and
-  finds the answering section among its page's other sections for 80% of questions (Jev 57%).
-- **StackOverflow QA** puts its train and test answers in one corpus: 70% of the wrong
-  candidates a test question sees are answers dispositio was trained on as answers, and it
-  ranks them too high. With them removed from the candidates it is ahead of BM25 (0.752 against
-  0.729, +0.024 with the interval above zero); a team's own documents were never in training.
+- **dispositio** (v3), on a laptop: ahead of BM25 on all five text sets, by +0.021 (StackOverflow
+  QA) to +0.152 (MultiDoc2Dial). Against v2, paired per query: +0.015 on StackOverflow QA and
+  +0.017 on Zalo with the interval above zero, −0.015 on MultiDoc2Dial with the interval touching
+  zero, level on SciFact and TechQA. SWE-bench Lite was not re-run; the previous release's card
+  reports 0.661 there, ahead of every embedder listed, on 12 repositories it never trained on.
+- **StackOverflow QA** puts its train and test answers in one corpus, and dispositio was trained
+  on the train answers as answers. The previous release's card reports that it ranked some of
+  them too high, and was ahead of BM25 with them removed (0.752 against 0.729). v3 is ahead of
+  BM25 as published; the filtered variant was not re-run.
 - **Jev** stays ahead on SWE-bench, SciFact, StackOverflow QA and above all TechQA, where the
   answer is one section of a long technote.
 - **Laya as published** ranks worse than BM25 alone, which is why dispositio exists.
 - **Whole repositories** (code, tests, docs and configs indexed together) are harder: BM25 0.400,
-  dispositio 0.486, Jev 0.515. Tests and docs crowd the files to fix out of the 30 candidates;
+  the previous dispositio 0.486, Jev 0.515. Tests and docs crowd the files to fix out of the 30 candidates;
   looking up the names the issue contains puts the file among them for 73% of issues instead of
   63%.
 - **[examples/webshop](examples/webshop)**, 13 on-call questions over a runbook, a policy, an
   incident report and code, written after training (`python benchmarks/example_bench.py none
-  dispositio typesafe`): the answer is first for 9 with dispositio, 6 with BM25, 13 with Jev.
+  dispositio typesafe`): the answer is first for 4 with dispositio v3, 7 with v2, 6 with BM25,
+  13 with Jev.
 
 ## Privacy
 
@@ -459,7 +463,9 @@ embedders over the whole corpus, while Inventio with a ranker is two-stage.
 - Text inside images, diagrams and attached files is not read.
 - dispositio misses a paraphrase that needs an inference ("without loading the main database"
   for "from the replica") and finds one step of a numbered list less often than a section that
-  answers whole. How well it carries to a team's own documents is measured on 13 questions only.
+  answers whole. On the 13 questions of examples/webshop, worded the way someone on call asks,
+  v3 ranks below BM25 alone; how well it carries to a team's own documents is measured on
+  those 13 only.
 - `about` links need a judge of "are these two passages about the same thing". dispositio was
   not trained for it, and Laya as published calls nearly every pair the same; use Jev for links.
 - The categories above are new. Whether `--facts` with them finds answers a same-size BM25 pool
