@@ -1,0 +1,13 @@
+{"qid": 0, "top1": true, "exists_pos": 0.9733, "exists_neg": 0.9328}
+{"qid": 1, "top1": false, "exists_pos": 0.9603, "exists_neg": 0.9603}
+{"qid": 2, "top1": false, "exists_pos": 0.4172, "exists_neg": 0.4172}
+{"qid": 3, "top1": false, "exists_pos": 0.1623, "exists_neg": 0.1623}
+{"qid": 4, "top1": false, "exists_pos": 0.553, "exists_neg": 0.553}
+{"qid": 5, "top1": false, "exists_pos": 0.7511, "exists_neg": 0.7511}
+{"qid": 6, "top1": false, "exists_pos": 0.5917, "exists_neg": 0.5917}
+{"qid": 7, "top1": true, "exists_pos": 0.4695, "exists_neg": 0.2318}
+{"qid": 8, "top1": true, "exists_pos": 0.7976, "exists_neg": 0.2125}
+{"qid": 9, "top1": false, "exists_pos": 0.949, "exists_neg": 0.949}
+{"qid": 10, "top1": false, "exists_pos": 0.1747, "exists_neg": 0.1747}
+{"qid": 11, "top1": true, "exists_pos": 0.9234, "exists_neg": 0.8385}
+{"qid": 12, "top1": false, "exists_pos": 0.127, "exists_neg": 0.127}

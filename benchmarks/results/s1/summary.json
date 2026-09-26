@@ -1,0 +1,17 @@
+{
+ "gate": {
+  "kev08-vs-v3/webshop": {
+   "diff": 0.615,
+   "diff_hi": 0.846,
+   "diff_lo": 0.308,
+   "exists_auc_kev": 0.763,
+   "exists_auc_v3": 0.559,
+   "losses": 0,
+   "n": 13,
+   "set": "webshop",
+   "top1_kev08": 0.923,
+   "top1_v3": 0.308,
+   "wins": 8
+  }
+ }
+}

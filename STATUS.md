@@ -164,7 +164,8 @@ repository because they name internal documents.
   (Qwen3.5 decoder + LoRA + pointer head, state computed once, one row per question on its cache;
   github.com/jaredpalmer/kev, Apache-2.0, "No Jev outputs were used for training") is the candidate.
   `V4PLAN.md` (reranker data plan) is superseded.
-- **Zero-shot spike, RTX 5070 laptop** (`%TEMP%/s1_spike.py`, `s1_scale.py`, `s1_disp.py`; pools are
+- **Zero-shot spike, RTX 5070 laptop** (`benchmarks/systemone.py`, subcommands `data`, `spike`,
+  `disp`, `gate`, `lines`, `scale`; Kev run with `benchmarks/kev_win.py`; pools are
   BM25's 15 rendered as `P01 [path > heading]` / `L000| line`; `exists` negatives = the same query
   with every gold chunk removed and the pool refilled from BM25). Top-1 = the answer passage, or the
   top line inside it; MultiDoc2Dial counts the 453 of 613 test queries whose answer is in the pool.
@@ -185,8 +186,9 @@ repository because they name internal documents.
   Envs: `C:/Users/LEGION/kev/.venv` (torch cu128, fla 0.5.2, triton-windows), `C:/Users/LEGION/tinyjev-env`.
 - **D4, gates fixed before the first training run (2026-09-26).** Kev-0.8B, LoRA warm-started
   from `jaredpalmer/kev-0.8b`, questions `where_line` (Choice over line ids, soft target spread
-  over the gold lines) and `exists` (Noul), rendered exactly as `s1_spike.py`. Data
-  `%TEMP%/s1_data.py`, people's labels only: MultiDoc2Dial train topics (studentaid held out, as
+  over the gold lines) and `exists` (Noul), rendered exactly as `spike` renders them. Data
+  `python benchmarks/systemone.py data` -> `<data>/s1/data/{train,dev}.jsonl`, rows
+  `benchmarks/results/s1/`, people's labels only: MultiDoc2Dial train topics (studentaid held out, as
   for dispositio; gold lines = the paragraphs holding the reply's grounding spans) and SWE-bench
   train issues (gold lines = lines the fix changed); `exists=false` = the same query with gold and
   near chunks removed. v1 file: MD2D 3,157 positive + 4,500 negative, SWE 107 + 107. Only 107 of
@@ -197,6 +199,15 @@ repository because they name internal documents.
   line inside the answer passage at least 11/13 (zero-shot 12/13). Reported, no gate: exact-line
   top-1 on MD2D test (gold = paragraphs holding the grounding spans) against zero-shot Kev; TechQA
   (never trained on) against v3.
+- **Two defects found in v1's own labels, and the fix (v1 was already training on the old file).**
+  (a) 33 of 1,893 MultiDoc2Dial positives (1.7%) had their gold line on a bare section heading
+  ("Citizenship"), because a short annotator span matched the first line containing it; the rule now
+  takes the most specific matching line and skips a span that *is* a heading line, its section's
+  paragraphs being where the answer is read. (b) The builder was missing `data.py`'s filter for
+  vague queries ("I have a question"), so ~100 more topics were in it. Both fixed in
+  `benchmarks/systemone.py`: the file is now MD2D 2,955 positive + 4,365 negative, SWE 107 + 107.
+  v1 trains on the earlier file (`<data>/s1/data/train_v1s.jsonl` in `%TEMP%/s1/data`, kept as
+  `*.run1.jsonl`); a v1.1 would train on the fixed one.
 - **Correction to what stood here.** The list said to mine negatives from the teacher's top ranks
   instead of BM25's 1-30, "which contain false negatives", citing Rank1. Rank1's ~80% is mT5-13B
   negatives, not BM25. Measured on our own cache (teacher v2 over the written negatives of the v3
