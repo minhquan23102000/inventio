@@ -389,9 +389,11 @@ def cmd_query(args) -> int:
         return 2
     try:
         ranker = make_ranker(args.ranker)
-        hits = search(con, args.text, k=args.k, pool=args.pool, ranker=ranker, expand_links=args.links,
+        hits = search(con, args.text, k=args.k, pool=args.pool, ranker=ranker,
+                      expand_links=not args.no_links and ranker is not None,
                       by_type=args.types, facts=make_judge(args.judge) if args.facts else None,
-                      symbols=not args.no_symbols, neighbours=args.neighbours, scope=scope)
+                      symbols=not args.no_symbols, neighbours=not args.no_neighbours and ranker is not None,
+                      scope=scope)
     except CloudRefused as e:
         print(str(e), file=sys.stderr)
         return 3
@@ -446,14 +448,16 @@ def cmd_bench(args) -> int:
         if args.arms:
             res = bench.run_arms(con, rows, ranker, make_judge(args.judge), pool=args.pool, scope=scope)
         else:
-            res = bench.run(con, rows, ranker, pool=args.pool, expand_links=args.links, by_type=args.types,
-                            facts=make_judge(args.judge) if args.facts else None,
-                            symbols=not args.no_symbols, neighbours=args.neighbours, scope=scope)
+            res = bench.run(con, rows, ranker, pool=args.pool, expand_links=not args.no_links and ranker is not None,
+                            by_type=args.types, facts=make_judge(args.judge) if args.facts else None,
+                            symbols=not args.no_symbols, neighbours=not args.no_neighbours and ranker is not None,
+                            scope=scope)
     except CloudRefused as e:
         print(str(e), file=sys.stderr)
         return 3
-    res["config"] = {"ranker": args.ranker, "links": args.links, "types": args.types, "pool": args.pool,
-                     "arms": args.arms, "judge": args.judge if args.arms else None}
+    res["config"] = {"ranker": args.ranker, "links": not args.no_links and ranker is not None,
+                     "neighbours": not args.no_neighbours and ranker is not None, "types": args.types,
+                     "pool": args.pool, "arms": args.arms, "judge": args.judge if args.arms else None}
     if args.json:
         print(json.dumps(res))
     elif args.arms:
@@ -616,13 +620,13 @@ there. Every command prints source:path:start-end coordinates that read and show
                        help="reorder the pool: dispositio (local; the default when the laya extra is installed), "
                             "none (BM25 order), laya (local, as published), typesafe (cloud, public sources only)")
         s.add_argument("--pool", type=int, default=15, help="BM25 candidates handed to the ranker")
-        s.add_argument("--links", action="store_true",
-                       help="also hand the ranker chunks linked to the top BM25 hits (off: measured no gain yet)")
+        s.add_argument("--no-links", action="store_true",
+                       help="do not hand the ranker the chunks the top BM25 hits link to (on with a ranker)")
         s.add_argument("--no-symbols", action="store_true",
                        help="do not add the files and definitions the question names (on by default)")
-        s.add_argument("--neighbours", action="store_true",
-                       help="add the chunks of other files that share the most distinctive words of the top "
-                            "BM25 hits (code only, no model; needs --ranker to reorder them)")
+        s.add_argument("--no-neighbours", action="store_true",
+                       help="do not add the chunks of other files that share the most distinctive words of the "
+                            "top BM25 hits (on with a ranker: without one they would only sit below BM25's order)")
         s.add_argument("--types", action="store_true",
                        help="ask the ranker which document types hold the answer and add BM25's best chunks "
                             "of those types to the pool (needs --ranker)")

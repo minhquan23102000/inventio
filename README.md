@@ -137,14 +137,20 @@ Rule, with p=0.38.
 flowchart LR
     Q["question"] --> B["BM25:<br/>15 best chunks"] --> P["pool"]
     Q --> N["names it contains<br/>nightly_backup, jobs/backup.py:<br/>the chunk that defines each"] --> P
-    Q -. "--types --facts<br/>--neighbours --links" .-> W["more candidates:<br/>the document types it asks for,<br/>chunks of its categories and their links,<br/>other files sharing the top hits' rare words,<br/>what the top hits cite or mention"] -.-> P
+    Q -. "--types --facts" .-> W["more candidates:<br/>the document types it asks for,<br/>chunks of its categories"] -.-> P
+    B --> L["what the top hits cite or mention,<br/>other files sharing<br/>their rare words"] --> P
     P --> R["ranker: does this passage<br/>answer the question?<br/>dispositio · Jev · none"] --> O["passages with path:lines,<br/>grouped by type,<br/>each with its links"]
 ```
 
 The pool only grows and the ranker only orders it: a passage that neither BM25 nor the names
 brought in cannot come out. Looking up names needs no model and is on by default
 (`--no-symbols` turns it off); on whole SWE-bench repositories it puts a file to fix among the
-candidates for 73% of issues instead of 63%. The four dotted options are off by default;
+candidates for 73% of issues instead of 63%. With a ranker, two more ways in are on by default:
+the chunks the five best hits link to (`--no-links`) and chunks of other files sharing those hits'
+rarest words (`--no-neighbours`), up to ten each. On SciFact, StackOverflow QA and MultiDoc2Dial
+they bring the answer into a pool that had none for 1-3% of questions; the ranker reads up to
+20 more passages for it, which is where the time goes. Without a ranker they are skipped, since
+they would only sit below BM25's order. The two dotted options are off by default;
 [benchmarks/README.md](benchmarks/README.md) measures what each adds. A Vietnamese question is
 also searched as pairs of adjacent syllables, since *hợp đồng* (contract) is two words to BM25.
 

@@ -143,16 +143,35 @@ repository because they name internal documents.
 - Smaller: printed ranks can appear out of order (results are grouped by document type); the
   first query is slow without warning; `--db` after the subcommand gives a generic argparse error.
 - Untested: the server on Windows, and two first queries starting it at once.
+- **Links and neighbours are on by default with a ranker** (`--no-links`, `--no-neighbours`; skipped
+  with `--ranker none`, where they would only sit below BM25). Answer brought into a pool that had
+  none (BM25 30 + up to 10 each, `%TEMP%/probe_widen.py`): SciFact 9 (neighbours) / 4 (links) of
+  300, StackOverflow QA 14 / 31 of 1,994, MultiDoc2Dial 6 / 0 of 613 (BEIR maps have only judged
+  `about` links; a real map's cites/mentions links are unmeasured here). Cost per query, CPU,
+  before the ranker: links about 0 ms; neighbours 23 ms (TechQA, 2k chunks), 65 ms (SciFact, 5k),
+  201 ms (StackOverflow QA, 27k), **1.7 s (Zalo, 67k)** — five 24-word BM25 queries. On Vietnamese
+  maps that bag of words is also searched as adjacent pairs (`đ` survives the diacritic fold, so
+  the phrase rule fires on a list with no adjacency): off, 1.45 s and 27% different neighbours;
+  not changed until measured. The ranker reads up to 20 more passages.
 
 ## Next
 
-- **v3 (step 4) is training now**: `dispositio-small-mask`, the MIX plus the masking rows, 2 epochs
-  from `dispositio-small` — step 3's ability to read the question without the attribute questions
-  that cost it 0.9-1.3 points. Then BEIR (~8 min) and the probes. Publishing it still needs
-  SWE-bench Lite `mixed` (~70 min) or a card that says that row was not re-run, and tag `v2` before
-  the upload.
-- **v4's data plan is `V4PLAN.md`.** It replaces the ad-hoc list that stood here: failure targets,
-  the row-by-row data set, the evaluation and the gates are fixed before any training runs.
+- **The run training now is not a release candidate.** `dispositio-small-mask` is MIX + `synth=6`,
+  the same data, start and seed as `abl-synth6` (65,056 items), not "the masking rows". Paired
+  per query from the score caches (`%TEMP%/paired_models.py`), that arm against MIX alone:
+  MultiDoc2Dial −0.017 (−0.028, −0.006), TechQA +0.017 (−0.011, +0.044) on 119 queries: the
+  TechQA gain it was picked for is inside the noise; the MultiDoc2Dial loss is not. It is kept
+  running as a second seed-equal run of that arm.
+- **v3 = `dispositio-small`, pending one fact Zero has not seen**: on examples/webshop (13
+  on-call questions, `example_bench.py`, pool 30) the answer is first for BM25 6, v2 7, small **4**
+  (MRR@10 0.67 / 0.69 / 0.58); memoria hit@2 BM25 15, v2 17-18, small 14-15. Paired against v2 on
+  BEIR: StackOverflow QA +0.015 (+0.006, +0.024), Zalo +0.017 (+0.003, +0.032), MultiDoc2Dial
+  −0.015 (−0.032, +0.000), SciFact and TechQA inside the noise. Category accuracy, held out:
+  out of domain 0.641 (v2) → 0.586.
+- **v4's data plan is `V4PLAN.md`**, to be rewritten from the oracle review (`agent://V4PlanReview`):
+  the synth rows carry a same-passage "does it fail to answer?" row that is instruction-marker
+  training; the `cut_flipped` gate was never reached by any arm; gates must be anchored to v2
+  and to a replicate, not to a noise floor below sampling error.
 - **Correction to what stood here.** The list said to mine negatives from the teacher's top ranks
   instead of BM25's 1-30, "which contain false negatives", citing Rank1. Rank1's ~80% is mT5-13B
   negatives, not BM25. Measured on our own cache (teacher v2 over the written negatives of the v3
