@@ -156,22 +156,33 @@ repository because they name internal documents.
 
 ## Next
 
-- **The run training now is not a release candidate.** `dispositio-small-mask` is MIX + `synth=6`,
-  the same data, start and seed as `abl-synth6` (65,056 items), not "the masking rows". Paired
-  per query from the score caches (`%TEMP%/paired_models.py`), that arm against MIX alone:
-  MultiDoc2Dial −0.017 (−0.028, −0.006), TechQA +0.017 (−0.011, +0.044) on 119 queries: the
-  TechQA gain it was picked for is inside the noise; the MultiDoc2Dial loss is not. It is kept
-  running as a second seed-equal run of that arm.
-- **v3 = `dispositio-small`, pending one fact Zero has not seen**: on examples/webshop (13
-  on-call questions, `example_bench.py`, pool 30) the answer is first for BM25 6, v2 7, small **4**
-  (MRR@10 0.67 / 0.69 / 0.58); memoria hit@2 BM25 15, v2 17-18, small 14-15. Paired against v2 on
-  BEIR: StackOverflow QA +0.015 (+0.006, +0.024), Zalo +0.017 (+0.003, +0.032), MultiDoc2Dial
-  −0.015 (−0.032, +0.000), SciFact and TechQA inside the noise. Category accuracy, held out:
-  out of domain 0.641 (v2) → 0.586.
-- **v4's data plan is `V4PLAN.md`**, to be rewritten from the oracle review (`agent://V4PlanReview`):
-  the synth rows carry a same-passage "does it fail to answer?" row that is instruction-marker
-  training; the `cut_flipped` gate was never reached by any arm; gates must be anchored to v2
-  and to a replicate, not to a noise floor below sampling error.
+- **v4 is not a ranker.** Zero's direction (locked D1, D2): a System One model for RAG, like Jev,
+  that reads the query and BM25's pool once with passage and line ids and answers typed questions
+  together: `where` (a Choice over line ids) and `exists` (a Noul) first, `next` and `conflict`
+  later. The selling point is inference speed with many questions over many tokens, not file size.
+  Laya (questions before the state, one pass per question) is the wrong shape; the Kev shape
+  (Qwen3.5 decoder + LoRA + pointer head, state computed once, one row per question on its cache;
+  github.com/jaredpalmer/kev, Apache-2.0, "No Jev outputs were used for training") is the candidate.
+  `V4PLAN.md` (reranker data plan) is superseded.
+- **Zero-shot spike, RTX 5070 laptop** (`%TEMP%/s1_spike.py`, `s1_scale.py`, `s1_disp.py`; pools are
+  BM25's 15 rendered as `P01 [path > heading]` / `L000| line`; `exists` negatives = the same query
+  with every gold chunk removed and the pool refilled from BM25). Top-1 = the answer passage, or the
+  top line inside it; MultiDoc2Dial counts the 453 of 613 test queries whose answer is in the pool.
+
+  | | webshop (13) top passage / top line | exists AUC | MD2D top passage / top line | exists AUC | time per pool |
+  |---|---|---|---|---|---|
+  | BM25 order | 6/13 | – | 0.375 | – | – |
+  | dispositio v3 (one question, trained on MD2D) | 4/13 | 0.56 | **0.614** | **0.744** | 27 ms / 65 ms |
+  | Kev-0.8B zero-shot | 7/13 / **12/13** | **0.76** | 0.393 / 0.358 | 0.569 | 67 ms / 168 ms |
+  | TinyJev-0.6B zero-shot (first 200 MD2D) | 6/13 / 9/13 | 0.72 | 0.291 (Kev 0.369 on the same) | 0.505 | 181 ms / ~1 s |
+
+  Kev-0.8B, time against questions on one 3.2k-token state: 1-4 questions ~150 ms, 16: 202 ms,
+  64: 434 ms, 255: 1.33 s. Against state length (3 questions): 3.3k 168 ms, 9k 581 ms, 18k 1.31 s,
+  24k 1.98 s; ~36k fails on 8 GB. On Windows only with `%TEMP%/kev_serve_win.py`: torch's Windows
+  wheels have no flash kernel, and SDPA's GQA path then takes the math kernel (O(L²) memory, OOM
+  past ~8k tokens, twice the time at 3k). Zero-shot, `where` passage is BM25-level on MD2D and
+  `exists` is weak; training on inventio's questions is the open step. Mac speed unmeasured.
+  Envs: `C:/Users/LEGION/kev/.venv` (torch cu128, fla 0.5.2, triton-windows), `C:/Users/LEGION/tinyjev-env`.
 - **Correction to what stood here.** The list said to mine negatives from the teacher's top ranks
   instead of BM25's 1-30, "which contain false negatives", citing Rank1. Rank1's ~80% is mT5-13B
   negatives, not BM25. Measured on our own cache (teacher v2 over the written negatives of the v3
@@ -182,8 +193,7 @@ repository because they name internal documents.
   here: they need instance instructions, and ours is one fixed sentence. The 15%/two-thirds defect
   rates Promptriever reports are still the priors for anything LLM-made.
 - memoria: no model beats v2 there; reading instructions is not yet judging what to recall.
-- Release step: `local_files_only` keeps a user on whatever they downloaded, so a v3 needs
-  `inventio update` (already in) plus a note in README/model card; `main` is not pushed yet.
+- `main` (README for v3) is not pushed to GitHub; Hugging Face `main` is v3, `v2` tag keeps v2.
 - M3: the 40 private questions and the MLX prototype are still unmeasured (both need the Mac).
 - Quantising the small ranker (int8/ONNX) is untried; the M3 measurement says the cost is candidates
   per query, not weights, so the first question is whether it helps at all.
