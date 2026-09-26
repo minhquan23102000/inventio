@@ -183,6 +183,20 @@ repository because they name internal documents.
   past ~8k tokens, twice the time at 3k). Zero-shot, `where` passage is BM25-level on MD2D and
   `exists` is weak; training on inventio's questions is the open step. Mac speed unmeasured.
   Envs: `C:/Users/LEGION/kev/.venv` (torch cu128, fla 0.5.2, triton-windows), `C:/Users/LEGION/tinyjev-env`.
+- **D4, gates fixed before the first training run (2026-09-26).** Kev-0.8B, LoRA warm-started
+  from `jaredpalmer/kev-0.8b`, questions `where_line` (Choice over line ids, soft target spread
+  over the gold lines) and `exists` (Noul), rendered exactly as `s1_spike.py`. Data
+  `%TEMP%/s1_data.py`, people's labels only: MultiDoc2Dial train topics (studentaid held out, as
+  for dispositio; gold lines = the paragraphs holding the reply's grounding spans) and SWE-bench
+  train issues (gold lines = lines the fix changed); `exists=false` = the same query with gold and
+  near chunks removed. v1 file: MD2D 3,157 positive + 4,500 negative, SWE 107 + 107. Only 107 of
+  the 1,386 SWE issues with the fix in BM25's 15 fit Kev's 255-option limit (code pools: median
+  7.6k tokens, often >255 lines), so v1 learns almost only from prose. Gates, on the spike's pools:
+  (1) MultiDoc2Dial test, 453 queries with the answer in the pool: top line's passage above v3's
+  0.614, paired bootstrap interval above zero; (2) `exists` AUC above v3's 0.744; (3) webshop top
+  line inside the answer passage at least 11/13 (zero-shot 12/13). Reported, no gate: exact-line
+  top-1 on MD2D test (gold = paragraphs holding the grounding spans) against zero-shot Kev; TechQA
+  (never trained on) against v3.
 - **Correction to what stood here.** The list said to mine negatives from the teacher's top ranks
   instead of BM25's 1-30, "which contain false negatives", citing Rank1. Rank1's ~80% is mT5-13B
   negatives, not BM25. Measured on our own cache (teacher v2 over the written negatives of the v3
