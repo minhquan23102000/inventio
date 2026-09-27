@@ -128,33 +128,32 @@ def served(url: str, timeout: float = 10) -> dict:
 README = """the model reads one state — a question and the candidate passages — and answers every question
 about it in a single pass, inside inventio itself. Nothing to start, no port, no environment variable:
 
-    pip install 'inventio[systemone]'              once: torch, transformers, peft
-    inventio query "your question" --ranker systemone
+    pip install 'inventio[dispositio]'              once: torch, transformers, peft
+    inventio query "your question" --ranker dispositio
 
 The first query loads the checkpoint (a download the first time); the background process inventio already
 keeps for a model ranker holds it in memory after that, so later queries pay only for the state
 (`inventio serve --stop` stops that process). To read a checkpoint that is not the published one — a run
 you trained yourself:
 
-    inventio systemone --use <run directory, or owner/name on the Hub>
+    inventio model --use <run directory, or owner/name on the Hub>
 
-Two settings still belong to a checkpoint: INVENTIO_SYSTEMONE_RUN says the same thing for one command,
-and INVENTIO_SYSTEMONE_CAVEAT turns on the caveat line below a probability."""
+Two settings still belong to a checkpoint: INVENTIO_DISPOSITIO_MODEL says the same thing for one command,
+and INVENTIO_DISPOSITIO_CAVEAT turns on the caveat line below a probability."""
 
-# The weights: a local run directory (a LoRA adapter plus head.pt) or a Hub repo id. v4 is published as the tag
-# `v4` of the same repository as the earlier releases (`main` keeps v3, the Laya shape, so an older inventio
-# that loads `main` is not handed a checkpoint it cannot read). Until the tag exists, `inventio systemone
-# --use` records a local run instead.
+# The weights: a local run directory (a LoRA adapter or merged weights, plus head.pt) or a Hub repo id. v4 is
+# published as the tag `v4` of the same repository as the earlier releases (`main` keeps v3, the older
+# per-passage shape, so an older inventio that loads `main` is not handed a checkpoint it cannot read).
 DEFAULT_MODEL = "minhquan2310/dispositio@v4"
-ENV = "INVENTIO_SYSTEMONE_RUN"
+ENV = "INVENTIO_DISPOSITIO_MODEL"
 
 
 def registry_file() -> Path:
-    return data_home() / "systemone.json"
+    return data_home() / "model.json"
 
 
 def run_id() -> str:
-    """Which weights answer: INVENTIO_SYSTEMONE_RUN, else what `inventio systemone use` recorded, else the
+    """Which weights answer: INVENTIO_DISPOSITIO_MODEL, else what `inventio model --use` recorded, else the
     published model."""
     if os.environ.get(ENV):
         return os.environ[ENV]
@@ -198,11 +197,11 @@ def update_notice() -> str | None:
 
     Asks at most once a day and sends the model's name and nothing else (no query, no document); never when
     INVENTIO_OFFLINE or HF_HUB_OFFLINE is set, or when the weights answering are not the published ones (a run
-    recorded with `inventio systemone --use`). Any failure is silent: a query must not fail over a release check.
+    recorded with `inventio model --use`). Any failure is silent: a query must not fail over a release check.
     """
     if os.environ.get("INVENTIO_OFFLINE") or os.environ.get("HF_HUB_OFFLINE") or run_id() != DEFAULT_MODEL:
         return None
-    path = data_home() / "systemone-update.json"
+    path = data_home() / "update.json"
     try:
         state = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -253,14 +252,14 @@ class Model:
         self.run = run or run_id()
         if not is_hub_id(self.run) and not Path(self.run).exists():
             raise ValueError(f"{self.run} is not a checkpoint: no such directory (and it is not a Hub id "
-                             f"like owner/name); `inventio systemone --use <run>` records the one you mean")
+                             f"like owner/name); `inventio model --use <run>` records the one you mean")
         self._lock = threading.Lock()
         self.tok, self.model = load(self.run, device)
         self.device = str(self.model.device)
 
     @classmethod
     def cached(cls, run: str | None = None, device: str | None = None) -> "Model":
-        key = (run or run_id(), str(device or ""), os.environ.get("INVENTIO_SYSTEMONE_DTYPE", ""))
+        key = (run or run_id(), str(device or ""), os.environ.get("INVENTIO_DTYPE", ""))
         if key not in cls.loaded:
             cls.loaded[key] = cls(run, device)
         return cls.loaded[key]
@@ -307,7 +306,7 @@ def line_of(state: str, lids, owner, index: int) -> dict:
 
 
 def honesty(last: dict | None, threshold: float | None) -> str | None:
-    """The caveat printed for a reader, when the operator asked for one (`INVENTIO_SYSTEMONE_CAVEAT`).
+    """The caveat printed for a reader, when the operator asked for one (`INVENTIO_DISPOSITIO_CAVEAT`).
 
     Off by default, and not because the reading is missing: `exists` is calibrated differently per
     corpus (median on answerable pools: md2d 0.447, techqa 0.232, webshop 0.377), so one threshold

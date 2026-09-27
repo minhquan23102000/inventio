@@ -1,14 +1,14 @@
 """Where each question of an example lands, per ranker: the check a public benchmark cannot make.
 
-    python benchmarks/example_bench.py none dispositio laya typesafe
+    python benchmarks/example_bench.py none dispositio typesafe
     python benchmarks/example_bench.py --example examples/webshop dispositio <checkpoint dir>
 
 examples/webshop is a small team's knowledge in the shape Inventio is built for: code, a policy,
 a runbook, an incident report, one source per subfolder. Its 13 questions (questions.jsonl) are
 asked the way someone on call asks them, most without the words of the section that answers;
 each names the one section, as `source:path:line`, that answers it. No ranker was trained or
-tuned on them. A ranker argument is `none` (BM25 order), `laya`, `typesafe`, `dispositio`, or a
-checkpoint directory, loaded as dispositio.
+tuned on them. A ranker argument is `none` (BM25 order), `typesafe`, `dispositio`, or a
+checkpoint directory (a System One run), loaded as dispositio.
 """
 
 import argparse

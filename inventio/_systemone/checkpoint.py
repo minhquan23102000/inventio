@@ -84,7 +84,7 @@ class LoadOptions:
     dtype        None = fp32, the exact path every reported number uses (bf16 when the checkpoint was trained with a bf16
                  backbone). Serving defaults to bf16 on CUDA and MPS instead: half the memory, 2-4.5x lower latency on an
                  L4 (Kev-4B: 209 -> 118 ms at 101 tokens, 850 -> 189 ms at 330 tokens), probabilities within ~0.01 and
-                 the same argmax on the checks run so far. The exact path is INVENTIO_SYSTEMONE_DTYPE=fp32.
+                 the same argmax on the checks run so far. The exact path is INVENTIO_DTYPE=fp32.
     merge        fold the LoRA into the base weights: the delta is computed from the fp32 adapter and added in fp32 with
                  one rounding to the load dtype, so a bf16 model holds exactly round(W + delta), the same bits as merging
                  an fp32 copy and casting, without the fp32 copy (Kev-9B needed 36 GB of GPU memory to load for that).

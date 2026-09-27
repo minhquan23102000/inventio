@@ -367,8 +367,8 @@ def cmd_skill(args) -> int:
     return 0
 
 
-def cmd_systemone(args) -> int:
-    """Which checkpoint answers `--ranker systemone`: the published model, or a run you trained."""
+def cmd_model(args) -> int:
+    """Which checkpoint answers `--ranker dispositio`: the published model, or a run you trained."""
     from . import systemone
 
     if args.use:
@@ -377,13 +377,13 @@ def cmd_systemone(args) -> int:
         except ValueError as e:
             print(str(e), file=sys.stderr)
             return 2
-        print(f"systemone: {run} recorded")
+        print(f"dispositio: {run} recorded")
         return 0
     run = systemone.run_id()
-    where = ("INVENTIO_SYSTEMONE_RUN" if os.environ.get(systemone.ENV)
+    where = (systemone.ENV if os.environ.get(systemone.ENV)
              else f"recorded in {systemone.registry_file()}" if systemone.registry_file().exists()
              else "the published model")
-    print(f"systemone: {run}  ({where})")
+    print(f"dispositio: {run}  ({where})")
     from ._systemone import missing
     miss = missing()
     if miss:
@@ -411,7 +411,7 @@ def cmd_query(args) -> int:
     from . import serve
     from .search import search
 
-    if args.ranker in ("dispositio", "laya", "systemone") and not args.here and serve.enabled():
+    if args.ranker == "dispositio" and not args.here and serve.enabled():
         code = serve.forward(args.argv)  # the model stays loaded between queries
         if code is not None:
             return code
@@ -433,9 +433,9 @@ def cmd_query(args) -> int:
         ranker = make_ranker(args.ranker)
         hits = searched(ranker, make_judge(args.judge) if args.facts else None)
     except Unreachable as e:
-        # The default is the System One reader, and this machine cannot read one (no weights recorded,
+        # The default is dispositio, and this machine cannot read one (no weights recorded,
         # no published model cached, no runtime). Answering in BM25 order with one line is the floor the
-        # tool always had; an explicit `--ranker systemone` gets the whole message and exit 3 instead,
+        # tool always had; an explicit `--ranker dispositio` gets the whole message and exit 3 instead,
         # because there the promise was made by the caller.
         if args.ranker_explicit or args.facts:   # --facts asked for a model's judgment: never skip it quietly
             print(str(e), file=sys.stderr)
@@ -448,24 +448,18 @@ def cmd_query(args) -> int:
     except ValueError as e:   # a request this ranker cannot serve: --types without a type head
         print(str(e), file=sys.stderr)
         return 2
-    if args.ranker == "dispositio":
-        from .rankers import update_notice
-
-        notice = update_notice()
-        if notice:
-            print(notice, file=sys.stderr)
-    if args.ranker == "systemone" and ranker is not None:
+    if args.ranker == "dispositio" and ranker is not None:
         from .systemone import honesty, update_notice
 
         notice = update_notice()
         if notice:
             print(notice, file=sys.stderr)
 
-        # The caveat is off unless the operator sets the threshold (`INVENTIO_SYSTEMONE_CAVEAT`): `exists`
+        # The caveat is off unless the operator sets the threshold (`INVENTIO_DISPOSITIO_CAVEAT`): `exists`
         # is calibrated per corpus (answerable medians 0.447 md2d, 0.232 techqa, 0.377 webshop), so one
         # number cannot hold a false-alarm rate across the three, and the pools it was validated on have
         # the answer in the map, just not in BM25's fifteen.
-        want = os.environ.get("INVENTIO_SYSTEMONE_CAVEAT")
+        want = os.environ.get("INVENTIO_DISPOSITIO_CAVEAT")
         note = honesty(getattr(ranker, "last", None), float(want) if want else None)
         if note:
             print(note, file=sys.stderr)
@@ -555,15 +549,16 @@ def cmd_serve(args) -> int:
 def cmd_update(args) -> int:
     from . import serve
     from ._systemone import missing
-    from .rankers import update
+    from .systemone import update
 
-    if missing() is None:   # the System One runtime is installed: its published model is the one queries read
-        from .systemone import update
+    if missing() is not None:
+        print("no local model is installed: pip install 'inventio[dispositio]'", file=sys.stderr)
+        return 2
     try:
         before, after = update()
-    except ImportError:
-        print("no local model is installed: pip install 'inventio[systemone]'", file=sys.stderr)
-        return 2
+    except (OSError, ValueError) as e:
+        print(f"update failed: {e}", file=sys.stderr)
+        return 3
     if before == after:
         print(f"dispositio is up to date ({after[:12]})")
         return 0
@@ -614,8 +609,7 @@ there. Every command prints source:path:start-end coordinates that read and show
     s.add_argument("--full", action="store_true", help="drop the source and rebuild it from scratch")
     s.add_argument("--facts", action="store_true", help="then judge content categories and fact links (see `facts`)")
     judge = default_judge()
-    judges = ("systemone (local, the default when installed), dispositio / laya (local, the older Laya "
-              "model), typesafe (cloud, public sources only)")
+    judges = "dispositio (local), typesafe (cloud, public sources only)"
     s.add_argument("--judge", choices=JUDGES, default=judge, help=f"model for --facts: {judges}")
     s.set_defaults(fn=cmd_init)
 
@@ -687,8 +681,8 @@ there. Every command prints source:path:start-end coordinates that read and show
 
     def ranking(s):
         s.add_argument("--ranker", choices=RANKERS, default=default_ranker(),
-                       help="reorder the pool: dispositio (local; the default when the laya extra is installed), "
-                            "none (BM25 order), laya (local, as published), typesafe (cloud, public sources only)")
+                       help="reorder the pool: dispositio (local; the default when the dispositio extra is "
+                            "installed), none (BM25 order), typesafe (cloud, public sources only)")
         s.add_argument("--pool", type=int, default=15, help="BM25 candidates handed to the ranker")
         s.add_argument("--no-links", action="store_true",
                        help="do not hand the ranker the chunks the top BM25 hits link to (on with a ranker)")
@@ -716,12 +710,12 @@ there. Every command prints source:path:start-end coordinates that read and show
     s.add_argument("--here", action="store_true", help=argparse.SUPPRESS)  # set by the server; never forward
     s.set_defaults(fn=cmd_query)
 
-    s = sub.add_parser("systemone", help="which checkpoint answers --ranker systemone: the published "
-                                         "model, or a run you trained")
+    s = sub.add_parser("model", help="which checkpoint answers --ranker dispositio: the published "
+                                     "model, or a run you trained")
     s.add_argument("--use", metavar="RUN",
-                   help="record a run directory or a Hub id (owner/name) for --ranker systemone")
+                   help="record a run directory or a Hub id (owner/name[@revision]) for --ranker dispositio")
     s.add_argument("--load", action="store_true", help="load it now and print what answered")
-    s.set_defaults(fn=cmd_systemone)
+    s.set_defaults(fn=cmd_model)
 
     s = sub.add_parser("serve", help="keep the model ranker loaded for queries (started by the first "
                                      "query; INVENTIO_SERVE=0 turns it off)")

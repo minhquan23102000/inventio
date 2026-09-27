@@ -3,10 +3,9 @@
 
 The question carries explicit true/false criteria: a bare "does this answer the query?" lets the
 model reward passages that are merely on topic. Every ranker asks the same question.
-`dispositio` is Laya fine-tuned on it (benchmarks/finetune_laya.py); `laya` is Laya as published.
+`dispositio` is the System One model read in this process (inventio/systemone.py); `typesafe` the cloud.
 """
 
-import json
 import os
 import time
 import urllib.error
@@ -19,218 +18,35 @@ CRITERIA = {
 }
 TYPE_INSTRUCTIONS = "Which kind of document would contain the answer to the `query`?"
 
-RANKERS = ("none", "dispositio", "laya", "typesafe", "systemone")
+RANKERS = ("none", "dispositio", "typesafe")
 
 
 class CloudRefused(RuntimeError):
     pass
 
 
-DISPOSITIO = "minhquan2310/dispositio"  # Laya fine-tuned for Inventio's questions (benchmarks/finetune_laya.py)
-LAYA = "convaiinnovations/laya"  # Laya multilingual as published, the base dispositio starts from
-
-
 def default_ranker() -> str:
-    """INVENTIO_RANKER, else `systemone` when this machine can read a checkpoint, else BM25 order.
+    """INVENTIO_RANKER, else `dispositio` when this machine can read a checkpoint, else BM25 order.
 
-    The System One reader is the default the moment the runtime is installed; Laya's per-passage
-    fine-tune (`dispositio` v3) is the old shape and is no longer reached for — `--ranker dispositio`
-    still reads it where the `laya` extra is installed. The check is a distribution lookup, not an
-    import: building the command line must not cost a torch import.
+    The check is a distribution lookup, not an import: building the command line must not cost a torch
+    import.
     """
     if os.environ.get("INVENTIO_RANKER"):
         return os.environ["INVENTIO_RANKER"]
     from ._systemone import missing
 
-    return "systemone" if missing() is None else "none"
-
-
-def checkpoint(name: str) -> str:
-    """What a local model name loads: `laya` the published checkpoint; `dispositio`
-    INVENTIO_DISPOSITIO_MODEL (a directory or a Hugging Face id, e.g. a fine-tune of your own),
-    else the released one."""
-    if name == "laya":
-        return LAYA
-    if name == "dispositio":
-        return os.environ.get("INVENTIO_DISPOSITIO_MODEL") or DISPOSITIO
-    raise ValueError(f"not a local model: {name!r}")
-
-
-def load_laya(name: str):
-    """The agent for a local model name (`dispositio` or `laya`), and the name its judgments are
-    stored under. The device is Laya's choice, CUDA, then Apple's MPS, then CPU, unless
-    INVENTIO_DEVICE names one (`cpu` when the GPU is busy)."""
-    import warnings
-
-    import laya
-
-    warnings.filterwarnings("ignore", module="laya")
-    device = os.environ.get("INVENTIO_DEVICE") or None
-    model = checkpoint(name)
-    sub = "multilingual" if model == LAYA else None
-    agent = laya.load(cached(model, sub) or model, device=device, subfolder=sub)
-    return agent, f"laya:{model}/{sub}" if sub else f"laya:{model}"
-
-
-def cached(model: str, subfolder: str | None) -> str | None:
-    """The downloaded snapshot of a Hugging Face checkpoint, found without the network; None for
-    a local directory or one not downloaded yet. A cached checkpoint is not refreshed here:
-    `inventio update` fetches a newer release, and `update_notice` says when there is one."""
-    if os.path.exists(model):
-        return None
-    from huggingface_hub import snapshot_download
-
-    prefix = f"{subfolder}/" if subfolder else ""
-    try:
-        return snapshot_download(model, local_files_only=True, allow_patterns=[
-            prefix + f for f in ("rl_agent_config.json", "model.safetensors", "tokenizer/*", "encoder/*")])
-    except Exception:  # not in the cache (or only part of it): laya.load downloads it
-        return None
-
-
-CHECK_EVERY = 86_400  # seconds between two looks at the released dispositio's latest revision
-
-
-def _cached_revision() -> str | None:
-    """The revision of the released dispositio this machine loads (a snapshot directory's name)."""
-    path = cached(DISPOSITIO, None)
-    return os.path.basename(os.path.normpath(path)) if path else None
-
-
-def update_notice() -> str | None:
-    """One line when Hugging Face has a newer dispositio than the one cached here, else None.
-    Asks at most once a day and sends nothing but the model's name (no query, no document);
-    never when INVENTIO_OFFLINE or HF_HUB_OFFLINE is set, or INVENTIO_DISPOSITIO_MODEL picks
-    another checkpoint. Any failure is silent: a query must not fail over a release check."""
-    if os.environ.get("INVENTIO_OFFLINE") or os.environ.get("HF_HUB_OFFLINE") or os.environ.get("INVENTIO_DISPOSITIO_MODEL"):
-        return None
-    from .store import data_home
-
-    state_path = data_home() / "update.json"
-    try:
-        state = json.loads(state_path.read_text())
-    except (OSError, ValueError):
-        state = {}
-    try:
-        if time.time() - state.get("checked", 0) >= CHECK_EVERY:
-            from huggingface_hub import HfApi
-
-            state = {"checked": time.time(), "latest": HfApi().model_info(DISPOSITIO, timeout=3).sha}
-            state_path.parent.mkdir(parents=True, exist_ok=True)
-            state_path.write_text(json.dumps(state))
-        have = _cached_revision()
-    except Exception:
-        return None
-    if have and state.get("latest") and state["latest"] != have:
-        return "inventio: a newer dispositio is released; `inventio update` fetches it (INVENTIO_OFFLINE=1 stops this check)"
-    return None
-
-
-def update() -> tuple[str | None, str]:
-    """Fetch the released dispositio's latest revision into the Hugging Face cache; the revisions
-    before and after. The earlier snapshot stays in the cache until `hf cache delete`."""
-    from huggingface_hub import snapshot_download
-
-    before = _cached_revision()
-    path = snapshot_download(DISPOSITIO, allow_patterns=["rl_agent_config.json", "model.safetensors", "tokenizer/*", "encoder/*"])
-    return before, os.path.basename(os.path.normpath(path))
+    return "dispositio" if missing() is None else "none"
 
 
 def ranker_tag(name: str) -> str:
-    """The name results and score caches are kept under: for `dispositio`, its checkpoint's last
-    path part, so a fine-tune of your own never shares a cache with the released model."""
+    """The name results and score caches are kept under: for `dispositio`, the checkpoint's last path
+    part (a run directory's name, or `dispositio@v4`), so a run of your own never shares a cache with the
+    released model."""
     if name != "dispositio":
         return name
-    return checkpoint(name).replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
+    from .systemone import run_id
 
-
-QUERY_TOKENS = 384  # Laya reads the query, then the passage, and cuts from the right: an issue of
-# 1,000 tokens would leave no room for the passage it is asked about (15% of SWE-bench Lite issues)
-
-
-def cap_query(tok, query: str) -> str:
-    """The query's first QUERY_TOKENS tokens, so every passage keeps at least ~500 of Laya's 1,024."""
-    ids = tok(query, add_special_tokens=False)["input_ids"]
-    return query if len(ids) <= QUERY_TOKENS else tok.decode(ids[:QUERY_TOKENS])
-
-
-def passage_room(tok, query: str, q: dict, max_len: int, head_max_len: int) -> int:
-    """Tokens left for the passage once the instructions, options and (capped) query are in."""
-    from laya.common import build_sequence
-
-    return max_len - len(build_sequence(tok, {"query": query, "passage": ""}, q, max_len, head_max_len)[0]) - 8
-
-
-def windows(tok, head: str, body: str, room: int) -> list[tuple[str, int, int]]:
-    """`head + body` whole when Laya can read it whole; else runs of the body's consecutive lines
-    that each fit in `room` tokens, every run under `head` (the `[path > heading]` line), so a long
-    function is read in parts instead of losing its tail. Each comes with the body lines it covers
-    (0-based, inclusive). Lengths are counted as Laya reads them, inside the JSON state."""
-    cost = lambda s: len(tok(json.dumps(s, ensure_ascii=False)[1:-1], add_special_tokens=False)["input_ids"])  # noqa: E731
-    lines = body.split("\n")
-    if cost(head + body) <= room:
-        return [(head + body, 0, len(lines) - 1)]
-    left = max(16, room - cost(head))
-    costs = [len(x) for x in tok([json.dumps(ln + "\n", ensure_ascii=False)[1:-1] for ln in lines],
-                                 add_special_tokens=False)["input_ids"]]
-    out, start, used = [], 0, 0
-    for i, c in enumerate(costs):
-        if used and used + c > left:
-            out.append((head + "\n".join(lines[start:i]), start, i - 1))
-            start, used = i, 0
-        used += c
-    out.append((head + "\n".join(lines[start:]), start, len(lines) - 1))
-    return out
-
-
-class LayaRanker:
-    BATCH = 16  # pairs per forward pass; pairs are sorted by length so padding stays small
-    MPS_BATCH = 4  # Apple GPUs: 3.5 s against 4.9 s for 16 on an M3, 30 pool chunks
-
-    def __init__(self, name: str):
-        self.agent, self.name = load_laya(name)
-        if self.agent.device.type == "mps":
-            self.BATCH = self.MPS_BATCH
-        self.questions = {"rel": {"type": "noul", "instructions": INSTRUCTIONS, "criteria": CRITERIA}}
-
-    def score(self, query: str, hits) -> list[float]:
-        """The same numbers as one `agent.predict` per pair, from a few batched forward passes. A
-        passage longer than Laya reads is scored in windows (see `windows`) and keeps its best."""
-        import numpy as np
-        import torch
-        from laya.common import QTYPES, build_sequence, collate_items, temp_bucket
-
-        a = self.agent
-        q = a._to_internal(self.questions["rel"])
-        max_len, head_max_len = a.cfg.get("max_len", 512), a.cfg.get("head_max_len", 192)
-        items, owner = [], []
-        query = cap_query(a.tok, query)
-        room = passage_room(a.tok, query, q, max_len, head_max_len)
-        for j, h in enumerate(hits):
-            head, body = h.passage().split("\n", 1)
-            for text, _, _ in windows(a.tok, head + "\n", body, room):
-                seq, markers = build_sequence(a.tok, {"query": query, "passage": text}, q, max_len, head_max_len)
-                items.append({"ids": seq, "markers": markers, "qtype": QTYPES[q["t"]]})
-                owner.append(j)
-        t_scale = a.temperature_by_options.get(temp_bucket(QTYPES[q["t"]], 2), a.temperature[QTYPES[q["t"]]])
-        out = [0.0] * len(hits)
-        order = sorted(range(len(items)), key=lambda i: len(items[i]["ids"]))
-        with torch.no_grad():
-            for s in range(0, len(order), self.BATCH):
-                idx = order[s:s + self.BATCH]
-                b = collate_items([[items[i]] for i in idx], a.tok.pad_token_id)
-                with torch.autocast(device_type=a.device.type, dtype=a.dtype, enabled=a.device.type == "cuda"):
-                    logits, _ = a.model(*(b[k].to(a.device) for k in
-                                          ("input_ids", "attention_mask", "marker_pos", "marker_mask", "qtype")))
-                z = logits.float().cpu().numpy()[:, :2] / t_scale
-                p = np.exp(z - z.max(-1, keepdims=True))
-                for i, row in zip(idx, p / p.sum(-1, keepdims=True)):
-                    out[owner[i]] = max(out[owner[i]], round(float(row[1]), 4))
-        return out
-
-    def types(self, query: str, types: dict[str, str]) -> dict[str, float]:
-        q = {"type": {"type": "choice", "instructions": TYPE_INSTRUCTIONS, "criteria": types}}
-        return dict(self.agent.predict({"query": query}, q)["answers"]["type"]["probabilities"])
+    return run_id().replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
 
 
 class TypeSafeRanker:
@@ -302,7 +118,7 @@ class TypeSafeRanker:
 
 
 class SystemOneRanker:
-    """The local System One model — `dispositio` v4 while it is still being trained.
+    """dispositio: the local System One model.
 
     One pass over the state (the question and the candidate passages) answers which passage holds the
     answer, which line does, and whether the passages answer at all. `score` returns, for each hit, the
@@ -312,7 +128,7 @@ class SystemOneRanker:
 
     The checkpoint is loaded in this process (`systemone.Model`, Kev's serving path vendored): nothing to
     start, no port, and inventio's own background process is what keeps it warm between queries.
-    `INVENTIO_SYSTEMONE_URL` (or an explicit `url`) reads a model on another machine over HTTP instead —
+    `INVENTIO_DISPOSITIO_URL` (or an explicit `url`) reads a model on another machine over HTTP instead —
     the only shape that sends the map anywhere, and so the only shape the public-sources rule applies to.
     """
 
@@ -324,7 +140,7 @@ class SystemOneRanker:
 
         from .systemone import README
 
-        self.url = (url or os.environ.get("INVENTIO_SYSTEMONE_URL") or "").rstrip("/")
+        self.url = (url or os.environ.get("INVENTIO_DISPOSITIO_URL") or "").rstrip("/")
         self.host = urlparse(self.url).hostname or ""
         self.run = run
         self.model, self.timeout, self.readme, self.last = model, timeout, README, None
@@ -343,7 +159,7 @@ class SystemOneRanker:
 
     def _served(self) -> dict:
         """The run and temperature behind the probabilities. A checkpoint answers to any model name, so the
-        run is what says which weights answered; `INVENTIO_SYSTEMONE_RUN` pins the one you meant."""
+        run is what says which weights answered; `INVENTIO_DISPOSITIO_MODEL` pins the one you meant."""
         from .systemone import Unreachable, served
 
         if self._info is not None:
@@ -355,7 +171,7 @@ class SystemOneRanker:
             info = served(self.url, timeout=30)
         except (OSError, urllib.error.URLError) as e:
             raise Unreachable(f"{self.url} did not answer ({e}).\n{self.readme}") from e
-        got, want = str(info.get("run") or ""), os.environ.get("INVENTIO_SYSTEMONE_RUN")
+        got, want = str(info.get("run") or ""), os.environ.get("INVENTIO_DISPOSITIO_MODEL")
         if want and want.replace("\\", "/").rstrip("/") not in got.replace("\\", "/"):
             raise Unreachable(f"{self.url} serves {got!r}, not {want!r}; another run's probabilities need "
                               f"their own threshold, so refusing to read them")
@@ -365,13 +181,13 @@ class SystemOneRanker:
     def score(self, query: str, hits) -> list[float | None]:
         from .systemone import (MAX_PASSAGES, MAX_STATE_CHARS, Unreachable, ask, line_of, questions, render)
 
-        if self.host not in self.LOCAL:
-            # Serving the map on this machine is the promise; a remote endpoint has to obey the rule the
-            # cloud ranker obeys — public sources only.
+        if self.url and self.host not in self.LOCAL:
+            # Reading the map on this machine is the promise (in this process, or a server on loopback); a
+            # remote endpoint has to obey the rule the cloud ranker obeys — public sources only.
             private = sorted({h.source for h in hits if not h.public})
             if private:
                 raise CloudRefused(
-                    f"ranker 'systemone' would send text from non-public source(s) {', '.join(private)} to "
+                    f"ranker 'dispositio' would send text from non-public source(s) {', '.join(private)} to "
                     f"{self.host}; restrict with --source, re-init them with --public, or serve it locally")
         info = self._served()
         kept, dropped = list(hits[:MAX_PASSAGES]), max(0, len(hits) - MAX_PASSAGES)
@@ -427,10 +243,8 @@ class SystemOneRanker:
 def make_ranker(name: str):
     if name == "none":
         return None
-    if name in ("dispositio", "laya"):
-        return LayaRanker(name)
+    if name == "dispositio":
+        return SystemOneRanker()
     if name == "typesafe":
         return TypeSafeRanker()
-    if name == "systemone":
-        return SystemOneRanker()
     raise ValueError(f"unknown ranker {name!r}; choose from {', '.join(RANKERS)}")

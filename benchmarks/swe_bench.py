@@ -154,7 +154,7 @@ def main() -> int:
     ap.add_argument("--strat", action="store_true", help="measure widenings code decides (STRAT_ARMS)")
     ap.add_argument("--type-limit", type=int, default=None, help="chunks added per predicted type (default: --pool)")
     ap.add_argument("--type-predictor", default="typesafe",
-                    help="the ranker whose type head predicts the types (--types): typesafe, systemone, dispositio")
+                    help="the ranker whose type head predicts the types (--types): dispositio or typesafe")
     args = ap.parse_args()
     swe = data_dir(args.data) / "swe-lite"
     out_dir = STRAT_RESULTS if args.strat else TYPES_RESULTS if args.types else RESULTS

@@ -21,7 +21,7 @@ def run(capsys, *argv):
 
 @pytest.fixture(autouse=True)
 def bm25_order(monkeypatch):
-    """The CLI ranks with dispositio when the laya extra is installed; these tests pin BM25 order
+    """The CLI ranks with dispositio when the dispositio extra is installed; these tests pin BM25 order
     so they run offline and do not depend on a model."""
     monkeypatch.setenv("INVENTIO_RANKER", "none")
 

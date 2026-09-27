@@ -44,7 +44,7 @@ from inventio.scope import Scope  # noqa: E402
 from inventio.search import bm25  # noqa: E402
 from inventio.store import connect  # noqa: E402
 from inventio.systemone import (EXISTS_ASKS, MAX_OPTIONS, MAX_QUERY_CHARS, MAX_STATE_CHARS, NOUL,  # noqa: E402
-                                PASSAGE_ASKS, ask, exists, questions, render, where_line)
+                                PASSAGE_ASKS, WHERE_ASKS, ask, exists, questions, render, where_line)
 
 REPO = Path(__file__).resolve().parent.parent
 ROWS = Path(__file__).resolve().parent / "results" / "s1"
@@ -401,7 +401,7 @@ def swe_records():
                                 domain=g["iid"].split("__")[0])
 
 
-CAT_ON, CAT_OFF = 0.94, 0.01   # finetune_laya's soft target: the label is a small model's (Gemini Flash), not a gold one
+CAT_ON, CAT_OFF = 0.94, 0.01   # v3's soft target: the label is a small model's (Gemini Flash), not a gold one
 
 
 def category_rows(split):
@@ -414,7 +414,7 @@ def category_state(r, with_path=True):
     from inventio.facts import passage
     if with_path:
         return {"passage": passage(r["path"], r["heading_path"], r["text"])}
-    # the path dropped (training only): the heading alone in brackets, or the bare text, as finetune_laya renders it
+    # the path dropped (training only): the heading alone in brackets, or the bare text, as v3's trainer rendered it
     return {"passage": (f"[{r['heading_path']}]\n" if r["heading_path"] else "") + r["text"]}
 
 
@@ -434,10 +434,10 @@ def judge_records():
 
 def cmd_judge(a):
     """The category question on its held-out passages (benchmarks/category_data.py test split): accuracy and
-    macro-F1 per stratum, for a System One run read in this process or for the Laya model (`--laya`). The
-    out-of-domain strata are a held-out repository's prose and StackOverflow answers, as in finetune_laya."""
-    from inventio.facts import CATEGORIES, LayaJudge, SystemOneJudge, category_question
-    judge = LayaJudge(a.laya) if a.laya else SystemOneJudge(a.run)
+    macro-F1 per stratum, for a System One run read in this process. The out-of-domain strata are a held-out
+    repository's prose and StackOverflow answers. v3's row on the same split is recorded under `judge/`."""
+    from inventio.facts import CATEGORIES, SystemOneJudge, category_question
+    judge = SystemOneJudge(a.run)
     rows = category_rows("test")[: a.limit or None]
     jobs = ((category_state(r), {"category": category_question()}) for r in rows)
     pred, t0 = [None] * len(rows), time.time()
@@ -665,41 +665,6 @@ def cmd_parity(a):
         print(f"{rows} pools: worst |Δp| " + ", ".join(f"{k} {v:.4f}" for k, v in sorted(worst.items()))
               + f"; argmax flips {flips}")
     return 0
-
-
-def cmd_disp(a):
-    import torch
-    from inventio.rankers import make_ranker
-    ranker = make_ranker("dispositio")
-    for name in a.sets.split(","):
-        top, n, pos_ex, neg_ex, ms, rows = 0, 0, [], [], [], []
-        ROWS.mkdir(parents=True, exist_ok=True)
-        for qid, q, con, scope, is_gold in SETS[name](a.limit):
-            pos, neg = pools(con, q, scope, is_gold)
-            if not pos or not neg:
-                continue
-            torch.cuda.synchronize()
-            t = time.time()
-            ps = ranker.score(q, pos)
-            torch.cuda.synchronize()
-            ms.append((time.time() - t) * 1000)
-            pn = ranker.score(q, neg)
-            neg_ex.append(max(pn))
-            row = {"qid": qid, "top1": None, "exists_pos": max(ps), "exists_neg": max(pn)}
-            if any(is_gold(h) for h in pos):
-                n += 1
-                pos_ex.append(max(ps))
-                row["top1"] = bool(is_gold(pos[max(range(len(ps)), key=ps.__getitem__)]))
-                top += row["top1"]
-            rows.append(row)
-        (ROWS / f"{a.tag}-{name}-disp.jsonl").write_text(
-            "".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
-        ms.sort()
-        record("disp", a.tag, name, {
-            "tag": a.tag, "set": name, "queries": len(rows), "gold_in_pool": n,
-            "passage@1": round(top / max(1, n), 3), "exists_auc": round(auc(pos_ex, neg_ex), 3),
-            "ms_per_pool_median": round(statistics.median(ms[1:]), 1) if len(ms) > 1 else None,
-            "ms_p90": round(ms[int(len(ms) * 0.9)], 1)})
 
 
 def load_run(tag, set):
@@ -1266,7 +1231,6 @@ def main():
     s.set_defaults(fn=cmd_publish)
     s = sub.add_parser("judge", help="the category question on its held-out passages")
     s.add_argument("tag"); s.add_argument("--run", default=None, help="System One run (default: the recorded one)")
-    s.add_argument("--laya", default="", help="measure a Laya model instead: dispositio | laya")
     s.add_argument("--limit", type=int, default=0)
     s.set_defaults(fn=cmd_judge)
     s = sub.add_parser("train", help="fine-tune Kev on the records (recipe pinned here)")
@@ -1319,10 +1283,8 @@ def main():
                    help=f"passages rendered into the state (default {K}); what BM25 finds beyond this is "
                         "invisible to the model, so this is the recall/quality trade in the product")
     s.set_defaults(fn=cmd_spike)
-    s = sub.add_parser("disp", help="dispositio on the same pools")
-    s.add_argument("tag"); s.add_argument("--sets", default="md2d"); s.add_argument("--limit", type=int, default=0)
-    s.set_defaults(fn=cmd_disp)
-    s = sub.add_parser("gate", help="a System One run against dispositio")
+    s = sub.add_parser("gate", help="a System One run against another run, or against the v3 rows recorded "
+                                    "under results/s1/rows (<tag>-<set>-disp.jsonl)")
     s.add_argument("kev"); s.add_argument("v3"); s.add_argument("set"); s.set_defaults(fn=cmd_gate)
     s = sub.add_parser("parity", help="the in-process reader against the served server, same states")
     s.add_argument("--run", required=True, help="the run directory the server is serving")

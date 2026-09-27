@@ -26,7 +26,7 @@ import time
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
 
-from .rankers import CloudRefused, load_laya
+from .rankers import CloudRefused
 
 CATEGORIES = {
     "Rule": "states what must, may or must not be done: a requirement, a policy, a law, a limit or "
@@ -163,29 +163,11 @@ class JevJudge:
                     yield live.pop(f), f.result()
 
 
-class LayaJudge:
-    """A Laya model on this machine (dispositio, or Laya as published). Asks all questions about
-    one state in one forward pass."""
-
-    cloud = False
-    packs = False
-
-    def __init__(self, name: str):
-        self.agent, self.name = load_laya(name)
-        self.refused = self.failed = 0
-
-    def batch(self, jobs):
-        for i, (state, qs) in enumerate(jobs):
-            ans = self.agent.predict(state, qs)["answers"]
-            yield i, {k: dict(ans[k]["probabilities"]) if q["type"] == "choice" else float(ans[k]["noul"])
-                      for k, q in qs.items()}
-
-
 class SystemOneJudge:
-    """The System One checkpoint `--ranker systemone` reads (`systemone.Model`), in this process. It packs:
+    """dispositio, the System One checkpoint `--ranker dispositio` reads (`systemone.Model`), in this process. It packs:
     a chunk and its ten neighbours are one state, and the ten link questions one pass.
 
-    Judgments are cached under the run that answered (`systemone:<run>`), so a map judged by one checkpoint
+    Judgments are cached under the run that answered (`dispositio:<run>`), so a map judged by one checkpoint
     is never read back as another's."""
 
     cloud = False
@@ -195,7 +177,7 @@ class SystemOneJudge:
         from .systemone import Model
 
         self.model = Model.cached(run)
-        self.name = f"systemone:{self.model.run}"
+        self.name = f"dispositio:{self.model.run}"
         self.refused = self.failed = 0
 
     def batch(self, jobs):
@@ -205,26 +187,22 @@ class SystemOneJudge:
                       for k, q in qs.items()}
 
 
-JUDGES = ("systemone", "dispositio", "laya", "typesafe")
+JUDGES = ("dispositio", "typesafe")
 
 
 def default_judge() -> str:
-    """INVENTIO_JUDGE, else the System One model when its runtime is installed, else Laya's (`dispositio`)."""
-    from ._systemone import missing
-
-    return os.environ.get("INVENTIO_JUDGE") or ("systemone" if missing() is None else "dispositio")
+    """INVENTIO_JUDGE, else dispositio: the only local judge, and `facts` says what to install when it is missing."""
+    return os.environ.get("INVENTIO_JUDGE") or "dispositio"
 
 
 def make_judge(name: str):
-    if name == "systemone":
+    if name == "dispositio":
         from .systemone import Unreachable, README
 
         try:
             return SystemOneJudge()
         except (RuntimeError, ValueError, OSError, ImportError) as e:   # not installed, not a checkpoint, no download
             raise Unreachable(f"{e}\n{README}") from e
-    if name in ("dispositio", "laya"):
-        return LayaJudge(name)
     if name == "typesafe":
         return JevJudge()
     raise ValueError(f"unknown judge {name!r}; choose from {', '.join(JUDGES)}")

@@ -176,7 +176,7 @@ def main() -> int:
     ap.add_argument("--phrases", choices=("auto", "on", "off"), default="auto",
                     help="adjacent-word phrases in the BM25 query (auto: Vietnamese queries only)")
     ap.add_argument("--judge", default="typesafe",
-                    help="with --arms: the model that judges categories and links (typesafe, systemone, dispositio)")
+                    help="with --arms: the model that judges categories and links (dispositio or typesafe)")
     ap.add_argument("--mlt", action="store_true",
                     help="with --arms: also `about` (judged links only) and `mlt` (the same candidates unjudged)")
     args = ap.parse_args()

@@ -137,9 +137,11 @@ def serve(idle: float) -> int:
     make = rankers.make_ranker
 
     def cached(name):  # one loaded model per checkpoint and device
-        if name not in ("dispositio", "laya"):
+        if name != "dispositio":
             return make(name)
-        key = (rankers.checkpoint(name), os.environ.get("INVENTIO_DEVICE"))
+        from .systemone import run_id
+
+        key = (run_id(), os.environ.get("INVENTIO_DEVICE"))
         if key not in loaded:
             loaded[key] = make(name)
         return loaded[key]

@@ -53,11 +53,11 @@ def missing() -> str | None:
 
     for name, need in (("torch", "2.6"), ("transformers", "5.17"), ("peft", "0.21"), ("pydantic", "2.9")):
         if importlib.util.find_spec(name) is None:
-            return f"{name} is not installed — pip install 'inventio[systemone]'"
+            return f"{name} is not installed — pip install 'inventio[dispositio]'"
     try:
         if tuple(int(x) for x in re.findall(r"\d+", version("transformers"))[:2]) < (5, 17):
             return (f"transformers {version('transformers')} is older than 5.17 (the hybrid cache classes "
-                    f"the encoder uses) — pip install -U 'inventio[systemone]'")
+                    f"the encoder uses) — pip install -U 'inventio[dispositio]'")
     except Exception:   # a distribution without version metadata: let the import speak
         pass
     return None
@@ -80,13 +80,13 @@ def load(run, device=None, *, dtype=None, merge: bool = True, attn: str | None =
 
     What `kev.serve` serves with: bf16 on an accelerator (half the memory; probabilities within ~0.01 of
     the exact path, the same argmax), fp32 on CPU; a checkpoint trained on a bf16 backbone loads in bf16
-    wherever it runs, as it was trained. INVENTIO_SYSTEMONE_DTYPE=fp32 asks for the exact path — the one
+    wherever it runs, as it was trained. INVENTIO_DTYPE=fp32 asks for the exact path — the one
     every number in this repository was reported from — which costs about twice the wall time.
-    INVENTIO_SYSTEMONE_DEVICE=cpu|cuda|mps leaves the accelerator to something else.
+    INVENTIO_DEVICE=cpu|cuda|mps leaves the accelerator to something else.
     """
     from .device import default_device
 
-    dev = str(device or os.environ.get("INVENTIO_SYSTEMONE_DEVICE") or default_device())
+    dev = str(device or os.environ.get("INVENTIO_DEVICE") or default_device())
     if dev == "cpu":
         # the hybrid (Qwen3.5) DeltaNet layers take a compiled kernel from the Hugging Face kernel hub when
         # one is installed, and that kernel needs a GPU: on CPU it raises inside a Triton launch. The
@@ -102,13 +102,13 @@ def load(run, device=None, *, dtype=None, merge: bool = True, attn: str | None =
 
     patch_attention()
     device = dev
-    if dtype is None and device != "cpu" and os.environ.get("INVENTIO_SYSTEMONE_DTYPE", "").lower() != "fp32":
+    if dtype is None and device != "cpu" and os.environ.get("INVENTIO_DTYPE", "").lower() != "fp32":
         dtype = torch.bfloat16
     opts = LoadOptions(dtype=dtype, merge=merge, attn=attn, lora_scale=lora_scale, temperature=temperature)
     return Checkpoint(run).load(device, opts)
 
 
-from .ids import is_hub_id   # noqa: E402  (torch-free: `inventio systemone --use` validates a name without the extra)
+from .ids import is_hub_id   # noqa: E402  (torch-free: `inventio model --use` validates a name without the extra)
 
 
 def __getattr__(name):   # PEP 562: Checkpoint/LoadOptions/resolve_run pull torch in, so they load on first use
