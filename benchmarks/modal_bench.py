@@ -140,6 +140,54 @@ def swe_shard(run: str, rows: list[dict]) -> str:
     return _read("benchmarks/results/swe-lite-types/results.jsonl")
 
 
+@app.cls(gpu="L4", timeout=3 * 3600, max_containers=3, scaledown_window=300)
+class Ranker:
+    """The published model (the Hub revision inventio reads by default), asked by every SWE ranking shard."""
+
+    @modal.enter()
+    def load(self):
+        os.environ["INVENTIO_DEVICE"] = "cuda"
+        os.environ.pop("INVENTIO_DISPOSITIO_MODEL", None)
+        from inventio.rankers import SystemOneRanker
+
+        self.ranker = SystemOneRanker()
+
+    @modal.method()
+    def score(self, query: str, hits: list) -> list:
+        return self.ranker.score(query, hits)
+
+
+@app.function(cpu=4, memory=16384, timeout=3 * 3600, ephemeral_disk=524_288)
+def swe_rank_shard(rows: list[dict], variants: str) -> str:
+    """swe_bench.py --rankers dispositio over these issues (one repository, consecutive): checkout and ingest
+    here on CPU, the pool of 30 scored by the shared GPU ranker. The tag is the published model's."""
+    import sys
+
+    data = Path("/tmp/bench/swe-lite")
+    data.mkdir(parents=True)
+    (data / "lite.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+    for r in SWE_REPOS:
+        (data / r).symlink_to(f"/repos/{r}")
+    os.environ["INVENTIO_BENCH_DATA"] = "/tmp/bench"
+    os.environ.pop("INVENTIO_DISPOSITIO_MODEL", None)
+    os.chdir(WORK)
+    import swe_bench
+
+    remote = Ranker()
+
+    class Remote:
+        cloud = False
+
+        def score(self, query, hits):
+            return remote.score.remote(query, hits)
+
+    local = swe_bench.make_ranker
+    swe_bench.make_ranker = lambda name: Remote() if name == "dispositio" else local(name)
+    sys.argv = ["swe_bench.py", "--rankers", "dispositio", "--variants", variants]
+    swe_bench.main()
+    return _read("benchmarks/results/swe-lite/results.jsonl")
+
+
 def _merge(dst: dict, src: dict) -> dict:
     for k, v in src.items():
         dst[k] = _merge(dst.get(k, {}), v) if isinstance(v, dict) and isinstance(dst.get(k), dict) else v
@@ -157,7 +205,8 @@ def _mark(entries: dict, machine: str) -> dict:
 
 
 @app.local_entrypoint()
-def main(run: str, tag: str = "", only: str = "judge,facts,types", shard: int = 15, merge: bool = True):
+def main(run: str = "", tag: str = "", only: str = "judge,facts,types", shard: int = 15, merge: bool = True,
+         variants: str = "code,mixed"):
     """`--no-merge` (a rehearsal) keeps what came back under results/modal/<tag>/ and touches nothing else."""
     tag, parts, res = tag or run, set(only.split(",")), REPO / "benchmarks" / "results"
     raw = res / "modal" / tag
@@ -168,6 +217,24 @@ def main(run: str, tag: str = "", only: str = "judge,facts,types", shard: int = 
     if "facts" in parts:
         calls["facts"] = facts.spawn(run)
     shards = []
+    if "rank" in parts:   # SWE-bench Lite ranked by the published model (the README table's row)
+        rows = [json.loads(l) for l in (Path(os.environ.get("INVENTIO_BENCH_DATA", Path.home() / "AppData/Local/inventio/bench"))
+                                         / "swe-lite" / "lite.jsonl").open(encoding="utf-8")]
+        by_repo: dict[str, list] = {}
+        for r in rows:
+            by_repo.setdefault(r["repo"], []).append(r)
+        chunks = [rs[i:i + shard] for rs in by_repo.values() for i in range(0, len(rs), shard)]
+        print(f"rank: {len(rows)} issues in {len(chunks)} shards, variants {variants}", flush=True)
+        got = [l for h in [swe_rank_shard.spawn(c, variants) for c in chunks] for l in h.get().splitlines() if l.strip()]
+        got = [json.dumps({**json.loads(l), "machine": "modal cpu4 + L4 ranker"}) for l in got]
+        (raw / "rank.jsonl").write_text("".join(l + "\n" for l in got), encoding="utf-8")
+        out = res / "swe-lite" / "results.jsonl"
+        tags = {json.loads(l)["ranker"] for l in got}
+        keep = [l for l in out.read_text(encoding="utf-8").splitlines() if json.loads(l)["ranker"] not in tags]
+        if merge:
+            out.write_text("".join(l + "\n" for l in keep + got), encoding="utf-8")
+        print(f"rank: {len(got)} rows ({', '.join(sorted(tags))}); summary: python benchmarks/swe_bench.py "
+              f"--rankers {','.join(sorted(tags))} (every row is done, it only sums)", flush=True)
     if "types" in parts:
         rows = [json.loads(l) for l in (Path(os.environ.get("INVENTIO_BENCH_DATA", Path.home() / "AppData/Local/inventio/bench"))
                                          / "swe-lite" / "lite.jsonl").open(encoding="utf-8")]

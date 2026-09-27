@@ -412,14 +412,15 @@ Training data, the recipe and every reading are on the model card and in `benchm
 
 nDCG@10 on every test query, through Inventio's real ingest and query path; the rankers reorder
 the same 30 BM25 candidates (`--pool 30`; `query` hands the ranker 15 by default, see
-[dispositio](#dispositio)). The dispositio row is v3, the per-passage model: v4 reads a whole pool of
-15 in one pass and was measured on those pools instead (the table under [dispositio](#dispositio)).
+[dispositio](#dispositio)). dispositio v4 reads the first 15 of the 30 in one pass, as `query` hands them,
+and the other 15 keep BM25's order; v3 scored all 30 one by one.
 Method and reproduction: [benchmarks/README.md](benchmarks/README.md).
 
 | System | Runs on | SWE-bench Lite | SciFact | StackOverflow QA | Zalo legal | MultiDoc2Dial | TechQA |
 |---|---|---|---|---|---|---|---|
 | **Inventio + Jev** | TypeSafe cloud, ~1.2 s/query | **0.696** | **0.765** | 0.791 | not run | 0.486 | **0.655** |
-| **Inventio + dispositio** | laptop GPU, 0.15 s to rank 15 | not re-run | 0.733 | 0.691 | **0.838** | 0.622 | 0.416 |
+| **Inventio + dispositio v4** | laptop GPU, 0.3-1.0 s/query | 0.599 | 0.718 | 0.702 | 0.805 | 0.606 | 0.467 |
+| **Inventio + dispositio v3** | laptop GPU, 0.15 s to rank 15 | not re-run | 0.733 | 0.691 | **0.838** | **0.622** | 0.416 |
 | **Inventio**, no model | CPU, 35-140 ms/query | 0.540 | 0.670 | 0.670 | 0.756 | 0.470 | 0.370 |
 | **Inventio + Laya**, not tuned | laptop GPU, 0.6-0.9 s/query | 0.391 | 0.302 | 0.193 | 0.512 | 0.389 | 0.171 |
 | E5-Mistral 7B | 7B embedder | – | 0.764 | **0.915** | – | – | – |
@@ -439,6 +440,12 @@ embedders over the whole corpus, while Inventio with a ranker is two-stage.
 - **No model**: ahead of BGE-base and Voyage-Code-2 on SWE-bench Lite. The likely reason, not
   isolated by an ablation, is that chunks follow functions and carry their file path. On plain
   text it stays below the embedders.
+- **dispositio v4**, on a laptop: ahead of BM25 on all six, by +0.032 (StackOverflow QA) to +0.136
+  (MultiDoc2Dial); ahead of v3 on StackOverflow QA (0.702 against 0.691) and TechQA (0.467 against 0.416); behind v3 on
+  SciFact (0.718 / 0.733), Zalo (0.805 / 0.838) and MultiDoc2Dial (0.606 / 0.622), and behind v2 on
+  SWE-bench Lite code (0.599 / 0.661): v4 was trained on no code states and reads half the candidates.
+  Where it leads is what these tables do not score: the line, and saying the map does not answer
+  ([dispositio](#dispositio)). SWE-bench rows were run on Modal (ingest on CPU, the ranker on an L4).
 - **dispositio** (v3), on a laptop: ahead of BM25 on all five text sets, by +0.021 (StackOverflow
   QA) to +0.152 (MultiDoc2Dial). Against v2, paired per query: +0.015 on StackOverflow QA and
   +0.017 on Zalo with the interval above zero, −0.015 on MultiDoc2Dial with the interval touching
@@ -452,7 +459,7 @@ embedders over the whole corpus, while Inventio with a ranker is two-stage.
   answer is one section of a long technote.
 - **Laya as published** ranks worse than BM25 alone, which is why dispositio exists.
 - **Whole repositories** (code, tests, docs and configs indexed together) are harder: BM25 0.400,
-  the previous dispositio 0.486, Jev 0.515. Tests and docs crowd the files to fix out of the 30 candidates;
+  the previous dispositio 0.486, v4 0.431, Jev 0.515. Tests and docs crowd the files to fix out of the 30 candidates;
   looking up the names the issue contains puts the file among them for 73% of issues instead of
   63%.
 - **[examples/webshop](examples/webshop)**, 13 on-call questions over a runbook, a policy, an

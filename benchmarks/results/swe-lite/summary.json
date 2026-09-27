@@ -89,6 +89,15 @@
     "sec_query": 1.1522,
     "sec_index": 2.5363
   },
+  "code/dispositio@v4": {
+    "n": 300,
+    "ndcg@10": 0.5989,
+    "top1": 0.47,
+    "top5": 0.6833,
+    "in_pool": 0.8233,
+    "sec_query": 10.6778,
+    "sec_index": 3.9456
+  },
   "mixed/none": {
     "n": 300,
     "ndcg@10": 0.4001,
@@ -160,5 +169,14 @@
     "in_pool": 0.63,
     "sec_query": 0.6968,
     "sec_index": 5.0915
+  },
+  "mixed/dispositio@v4": {
+    "n": 300,
+    "ndcg@10": 0.4309,
+    "top1": 0.2567,
+    "top5": 0.54,
+    "in_pool": 0.63,
+    "sec_query": 2.9489,
+    "sec_index": 8.3874
   }
 }
