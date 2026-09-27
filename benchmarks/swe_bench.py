@@ -153,6 +153,8 @@ def main() -> int:
     ap.add_argument("--types", action="store_true", help="measure type widening: arms base, types, control")
     ap.add_argument("--strat", action="store_true", help="measure widenings code decides (STRAT_ARMS)")
     ap.add_argument("--type-limit", type=int, default=None, help="chunks added per predicted type (default: --pool)")
+    ap.add_argument("--type-predictor", default="typesafe",
+                    help="the ranker whose type head predicts the types (--types): typesafe, systemone, dispositio")
     args = ap.parse_args()
     swe = data_dir(args.data) / "swe-lite"
     out_dir = STRAT_RESULTS if args.strat else TYPES_RESULTS if args.types else RESULTS
@@ -160,7 +162,9 @@ def main() -> int:
     arms = STRAT_ARMS if args.strat else ("base", "types", "control") if args.types else ("base",)
     armed = args.types or args.strat
     res_path, cache_path = out_dir / "results.jsonl", out_dir / "scores.jsonl"
-    done = {(r["iid"], r["variant"], r["ranker"], r.get("arm", "base"))
+    # an arm's rows belong to the type predictor that shaped its pool: types, and control (as large as types)
+    pred = lambda r: r.get("predictor", "typesafe") if r.get("arm", "base") in ("types", "control") else "typesafe"  # noqa: E731
+    done = {(r["iid"], r["variant"], r["ranker"], r.get("arm", "base"), pred(r))
             for r in map(json.loads, res_path.open(encoding="utf-8"))} if res_path.exists() else set()
     # one score cache for every mode: a pair scored once is never paid for again
     caches = [RESULTS / "scores.jsonl", cache_path]
@@ -171,13 +175,15 @@ def main() -> int:
         rows = rows[: args.limit]
     rankers = {ranker_tag(n): make_ranker(n) for n in args.rankers.split(",")}
     rnames = list(rankers)
-    predictor = (rankers.get("typesafe") or make_ranker("typesafe")) if args.types else None
+    pname = args.type_predictor if args.types else "typesafe"
+    predictor = (rankers.get(ranker_tag(pname)) or make_ranker(pname)) if args.types else None
     src = "swe"  # one source per tree; issue ids still key the score cache and the results
     resf, cachef = res_path.open("a", encoding="utf-8"), cache_path.open("a", encoding="utf-8")
     for n, inst in enumerate(rows, 1):
         iid, gold = inst["instance_id"], gold_files(inst["patch"])
         for variant in args.variants.split(","):
-            todo = [(r, a) for r in rnames for a in arms if (iid, variant, r, a) not in done]
+            todo = [(r, a) for r in rnames for a in arms
+                    if (iid, variant, r, a, pname if a in ("types", "control") else "typesafe") not in done]
             if not todo:
                 continue
             t = time.time()
@@ -233,7 +239,7 @@ def main() -> int:
                 if armed:
                     r |= {"arm": arm, "pool": len(hits)}
                 if args.types:
-                    r |= {"type_probs": {k: round(v, 3) for k, v in probs.items()},
+                    r |= {"predictor": pname, "type_probs": {k: round(v, 3) for k, v in probs.items()},
                           "types_added": sorted({h.via[len("type:"):] for h in added})}
                 resf.write(json.dumps(r) + "\n")
                 resf.flush()
@@ -242,14 +248,16 @@ def main() -> int:
 
     allr = [json.loads(l) for l in res_path.open(encoding="utf-8")]
     summary = {}  # every variant and ranker on record, not only this run's
+    # the type predictor is part of an arm's name when it is not the one every earlier row used
     for variant in dict.fromkeys(r["variant"] for r in allr):
         for rname in dict.fromkeys(r["ranker"] for r in allr):
-            for arm in arms:
-                rs = [r for r in allr if r["variant"] == variant and r["ranker"] == rname and r.get("arm", "base") == arm]
+            for arm, pn in dict.fromkeys((a, pred(r)) for r in allr for a in arms if r.get("arm", "base") == a):
+                rs = [r for r in allr if r["variant"] == variant and r["ranker"] == rname
+                      and r.get("arm", "base") == arm and pred(r) == pn]
                 if not rs:
                     continue
                 m = lambda k: round(sum(r[k] for r in rs) / len(rs), 4)
-                name = f"{variant}/{rname}" + (f"/{arm}" if armed else "")
+                name = f"{variant}/{rname}" + (f"/{arm}" if armed else "") + (f"@{pn}" if pn != "typesafe" else "")
                 summary[name] = {
                     "n": len(rs), "ndcg@10": m("ndcg10"), "top1": m("top1"), "top5": m("top5"), "in_pool": m("in_pool"),
                     "sec_query": m("sec_query"), "sec_index": m("sec_index"),

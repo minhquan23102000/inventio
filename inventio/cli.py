@@ -8,8 +8,9 @@ import time
 from pathlib import Path
 
 from . import __version__
-from .facts import JUDGES, make_judge
+from .facts import JUDGES, default_judge, make_judge
 from .rankers import RANKERS, CloudRefused, default_ranker, make_ranker
+from .systemone import Unreachable
 from .store import connect, default_db
 
 
@@ -278,7 +279,7 @@ def cmd_facts(args) -> int:
     t = time.time()
     try:
         res = build(con, make_judge(args.judge), args.source, relink=getattr(args, "relink", False))
-    except CloudRefused as e:
+    except (CloudRefused, Unreachable) as e:
         print(str(e), file=sys.stderr)
         return 3
     c, l = res["categories"], res["links"]
@@ -366,6 +367,39 @@ def cmd_skill(args) -> int:
     return 0
 
 
+def cmd_systemone(args) -> int:
+    """Which checkpoint answers `--ranker systemone`: the published model, or a run you trained."""
+    from . import systemone
+
+    if args.use:
+        try:
+            run = systemone.use(args.use)
+        except ValueError as e:
+            print(str(e), file=sys.stderr)
+            return 2
+        print(f"systemone: {run} recorded")
+        return 0
+    run = systemone.run_id()
+    where = ("INVENTIO_SYSTEMONE_RUN" if os.environ.get(systemone.ENV)
+             else f"recorded in {systemone.registry_file()}" if systemone.registry_file().exists()
+             else "the published model")
+    print(f"systemone: {run}  ({where})")
+    from ._systemone import missing
+    miss = missing()
+    if miss:
+        print(f"  {miss}", file=sys.stderr)
+        return 3
+    if args.load:
+        from .systemone import Model
+        try:
+            info = Model.cached(run).info()
+        except (RuntimeError, ValueError, OSError, ImportError) as e:
+            print(f"{e}\n{systemone.README}", file=sys.stderr)
+            return 3
+        print("  " + "  ".join(f"{k}={v}" for k, v in info.items()))
+    return 0
+
+
 def _snippet(text: str, width: int = 160) -> str:
     lines = [l.strip() for l in text.splitlines() if l.strip() and not l.lstrip().startswith(("#", "<!--"))]
     s = " ".join(lines)
@@ -377,7 +411,7 @@ def cmd_query(args) -> int:
     from . import serve
     from .search import search
 
-    if args.ranker in ("dispositio", "laya") and not args.here and serve.enabled():
+    if args.ranker in ("dispositio", "laya", "systemone") and not args.here and serve.enabled():
         code = serve.forward(args.argv)  # the model stays loaded between queries
         if code is not None:
             return code
@@ -387,22 +421,54 @@ def cmd_query(args) -> int:
     except ValueError as e:
         print(str(e), file=sys.stderr)
         return 2
-    try:
-        ranker = make_ranker(args.ranker)
-        hits = search(con, args.text, k=args.k, pool=args.pool, ranker=ranker,
+
+    def searched(ranker, judge=None):
+        return search(con, args.text, k=args.k, pool=args.pool, ranker=ranker,
                       expand_links=not args.no_links and ranker is not None,
-                      by_type=args.types, facts=make_judge(args.judge) if args.facts else None,
+                      by_type=args.types, facts=judge,
                       symbols=not args.no_symbols, neighbours=not args.no_neighbours and ranker is not None,
                       scope=scope)
+
+    try:
+        ranker = make_ranker(args.ranker)
+        hits = searched(ranker, make_judge(args.judge) if args.facts else None)
+    except Unreachable as e:
+        # The default is the System One reader, and this machine cannot read one (no weights recorded,
+        # no published model cached, no runtime). Answering in BM25 order with one line is the floor the
+        # tool always had; an explicit `--ranker systemone` gets the whole message and exit 3 instead,
+        # because there the promise was made by the caller.
+        if args.ranker_explicit or args.facts:   # --facts asked for a model's judgment: never skip it quietly
+            print(str(e), file=sys.stderr)
+            return 3
+        print(f"inventio: {str(e).splitlines()[0]}; answering in BM25 order", file=sys.stderr)
+        ranker, hits = None, searched(None)
     except CloudRefused as e:
         print(str(e), file=sys.stderr)
         return 3
+    except ValueError as e:   # a request this ranker cannot serve: --types without a type head
+        print(str(e), file=sys.stderr)
+        return 2
     if args.ranker == "dispositio":
         from .rankers import update_notice
 
         notice = update_notice()
         if notice:
             print(notice, file=sys.stderr)
+    if args.ranker == "systemone" and ranker is not None:
+        from .systemone import honesty, update_notice
+
+        notice = update_notice()
+        if notice:
+            print(notice, file=sys.stderr)
+
+        # The caveat is off unless the operator sets the threshold (`INVENTIO_SYSTEMONE_CAVEAT`): `exists`
+        # is calibrated per corpus (answerable medians 0.447 md2d, 0.232 techqa, 0.377 webshop), so one
+        # number cannot hold a false-alarm rate across the three, and the pools it was validated on have
+        # the answer in the map, just not in BM25's fifteen.
+        want = os.environ.get("INVENTIO_SYSTEMONE_CAVEAT")
+        note = honesty(getattr(ranker, "last", None), float(want) if want else None)
+        if note:
+            print(note, file=sys.stderr)
     if args.json:
         rows = [{**h.as_dict(), "url": web_url(h.root, h.path, h.heading_path)} for h in hits]
         print(json.dumps(rows, ensure_ascii=False, indent=2))
@@ -452,7 +518,7 @@ def cmd_bench(args) -> int:
                             by_type=args.types, facts=make_judge(args.judge) if args.facts else None,
                             symbols=not args.no_symbols, neighbours=not args.no_neighbours and ranker is not None,
                             scope=scope)
-    except CloudRefused as e:
+    except (CloudRefused, Unreachable) as e:
         print(str(e), file=sys.stderr)
         return 3
     res["config"] = {"ranker": args.ranker, "links": not args.no_links and ranker is not None,
@@ -488,12 +554,15 @@ def cmd_serve(args) -> int:
 
 def cmd_update(args) -> int:
     from . import serve
+    from ._systemone import missing
     from .rankers import update
 
+    if missing() is None:   # the System One runtime is installed: its published model is the one queries read
+        from .systemone import update
     try:
         before, after = update()
     except ImportError:
-        print("dispositio is not installed: install inventio with the `laya` extra", file=sys.stderr)
+        print("no local model is installed: pip install 'inventio[systemone]'", file=sys.stderr)
         return 2
     if before == after:
         print(f"dispositio is up to date ({after[:12]})")
@@ -544,8 +613,9 @@ there. Every command prints source:path:start-end coordinates that read and show
     s.add_argument("--exclude", action="append", metavar="GLOB", help="skip paths matching GLOB (repeatable)")
     s.add_argument("--full", action="store_true", help="drop the source and rebuild it from scratch")
     s.add_argument("--facts", action="store_true", help="then judge content categories and fact links (see `facts`)")
-    judge = os.environ.get("INVENTIO_JUDGE", "dispositio")
-    judges = "dispositio (local), laya (local, as published), typesafe (cloud, public sources only)"
+    judge = default_judge()
+    judges = ("systemone (local, the default when installed), dispositio / laya (local, the older Laya "
+              "model), typesafe (cloud, public sources only)")
     s.add_argument("--judge", choices=JUDGES, default=judge, help=f"model for --facts: {judges}")
     s.set_defaults(fn=cmd_init)
 
@@ -646,8 +716,15 @@ there. Every command prints source:path:start-end coordinates that read and show
     s.add_argument("--here", action="store_true", help=argparse.SUPPRESS)  # set by the server; never forward
     s.set_defaults(fn=cmd_query)
 
-    s = sub.add_parser("serve", help="keep dispositio loaded for queries (started by the first query; "
-                                     "INVENTIO_SERVE=0 turns it off)")
+    s = sub.add_parser("systemone", help="which checkpoint answers --ranker systemone: the published "
+                                         "model, or a run you trained")
+    s.add_argument("--use", metavar="RUN",
+                   help="record a run directory or a Hub id (owner/name) for --ranker systemone")
+    s.add_argument("--load", action="store_true", help="load it now and print what answered")
+    s.set_defaults(fn=cmd_systemone)
+
+    s = sub.add_parser("serve", help="keep the model ranker loaded for queries (started by the first "
+                                     "query; INVENTIO_SERVE=0 turns it off)")
     s.add_argument("--idle", type=float, default=float(os.environ.get("INVENTIO_SERVE_IDLE", 900)),
                    help="exit after this many seconds without a request (default 900)")
     s.add_argument("--stop", action="store_true", help="stop the running server")
@@ -667,6 +744,7 @@ there. Every command prints source:path:start-end coordinates that read and show
     raw = sys.argv[1:] if argv is None else list(argv)
     args = p.parse_args(_join_where(raw))
     args.argv = raw
+    args.ranker_explicit = "--ranker" in raw   # the default may fall back; a named ranker may not
     try:
         return args.fn(args)
     except OSError as e:

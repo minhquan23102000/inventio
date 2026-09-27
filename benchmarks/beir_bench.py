@@ -90,10 +90,17 @@ def load_cache(path: Path) -> dict:
 
 
 def run_arms(con, args, queries, qrels, safe, out_dir, summary) -> None:
-    from inventio.facts import JevJudge, build, warm_query_categories
+    from inventio.facts import build, make_judge, warm_query_categories
     from inventio.search import expand, widen_by_neighbours
 
-    judge = JevJudge()
+    judge = make_judge(args.judge)
+    if args.judge != "typesafe":
+        # this map copy is the judge's own: categories another model kept are dropped, and the `about` links
+        # are redrawn from this judge's cached judgments (relink), so a rerun pays only for what is new
+        con.execute("DELETE FROM chunk_categories WHERE model NOT IN (?, 'code')", (judge.name,))
+        con.execute("DELETE FROM links WHERE rel = 'about'")
+        con.commit()
+    at = "" if args.judge == "typesafe" else f"@{args.judge}"
     t = time.time()
     res = build(con, judge, [args.dataset], relink=True)
     print(f"facts: {json.dumps(res)} in {time.time() - t:.0f}s", flush=True)
@@ -108,9 +115,10 @@ def run_arms(con, args, queries, qrels, safe, out_dir, summary) -> None:
         for qid, p in pools.items():
             p["about"] = p["base"] + expand(con, p["base"], 5, 10, Scope.only([args.dataset]), rels=("about",))
             p["mlt"] = p["base"] + widen_by_neighbours(con, p["base"], 5, 10, Scope.only([args.dataset]))
-    rows_path = out_dir / "arms.jsonl"
+    rows_path = out_dir / f"arms{at}.jsonl"
     arms_summary = summary.setdefault("arms", {})
-    arms_summary["facts"] = {"categories": res["categories"], "links": res["links"], "kept": res["kept"]}
+    arms_summary["facts" + at] = {"judge": judge.name, "categories": res["categories"], "links": res["links"],
+                                  "kept": res["kept"]}
     for rname in args.rankers.split(","):
         ranker, rname = make_ranker(rname), tag(rname)
         cache_path = out_dir / f"scores-{rname}.jsonl"
@@ -143,7 +151,7 @@ def run_arms(con, args, queries, qrels, safe, out_dir, summary) -> None:
                 if n % 100 == 0:
                     print(f"  {rname} {n}/{len(queries)} " + " ".join(
                         f"{a} {sum(nd[a]) / len(nd[a]):.3f}" for a in arms), flush=True)
-        arms_summary[rname] = {
+        arms_summary[rname + at] = {
             **{a: {"queries": len(queries), "ndcg@10": round(sum(nd[a]) / len(nd[a]), 4),
                    "recall@pool": round(sum(rec[a]) / len(rec[a]), 4),
                    "mean_pool": round(sum(size[a]) / len(size[a]), 1)} for a in arms},
@@ -153,7 +161,7 @@ def run_arms(con, args, queries, qrels, safe, out_dir, summary) -> None:
                 "recall_about_vs_mlt": paired(rec["mlt"], rec["about"])} if args.mlt else {}),
             "unscored_pairs": unscored,  # firewall refusals and repeated timeouts: keep their BM25 place
         }
-        print(rname, json.dumps(arms_summary[rname]), flush=True)
+        print(rname + at, json.dumps(arms_summary[rname + at]), flush=True)
         (out_dir / "summary.json").write_text(json.dumps(summary, indent=2))
 
 
@@ -167,6 +175,8 @@ def main() -> int:
     ap.add_argument("--arms", action="store_true", help="base / facts / control pools (see module docstring)")
     ap.add_argument("--phrases", choices=("auto", "on", "off"), default="auto",
                     help="adjacent-word phrases in the BM25 query (auto: Vietnamese queries only)")
+    ap.add_argument("--judge", default="typesafe",
+                    help="with --arms: the model that judges categories and links (typesafe, systemone, dispositio)")
     ap.add_argument("--mlt", action="store_true",
                     help="with --arms: also `about` (judged links only) and `mlt` (the same candidates unjudged)")
     args = ap.parse_args()
@@ -180,7 +190,14 @@ def main() -> int:
         queries = dict(list(queries.items())[: args.limit])
     scratch = ds / "inventio-tree"
     materialize(corpus, scratch)
-    con = connect(ds / "inventio.db")
+    db = ds / "inventio.db"
+    if args.arms and args.judge != "typesafe":
+        import shutil
+        own = ds / f"inventio-{args.judge}.db"   # never the shared map: its categories are the cloud judge's
+        if not own.exists() and db.exists():
+            shutil.copyfile(db, own)
+        db = own
+    con = connect(db)
     if not con.execute("SELECT 1 FROM sources WHERE name = ?", (args.dataset,)).fetchone():
         t = time.time()
         with con:  # links are not used by BM25 or the rankers, so they are not built here
@@ -190,7 +207,7 @@ def main() -> int:
     summary_path = out_dir / "summary.json"
     summary = json.loads(summary_path.read_text()) if summary_path.exists() else {}
     if args.arms:
-        (out_dir / "arms.jsonl").unlink(missing_ok=True)
+        (out_dir / ("arms.jsonl" if args.judge == "typesafe" else f"arms@{args.judge}.jsonl")).unlink(missing_ok=True)
         run_arms(con, args, queries, qrels, safe, out_dir, summary)
         return 0
     for rname in args.rankers.split(","):

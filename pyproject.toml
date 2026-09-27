@@ -23,13 +23,16 @@ laya = ["laya>=0.3.6"]
 typesafe = ["typesafe-sdk>=0.7"]
 data = ["duckdb>=1.0", "sqlalchemy>=2.0", "confluent-kafka>=2.3", "boto3"]  # schema cards; add your database's driver
 bench = ["datasets"]
+# `--ranker systemone`: a checkpoint read in this process (inventio/_systemone — Kev's serving path,
+# vendored, Apache-2.0). torch, transformers and peft are the runtime; pydantic is the request schema.
+systemone = ["torch>=2.6", "transformers>=5.17,<6", "peft>=0.21", "pydantic>=2.9"]
 dev = ["pytest"]
 
 [project.scripts]
 inventio = "inventio.cli:main"
 
 [tool.setuptools]
-packages = ["inventio", "inventio.connectors"]
+packages = ["inventio", "inventio._systemone", "inventio.connectors"]
 
 [tool.setuptools.package-data]
 inventio = ["skill/SKILL.md"]  # `inventio skill` copies it into .agents/skills

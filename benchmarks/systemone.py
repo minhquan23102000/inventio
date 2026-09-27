@@ -20,7 +20,9 @@ so the two are always compared on identical pools and identical question strings
 
 import argparse
 import glob
+import hashlib
 import json
+import math
 import os
 import random
 import re
@@ -28,8 +30,10 @@ import statistics
 import sys
 import tempfile
 import time
+import zlib
 import urllib.error
 import urllib.request
+from collections import Counter
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -39,62 +43,19 @@ from data import data_dir  # noqa: E402
 from inventio.scope import Scope  # noqa: E402
 from inventio.search import bm25  # noqa: E402
 from inventio.store import connect  # noqa: E402
+from inventio.systemone import (EXISTS_ASKS, MAX_OPTIONS, MAX_QUERY_CHARS, MAX_STATE_CHARS, NOUL,  # noqa: E402
+                                PASSAGE_ASKS, ask, exists, questions, render, where_line)
 
 REPO = Path(__file__).resolve().parent.parent
 ROWS = Path(__file__).resolve().parent / "results" / "s1"
 DATA = data_dir(None) / "s1" / "data"
 K = 15
-MAX_OPTIONS = 255
-MAX_QUERY_CHARS = 1500
 # the Kev checkpoint we fine-tune from, and the base it was trained on (its own training_config.json)
 INIT_FROM = "jaredpalmer/kev-0.8b"
 BASE = "Qwen/Qwen3.5-0.8B-Base"
 BASE_REVISION = "dc7cdfe2ee4154fa7e30f5b51ca41bfa40174e68"
 norm = lambda t: " ".join(t.split())  # noqa: E731
-
-
-# --- the state the model reads, and the questions it answers -------------------------------------
-
-def render(hits):
-    """-> (state text with `P01..` passage ids and `L000..` line ids, passage ids, line ids, line owner)."""
-    parts, pids, lids, owner = [], [], [], []
-    for i, h in enumerate(hits):
-        pid = f"P{i + 1:02d}"
-        pids.append(pid)
-        head = f"{h.path} > {h.heading_path}" if h.heading_path else h.path
-        rows = [f"{pid} [{head}]"]
-        for ln in h.text.split("\n"):
-            if not ln.strip():
-                continue
-            lid = f"L{len(lids):03d}"
-            lids.append(lid)
-            owner.append(i)
-            rows.append(f"{lid}| {ln.rstrip()}")
-        parts.append("\n".join(rows))
-    return "\n\n".join(parts), pids, lids, owner
-
-
-def where_line(q, lids):
-    return {"type": "choice", "instructions": f'Which line contains the answer to: "{q}"?',
-            "criteria": {l: None for l in lids}}
-
-
-def exists(q, label):
-    return {"type": "noul", "instructions": f'Does any passage answer: "{q}"?',
-            "criteria": {"true": "At least one passage states or directly implies the answer",
-                         "false": "No passage addresses this"}, "label": label}
-
-
-def questions(q, pids, lids, with_line=True):
-    """The questions one request asks. `where_line` needs a line id per option (Kev: 255 options)."""
-    qs = {"where_passage": {"type": "choice", "instructions": f'Which passage contains the answer to: "{q}"?',
-                            "criteria": {p: None for p in pids}},
-          "exists": {"type": "noul", "instructions": f'Does any passage answer: "{q}"?',
-                     "criteria": {"true": "At least one passage states or directly implies the answer",
-                                  "false": "No passage addresses this"}}}
-    if with_line and len(lids) <= MAX_OPTIONS:
-        qs["where_line"] = where_line(q, lids)
-    return qs
+WORD = re.compile(r"\w+", re.UNICODE)   # the lexical probe's tokens (cmd_leak)
 
 
 def pools(con, q, scope, is_gold, k=K, drop=()):
@@ -111,29 +72,38 @@ def auc(pos, neg):
     return s / max(1, len(pos) * len(neg))
 
 
-def ask(url, state, qs, model="jev-latest", timeout=600):
-    body = json.dumps({"state": state, "model": model, "questions": qs}).encode()
-    req = urllib.request.Request(url.rstrip("/") + "/v1/systemone", body, {"content-type": "application/json"})
-    t = time.time()
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        res = json.load(r)
-    res["wall_ms"] = round((time.time() - t) * 1000, 1)
-    return res
+def asker(url="", run="", device=None, model="jev-latest"):
+    """Where a state goes: the served server, or the checkpoint read in this process
+    (`inventio.systemone.Model`) — the same state and the same questions either way."""
+    if url:
+        return lambda state, qs: ask(url, state, qs, model)
+    from inventio.systemone import Model
+    loaded = Model(run or None, device)
+    return lambda state, qs: loaded.ask(state, qs)
 
 
-def run_query(url, q, pos, neg, is_gold, model):
-    """One query through the model twice: the natural pool, and the pool without the answer."""
+def run_query(ask_, q, pos, neg, is_gold, passage_asks=False):
+    """One query through the model twice: the natural pool, and the pool without the answer.
+
+    The served shape is asked always (the choice heads and `exists`); `passage_asks` adds the
+    per-passage questions, whose probabilities are recorded so the two ways of reading the same state
+    can be compared — the choice head against argmax over the per-passage head, and `exists` against
+    the max of those probabilities."""
     out = {}
     for arm, hits in (("pos", pos), ("neg", neg)):
         state, pids, lids, owner = render(hits)
-        qs = questions(q, pids, lids)
-        res = ask(url, state, qs, model)
+        qs = questions(q, pids, lids, with_passage_asks=passage_asks)
+        res = ask_(state, qs)
         a = res["answers"]
         pp = a["where_passage"]["probabilities"]
         top_p = max(pp, key=pp.get)
         row = {"exists": a["exists"]["noul"], "latency_ms": res.get("latency_ms"), "wall_ms": res["wall_ms"],
                "tokens": res.get("usage", {}).get("input_tokens"), "lines": len(lids),
                "where_line": "where_line" in qs and "where_line" in a}
+        if passage_asks:   # the study shape: the per-passage head, recorded beside the served one
+            pv = [a[p]["noul"] for p in pids]
+            row.update(p_passage=[round(v, 4) for v in pv], exists_p=max(pv),
+                       top_passage_p=max(range(len(pv)), key=pv.__getitem__))
         if arm == "pos":
             gold = [i for i, h in enumerate(hits) if is_gold(h)]
             row.update(gold=gold, top_passage=int(top_p[1:]) - 1, bm25_top_gold=0 in gold)
@@ -148,12 +118,26 @@ def run_query(url, q, pos, neg, is_gold, model):
 
 def spike_summary(rows, tag, name):
     has = [r for r in rows if r["pos"]["gold"]]
+    absent = [r for r in rows if not r["pos"]["gold"]]
     n = len(has)
     p1 = sum(r["pos"]["top_passage"] in r["pos"]["gold"] for r in has)
     b1 = sum(r["pos"]["bm25_top_gold"] for r in has)
     lr = [r for r in has if "top_line_owner" in r["pos"]]
     l1 = sum(r["pos"]["top_line_owner"] in r["pos"]["gold"] for r in lr)
     ex = auc([r["pos"]["exists"] for r in has], [r["neg"]["exists"] for r in rows])
+    # The deployment question is whether the answer is inside the state at all, and the queries whose
+    # answer BM25 never put in the pool are exactly that question, answered for free. The `neg` arm
+    # above is the wrong negative for it: it is built by the same procedure the model trains against, and
+    # for a pool-miss query its 15 passages are the very ones the positive arm shows (160 of 613 rows on
+    # md2d), so those rows enter the AUC as ties at 0.5 (measurement review, 2026-09-26).
+    nat = auc([r["pos"]["exists"] for r in has], [r["pos"]["exists"] for r in absent]) if absent else None
+    # The same two questions asked of the per-passage head: is argmax of its 15 probabilities the passage
+    # that holds the answer, and is their max the honesty reading. Rows written before the harness asked
+    # the per-passage questions have no vector, and are left unmeasured rather than counted as misses.
+    per = [r for r in has if "p_passage" in r["pos"]]
+    p1p = sum(r["pos"]["top_passage_p"] in r["pos"]["gold"] for r in per)
+    exp = auc([r["pos"]["exists_p"] for r in has], [r["neg"]["exists_p"] for r in rows]) if per else None
+    natp = auc([r["pos"]["exists_p"] for r in has], [r["pos"]["exists_p"] for r in absent]) if per and absent else None
     lat = sorted(x["latency_ms"] for r in rows for x in (r["pos"], r["neg"]) if x["latency_ms"] is not None)
     tok = sorted(x["tokens"] for r in rows for x in (r["pos"], r["neg"]) if x["tokens"])
     med = lambda v: v[len(v) // 2] if v else None  # noqa: E731
@@ -161,6 +145,11 @@ def spike_summary(rows, tag, name):
             "top_line_owner_passage@1": f"{l1}/{len(lr)}" if lr else "-",
             "passage@1": round(p1 / max(1, n), 3), "bm25@1": round(b1 / max(1, n), 3),
             "exists_auc": round(ex, 3),
+            "answer_absent_queries": len(absent),
+            "exists_auc_answer_absent": round(nat, 3) if nat is not None else None,
+            "passage@1_pmax": round(p1p / max(1, len(per)), 3) if per else None,
+            "exists_auc_pmax": round(exp, 3) if exp is not None else None,
+            "exists_auc_answer_absent_pmax": round(natp, 3) if natp is not None else None,
             "exists_pos_median": med(sorted(r["pos"]["exists"] for r in has)),
             "exists_neg_median": med(sorted(r["neg"]["exists"] for r in rows)),
             "latency_ms_median": med(lat), "latency_ms_p90": lat[int(len(lat) * 0.9)] if lat else None,
@@ -239,8 +228,36 @@ def md2d_test_spans():
 
 # --- training records ----------------------------------------------------------------------------
 
-def records(q, pos, neg, lines_of, src, key):
-    """One positive record (where_line + exists=true) and one negative (exists=false) for a query."""
+def slot_swap(hits, is_gold, k=K):
+    """The same k slots with every gold slot filled by the best non-gold hit that BM25 ranked below the
+    pool: no compaction, no shift, and the filler brings nothing about itself (page, domain, length) into
+    the state. The two arms of a query then differ by exactly the swapped slots, which is what removes the
+    corpus-composition cue a bag of words could ride (data review, 2026-09-26: a bigram TF-IDF reached AUC
+    0.63 in-domain, 0.53-0.57 with a domain held out)."""
+    spare = [h for h in hits[k:] if not is_gold(h)]
+    out = []
+    for h in hits[:k]:
+        if is_gold(h):
+            if spare:
+                out.append(spare.pop(0))
+        else:
+            out.append(h)
+    return out
+
+
+def pick(wordings, key, salt):
+    return wordings[int(hashlib.sha1(f"{key}\t{salt}".encode()).hexdigest()[:8], 16) % len(wordings)]
+
+
+def records(q, pos, neg, lines_of, src, key, domain=None):
+    """The questions one query asks, on both arms of the same query:
+
+    - `where_line` (when the pool fits the option cap) and `where_passage`: which line, which passage;
+    - `exists`: does any passage answer;
+    - one question per passage, which is the decomposition `exists` needs. Without it the head is asked a
+      single judgement over 3.3-6.5k tokens and never learns to compare slots, while dispositio, which
+      beats it on this, is exactly a max over per-passage scores.
+    """
     q = q[:MAX_QUERY_CHARS]
     out = []
     state, pids, lids, owner = render(pos)
@@ -248,16 +265,36 @@ def records(q, pos, neg, lines_of, src, key):
     for i, h in enumerate(pos):
         mine = [j for j, o in enumerate(owner) if o == i]
         gold += [mine[k] for k in lines_of(i, h) if k < len(mine)]
-    if gold and len(lids) <= MAX_OPTIONS:
-        w = where_line(q, lids)
-        gl = [lids[j] for j in sorted(set(gold))]
-        w.update(label=gl[0], target={l: 1 / len(gl) for l in gl})
-        out.append({"state": state, "questions": {"where_line": w, "exists": exists(q, True)},
-                    "_meta": {"source": src, "group_id": key, "arm": "pos"}})
+    gold = sorted(set(gold))
+    if state and (gold or neg):
+        qs = {p: {"type": "noul", "instructions": pick(PASSAGE_ASKS, key, p).format(p=p, q=q),
+                  "criteria": NOUL, "label": any(owner[j] == i for j in gold)}
+              for i, p in enumerate(pids)}
+        qs["exists"] = {"type": "noul", "instructions": pick(EXISTS_ASKS, key, "exists").format(q=q),
+                        "criteria": NOUL, "label": bool(gold)}
+        if gold:
+            passages = sorted({owner[j] for j in gold})
+            qs["where_passage"] = {"type": "choice", "label": pids[passages[0]],
+                                   "instructions": pick(WHERE_ASKS, key, "wp").format(q=q),
+                                   "criteria": {p: None for p in pids},
+                                   "target": {pids[i]: 1 / len(passages) for i in passages}}
+            if len(lids) <= MAX_OPTIONS:
+                gl = [lids[j] for j in gold]
+                qs["where_line"] = {"type": "choice", "label": gl[0],
+                                    "instructions": f'Which line contains the answer to: "{q}"?',
+                                    "criteria": {l: None for l in lids},
+                                    "target": {l: 1 / len(gl) for l in gl}}
+        out.append({"state": state, "questions": qs,
+                    "_meta": {"source": src, "group_id": key, "domain": domain,
+                              "arm": "pos" if gold else "neg"}})
     if neg:
-        state, _, lids, _ = render(neg)
-        out.append({"state": state, "questions": {"exists": exists(q, False)},
-                    "_meta": {"source": src, "group_id": key, "arm": "neg"}})
+        state, pids, _, _ = render(neg)
+        qs = {p: {"type": "noul", "instructions": pick(PASSAGE_ASKS, key, p).format(p=p, q=q),
+                  "criteria": NOUL, "label": False} for p in pids}
+        qs["exists"] = {"type": "noul", "instructions": pick(EXISTS_ASKS, key, "exists").format(q=q),
+                        "criteria": NOUL, "label": False}
+        out.append({"state": state, "questions": qs,
+                    "_meta": {"source": src, "group_id": key, "domain": domain, "arm": "neg"}})
     return out
 
 
@@ -313,11 +350,10 @@ def md2d_records(split):
                 if not gold or not spans:
                     continue
                 end = starts[n + 1] if n + 1 < len(starts) else len(turns)
-                near = {section.get((r["doc_id"], r["id_sp"])) for t in turns[i:end] for r in t["references"]} - {None}
                 is_gold = lambda h: Path(h.path).stem in gold  # noqa: E731
                 hits = bm25(con, q, K + 40, scope)
                 pos = hits[:K]
-                neg = [h for h in hits if Path(h.path).stem not in gold | near][:K]
+                neg = slot_swap(hits, is_gold)
 
                 def lines_of(i, h):
                     if not is_gold(h):
@@ -333,7 +369,8 @@ def md2d_records(split):
                             continue   # a section heading the reply was grounded in, not the answering line
                         out.append(k)
                     return out
-                yield from records(q, pos, neg, lines_of, f"md2d_{split}", f"{dial['dial_id']}:{i}")
+                yield from records(q, pos, neg, lines_of, f"md2d_{split}", f"{dial['dial_id']}:{i}",
+                                    domain=dname)
 
 
 def swe_records():
@@ -342,11 +379,13 @@ def swe_records():
     for f in sorted(glob.glob(str(data_dir(None) / "swe-train" / "groups" / "*.jsonl"))):
         for line in open(f, encoding="utf-8"):
             g = json.loads(line)
-            hits = [SimpleNamespace(path=h["path"], heading_path=h["heading_path"], text=h["text"], at=h.get("at"))
-                    for h in g["hits"]]
+            hits = [SimpleNamespace(path=h["path"], heading_path=h["heading_path"], text=h["text"],
+                                    at=h.get("at"), idx=i)
+                    for i, h in enumerate(g["hits"])]
             gold, skip = set(g["gold"]), set(g["skip"])
+            out_gold = lambda h: h.idx in gold | skip        # noqa: E731  (skipped hits are not answers)
             pos = hits[:K] if gold & set(range(K)) else []
-            neg = [h for i, h in enumerate(hits) if i not in gold | skip][:K]
+            neg = slot_swap(hits, out_gold)
 
             def lines_of(i, h):
                 if not h.at:
@@ -358,14 +397,194 @@ def swe_records():
                     if nxt:
                         out.add(nxt[0])
                 return sorted(out)
-            yield from records(g["query"], pos, neg, lines_of, "swe_train", g["iid"])
+            yield from records(g["query"], pos, neg, lines_of, "swe_train", g["iid"],
+                                domain=g["iid"].split("__")[0])
+
+
+CAT_ON, CAT_OFF = 0.94, 0.01   # finetune_laya's soft target: the label is a small model's (Gemini Flash), not a gold one
+
+
+def category_rows(split):
+    """benchmarks/category_data.py's labelled passages: train, or test with its strata (`src`)."""
+    return [json.loads(l) for l in (data_dir(None) / "categories" / f"{split}.jsonl").open(encoding="utf-8")]
+
+
+def category_state(r, with_path=True):
+    """The state `facts.categorize` sends a judge: `{"passage": "[path > heading]\ntext"}`."""
+    from inventio.facts import passage
+    if with_path:
+        return {"passage": passage(r["path"], r["heading_path"], r["text"])}
+    # the path dropped (training only): the heading alone in brackets, or the bare text, as finetune_laya renders it
+    return {"passage": (f"[{r['heading_path']}]\n" if r["heading_path"] else "") + r["text"]}
+
+
+def judge_records():
+    """The index-time questions the map is built with, in the exact request `facts` sends, labelled. Only the
+    category question has labels (4,364 passages, benchmarks/category_data.py); the path is dropped half the
+    time, as in dispositio's recipe, so a file name is not the cue."""
+    from inventio.facts import CATEGORIES, category_question
+    rng = random.Random(20260927)
+    for r in category_rows("train"):
+        q = {**category_question(), "label": r["label"],
+             "target": {c: CAT_ON if c == r["label"] else CAT_OFF for c in CATEGORIES}}
+        yield {"state": category_state(r, rng.random() < 0.5), "questions": {"category": q},
+               "_meta": {"source": "category", "group_id": hashlib.sha1(r["text"].encode()).hexdigest()[:16],
+                         "domain": r["src"].split(":")[0], "arm": "judge"}}
+
+
+def cmd_judge(a):
+    """The category question on its held-out passages (benchmarks/category_data.py test split): accuracy and
+    macro-F1 per stratum, for a System One run read in this process or for the Laya model (`--laya`). The
+    out-of-domain strata are a held-out repository's prose and StackOverflow answers, as in finetune_laya."""
+    from inventio.facts import CATEGORIES, LayaJudge, SystemOneJudge, category_question
+    judge = LayaJudge(a.laya) if a.laya else SystemOneJudge(a.run)
+    rows = category_rows("test")[: a.limit or None]
+    jobs = ((category_state(r), {"category": category_question()}) for r in rows)
+    pred, t0 = [None] * len(rows), time.time()
+    for i, ans in judge.batch(jobs):
+        probs = ans["category"]
+        pred[i] = max(probs, key=probs.get)
+    secs = time.time() - t0
+
+    def score(sel):
+        if not sel:
+            return None
+        f1 = []
+        for c in CATEGORIES:
+            tp = sum(p == c == r["label"] for p, r in sel)
+            fp = sum(p == c != r["label"] for p, r in sel)
+            fn = sum(r["label"] == c != p for p, r in sel)
+            if tp + fp + fn:
+                f1.append(2 * tp / (2 * tp + fp + fn))
+        return {"n": len(sel), "accuracy": round(sum(p == r["label"] for p, r in sel) / len(sel), 3),
+                "macro_f1": round(sum(f1) / len(f1), 3)}
+
+    both = list(zip(pred, rows))
+    ood = ("held-repo", "coir-stackoverflow-qa")
+    out = {"judge": judge.name, "ms_per_passage": round(secs * 1000 / max(len(rows), 1), 1),
+           "all": score(both),
+           "in_domain": score([x for x in both if not x[1]["src"].startswith(ood)]),
+           "out_of_domain": score([x for x in both if x[1]["src"].startswith(ood)]),
+           **{src: score([x for x in both if x[1]["src"].split(":")[0] == src])
+              for src in sorted({r["src"].split(":")[0] for r in rows})}}
+    record("judge", a.tag, "category", out)
+    print(json.dumps(out), flush=True)
+
+
+def call(cmd, **kw) -> int:
+    """subprocess.call with this process's stdout/stderr handed over explicitly. A detached run (log in a file, no
+    console) otherwise loses every child's output on Windows: close_fds keeps the file handle from being inherited,
+    and a detached process has no console handles to fall back on (measured: an hour of a training run, no line)."""
+    import subprocess
+    sys.stdout.flush(); sys.stderr.flush()
+    return subprocess.call(cmd, stdout=sys.stdout, stderr=sys.stderr, **kw)
+
+
+TOKENIZER_FILES = ("tokenizer.json", "tokenizer_config.json", "chat_template.jinja", "vocab.json", "merges.txt",
+                   "added_tokens.json", "special_tokens_map.json")
+RELEASE_FILES = ("config.json", "head.pt", "recipe.json", "training_metrics.json", "README.md", *TOKENIZER_FILES)
+
+
+def cmd_export(a):
+    """A trained run (LoRA adapter on the base) as a full-weight checkpoint: the adapter merged into the bf16 backbone
+    (Kev's merge: W += delta in fp32, one rounding), the head, the temperature and the tokenizer beside it. What a user
+    downloads is then one repository that loads with no base fetch. Proof, not assumption: `--check` asks both layouts
+    the same states and prints the largest |dp| and the argmax flips."""
+    import shutil
+    import torch
+    from inventio._systemone.checkpoint import Checkpoint, LoadOptions, read_meta, write_meta
+    src, out = Path(a.run), Path(a.out)
+    if out.exists() and any(out.iterdir()):
+        raise SystemExit(f"{out} is not empty")
+    out.mkdir(parents=True, exist_ok=True)
+    ck = Checkpoint(str(src))
+    if ck.full:
+        raise SystemExit(f"{src} is already full-weight")
+    _, m = ck.load("cpu", LoadOptions(dtype=torch.bfloat16, merge=True))
+    m.lm.save_pretrained(out, safe_serialization=True)
+    meta = read_meta(src)
+    meta.weights, meta.weights_dtype = "full", "bf16"
+    meta.extra = {**meta.extra, "exported_from": str(src)}
+    write_meta(out, meta)
+    for f in (*TOKENIZER_FILES, "recipe.json", "training_metrics.json"):
+        if (src / f).exists():
+            shutil.copy(src / f, out / f)
+    print(f"exported {src} -> {out}: " + ", ".join(f"{p.name} {p.stat().st_size / 2**20:.1f} MiB" for p in sorted(out.iterdir())),
+          flush=True)
+
+
+def cmd_check_export(a):
+    """The adapter run and its export on the same md2d states, on this machine's accelerator: largest |dp| per kind
+    and argmax flips. bf16 reassociation moves the third decimal; a flip on more than a few pools is a broken export."""
+    from inventio.systemone import Model, questions, render
+    runs = [Model(a.run, a.device), Model(a.export, a.device)]
+    worst, flips, n = {"choice": 0.0, "noul": 0.0}, 0, 0
+    for qid, q, con, scope, is_gold in SETS["md2d"](a.limit):
+        pos, _ = pools(con, q, scope, is_gold)
+        if not pos:
+            continue
+        state, pids, lids, _ = render(pos)
+        qs = questions(q, pids, lids)
+        x, y = (r.ask(state, qs)["answers"] for r in runs)
+        for k in x:
+            kind = "choice" if qs[k]["type"] == "choice" else "noul"
+            read = (lambda r: r["probabilities"]) if kind == "choice" else (lambda r: {"true": r["noul"]})  # noqa: E731
+            px, py = read(x[k]), read(y[k])
+            worst[kind] = max(worst[kind], max(abs(px[o] - py[o]) for o in px))
+            flips += max(px, key=px.get) != max(py, key=py.get)
+        n += 1
+    out = {"run": a.run, "export": a.export, "pools": n, "worst_dp": {k: round(v, 4) for k, v in worst.items()},
+           "argmax_flips": flips}
+    print(json.dumps(out), flush=True)
+    if flips > max(1, n // 10):
+        raise SystemExit("the export does not answer like the run")
+
+
+def cmd_publish(a):
+    """Upload an exported checkpoint as a tagged release, never onto `main` (it keeps v3, which older inventio loads):
+    the files go to branch `<tag>` and the commit is tagged `<tag>`. `--dry-run` lists every file with its size and
+    sha256 and stops. After the upload the tag is downloaded fresh into a throwaway cache and loaded, so a release is
+    only reported once a stranger's machine could read it."""
+    import hashlib
+    import tempfile as tf
+    from huggingface_hub import HfApi, snapshot_download
+    src = Path(a.export)
+    files = [src / f for f in RELEASE_FILES if (src / f).exists()] + sorted(src.glob("model*.safetensors"))
+    for f in files:
+        print(f"  {f.name:28s} {f.stat().st_size:>13,d}  {hashlib.sha256(f.read_bytes()).hexdigest()}", flush=True)
+    if a.dry_run:
+        print(f"dry run: would upload {len(files)} files to {a.repo} branch {a.tag} and tag {a.tag}", flush=True)
+        return
+    api = HfApi()
+    if a.tag in {t.name for t in api.list_repo_refs(a.repo).tags}:
+        raise SystemExit(f"{a.repo} already has tag {a.tag}")
+    api.create_branch(a.repo, branch=a.tag, exist_ok=True)
+    with tf.TemporaryDirectory() as tmp:
+        for f in files:
+            (Path(tmp) / f.name).write_bytes(f.read_bytes())
+        info = api.upload_folder(folder_path=tmp, repo_id=a.repo, revision=a.tag, commit_message=a.message)
+    api.create_tag(a.repo, tag=a.tag, revision=a.tag, tag_message=a.message)
+    print(f"uploaded {info.oid if hasattr(info, 'oid') else info} and tagged {a.repo}@{a.tag}", flush=True)
+    # local_dir, not a fresh cache_dir: a new HF cache on Windows needs symlink privilege (WinError 1314)
+    with tf.TemporaryDirectory(dir=a.scratch or None) as cache:
+        path = snapshot_download(a.repo, revision=a.tag, local_dir=cache,
+                                 allow_patterns=["*.json", "*.safetensors", "*.pt", "*.txt", "*.jinja"])
+        from inventio.systemone import Model, questions, render
+        from inventio.search import Hit
+        m = Model(path, a.device)
+        hit = Hit(id=1, source="docs", public=True, root="/", path="limits.md", start_line=1, end_line=3,
+                  heading_path="Rate limits", text="The API allows 60 requests a minute per key.\nRetries back off.")
+        state, pids, lids, _ = render([hit])
+        res = m.ask(state, questions("how many requests a minute?", pids, lids))
+        print(f"fresh download of {a.repo}@{a.tag} loads: run {m.info()}, line "
+              f"{res['answers']['where_line']['choice']}, exists {res['answers']['exists']['noul']:.3f}", flush=True)
 
 
 # --- commands ------------------------------------------------------------------------------------
 
 def cmd_spike(a):
     for name in a.sets.split(","):
-        suffix = "" if a.order == "bm25" else f"-{a.order}"
+        suffix = ("" if a.order == "bm25" else f"-{a.order}") + ("" if a.pool == K else f"-pool{a.pool}")
         rows, path = [], ROWS / f"{a.tag}-{name}{suffix}.jsonl"
         ROWS.mkdir(parents=True, exist_ok=True)
 
@@ -380,12 +599,13 @@ def cmd_spike(a):
 
         with path.open("w", encoding="utf-8") as f:
             for qid, q, con, scope, is_gold in SETS[name](a.limit):
-                pos, neg = pools(con, q, scope, is_gold)
+                pos, neg = pools(con, q, scope, is_gold, k=a.pool)
                 if not pos:
                     continue
                 try:
                     r = {"qid": qid, "query": q,
-                         **run_query(a.url, q, arrange(pos), arrange(neg), is_gold, a.model)}
+                         **run_query(asker(a.url, model=a.model), q, arrange(pos), arrange(neg), is_gold,
+                                     passage_asks=a.with_passage_asks)}
                 except urllib.error.HTTPError as e:
                     print(f"skip {qid}: {e.code} {e.read()[:200]!r}", flush=True)
                     continue
@@ -393,6 +613,58 @@ def cmd_spike(a):
                 f.write(json.dumps(r, ensure_ascii=False) + "\n")
                 f.flush()
         record("spike", a.tag, f"{name}{suffix}", spike_summary(rows, a.tag, name))
+
+
+def cmd_parity(a):
+    """The vendored reader against the served server, on the same states and the same questions.
+
+    `--ranker systemone` reads the checkpoint in the query's own process; every number this repository
+    reports came from the served one. This measures the distance: the largest |Δp| for each question
+    kind, and whether any argmax moved. bf16 kernels differ by reassociation, so a small Δp is
+    expected; a moved argmax, or a Δp past a few percent, is a reader that is not the same reader.
+    """
+    from inventio.systemone import Model, questions, render, served
+    local = Model(a.run, a.device)
+    print(f"run {local.run}  device {local.info()['device']}  dtype {local.info()['dtype']}  "
+          f"temperature {local.info()['temperature']}", flush=True)
+    if a.url:
+        info = served(a.url)
+        there = str(info.get("run") or "").replace("\\", "/").rstrip("/")
+        here = str(local.run).replace("\\", "/").rstrip("/")
+        if not (there.endswith(here) or here.endswith(there)):   # same weights, or the comparison is a lie
+            raise SystemExit(f"the server serves {there!r} and --run is {here!r}: load the same checkpoint")
+        print(f"served {info.get('run')}  temperature {info.get('temperature')}", flush=True)
+    fixed = asker(a.url, model=a.model) if a.url else None
+    worst, flips, rows = {}, 0, 0
+    for qid, q, con, scope, is_gold in SETS[a.set](a.limit):
+        pos, neg = pools(con, q, scope, is_gold, k=a.pool)
+        if not pos:
+            continue
+        for arm, hits in (("pos", pos), ("neg", neg)):
+            state, pids, lids, owner = render(hits)
+            qs = questions(q, pids, lids)
+            mine = local.ask(state, qs)["answers"]
+            if not a.url:
+                continue
+            theirs = fixed(state, qs)["answers"]
+            for key in qs:
+                kind = qs[key]["type"]
+                if kind == "noul":
+                    d = abs(mine[key]["noul"] - theirs[key]["noul"])
+                    worst[kind] = max(worst.get(kind, 0.0), d)
+                    flips += (mine[key]["noul"] > 0.5) != (theirs[key]["noul"] > 0.5)
+                elif kind == "choice":
+                    a1, a2 = mine[key]["probabilities"], theirs[key]["probabilities"]
+                    d = max(abs(a1[k] - a2[k]) for k in a1)
+                    worst[kind] = max(worst.get(kind, 0.0), d)
+                    flips += max(a1, key=a1.get) != max(a2, key=a2.get)
+        rows += 1
+        print(f"{qid} {arm}: worst {', '.join(f'{k} {v:.4f}' for k, v in sorted(worst.items()))}"
+              f"{'' if a.url else '  (only the local reader asked)'}", flush=True)
+    if a.url:
+        print(f"{rows} pools: worst |Δp| " + ", ".join(f"{k} {v:.4f}" for k, v in sorted(worst.items()))
+              + f"; argmax flips {flips}")
+    return 0
 
 
 def cmd_disp(a):
@@ -472,6 +744,307 @@ def cmd_gate(a):
     record("gate", f"{a.kev}-vs-{a.v3}", a.set, s)
 
 
+def cmd_leak(a):
+    """Can a bag of words tell a record's positive arm from its negative arm? The acceptance test for any
+    change to how negatives are built: in-domain (grouped by query) it should sit near the cross-domain
+    level, because a bag sees no query. What it can see is corpus composition — which passages the two
+    arms hold, how long the state is — and a model trained on that learns the composition, not
+    answerability (measured 2026-09-26: the compacted negative arm scored 0.732 in-domain while the
+    one-swap arm scores 0.623; per source: md2d 0.634 -> 0.598, code 0.927 -> 0.811, where for code the
+    state's *length alone* separates the arms at 0.77 with the filler chunks systematically longer)."""
+    import numpy as np
+    from scipy.sparse import csr_matrix
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.metrics import roc_auc_score
+
+    def featurize(texts, dim=1 << 18):
+        rows, cols, vals = [], [], []
+        for i, t in enumerate(texts):
+            ws = WORD.findall(t.casefold())
+            c = Counter(ws + [f"{x}_{y}" for x, y in zip(ws, ws[1:])])
+            for g, n in c.items():
+                rows.append(i); cols.append(zlib.crc32(g.encode()) % dim); vals.append(1 + math.log(n))
+        X = csr_matrix((np.array(vals, dtype=np.float32), (rows, cols)), shape=(len(texts), dim))
+        return X
+
+    def fit(X, y):
+        return LogisticRegression(max_iter=200, C=1.0, solver="liblinear").fit(X, y)
+
+    def grouped(X, y, groups, folds=5):
+        key = sorted(set(groups))
+        np.random.RandomState(0).shuffle(key)
+        fold = {q: i % folds for i, q in enumerate(key)}
+        out = []
+        for f in range(folds):
+            te = np.array([i for i, q in enumerate(groups) if fold[q] == f])
+            tr = np.array([i for i, q in enumerate(groups) if fold[q] != f])
+            if len(set(y[tr])) < 2 or len(set(y[te])) < 2:
+                continue
+            out.append(roc_auc_score(y[te], fit(X[tr], y[tr]).decision_function(X[te])))
+        return out
+
+    rows = [json.loads(l) for l in Path(a.records).open(encoding="utf-8")]
+    rows = [r for r in rows if r["state"].strip()]
+    X = featurize([r["state"] for r in rows])
+    y = np.array([1 if r["_meta"]["arm"] == "pos" else 0 for r in rows])
+    g = [r["_meta"]["group_id"] for r in rows]
+    dom = [r["_meta"].get("domain") or r["_meta"]["source"] for r in rows]
+    src = [r["_meta"]["source"] for r in rows]
+    print(f"{Path(a.records).name}: {len(rows)} records, arms {dict(Counter(y))}, {X.nnz} nonzero features")
+    all_ = grouped(X, y, g)
+    print(f"  in-domain grouped 5-fold AUC: mean {statistics.mean(all_):.3f} {[round(x, 3) for x in all_]}")
+    for s in sorted(set(src)):
+        i = [k for k, v in enumerate(src) if v == s]
+        if len(i) < 50 or len({y[k] for k in i}) < 2:
+            continue
+        a_ = grouped(X[i], y[i], [g[k] for k in i])
+        print(f"  {s:12s} n={len(i):5d} in-domain mean {statistics.mean(a_):.3f} {[round(x, 3) for x in a_]}")
+        pos = [len(rows[k]["state"]) for k in i if y[k] == 1]
+        neg = [len(rows[k]["state"]) for k in i if y[k] == 0]
+        print(f"  {s:12s} state length alone: AUC {roc_auc_score([y[k] for k in i], [len(rows[k]['state']) for k in i]):.3f} "
+              f"(pos median {statistics.median(pos):.0f} vs neg {statistics.median(neg):.0f} chars)")
+    doms = [d for d in sorted(set(dom)) if dom.count(d) >= 150]
+    if len(doms) > 1:
+        out = {}
+        for d in doms:
+            te = [k for k in range(len(rows)) if dom[k] == d]
+            tr = [k for k in range(len(rows)) if dom[k] != d]
+            if len({y[k] for k in tr}) < 2 or len({y[k] for k in te}) < 2:
+                continue
+            out[d] = round(roc_auc_score([y[k] for k in te],
+                                         fit(X[tr], [y[k] for k in tr]).decision_function(X[te])), 3)
+        print(f"  leave-one-domain-out: {out}")
+    record("leak", Path(a.records).stem, "records",
+           {"file": Path(a.records).name, "records": len(rows), "auc_in_domain": round(statistics.mean(all_), 3)})
+
+
+def mix_questions(rows, passage_asks, exists_asks):
+    """Rewrite the question list of every record: at most `passage_asks` per-passage questions (every
+    gold passage kept, the rest drawn by the query's own key so a rebuild asks the same ones) and
+    `exists_asks` wordings of `exists`.
+
+    The per-record loss is a **sum over questions** (kev/train.py batch_loss), so the question list *is*
+    the weight each head gets: a record with 15 passage questions and one `exists` hands the honesty
+    head 6% of the gradient. This is the knob for that, and it changes questions only — the state, the
+    passages and the labels stay the ones the record was built with.
+    """
+    out = []
+    for r in rows:
+        qs = r["questions"]
+        asks = {k: q for k, q in qs.items() if k.startswith("P")}
+        keep = set()
+        if asks:
+            gold = [k for k, q in asks.items() if q.get("label")]
+            rest = sorted(k for k in asks if k not in gold)
+            rng = random.Random(hashlib.sha1(f"{r['_meta']['group_id']}\tpassages".encode()).hexdigest()[:8])
+            rng.shuffle(rest)
+            keep = set(gold) | set(rest[: max(0, passage_asks - len(gold))])
+        new_qs = {k: v for k, v in qs.items() if not k.startswith("P") or k in keep}
+        if "exists" in qs:
+            q = qs["exists"]
+            asked = q["instructions"].split('"')
+            for i in range(1, exists_asks):
+                new_qs[f"exists_{i}"] = {**q, "instructions": EXISTS_ASKS[i % len(EXISTS_ASKS)].format(
+                    q=asked[1] if len(asked) > 1 else "")}
+        out.append({**r, "questions": new_qs})
+    return out
+
+
+def wait_ready(port, tries=120):
+    """Block until a served model answers, so a chain never scores a server that is not up."""
+    import urllib.request
+    for _ in range(tries):
+        try:
+            urllib.request.urlopen(f"http://127.0.0.1:{port}/v1/models", timeout=3).read()
+            return True
+        except Exception:
+            time.sleep(2)
+    return False
+
+
+def cmd_score(a):
+    """Serve a run and measure it: spike the sets, pair it against each baseline, exact line, and the
+    acceptance test on the records it was trained on. One command, so the chain is not typed by hand and
+    a lost session does not lose the numbers."""
+    import os
+    import subprocess
+    kev = Path(os.environ.get("KEV_DIR", "C:/Users/LEGION/kev")).resolve()
+    python = kev / ".venv" / "Scripts" / "python.exe"
+    run = Path(a.run) if a.run else kev / "runs" / a.tag
+    log = Path(tempfile.gettempdir()) / f"{a.tag}-serve.log"
+    with log.open("w", encoding="utf-8") as f:
+        proc = subprocess.Popen([str(python), str(Path(__file__).resolve().parent / "kev_win.py"), "serve",
+                                 "--run", str(run), "--port", str(a.port)], cwd=REPO, stdout=f,
+                                stderr=subprocess.STDOUT, creationflags=0x00000008 | 0x00000200)
+    print(f"serve pid={proc.pid} -> {log}", flush=True)
+    if not wait_ready(a.port):
+        raise SystemExit(f"no server on :{a.port}; see {log}")
+    url = f"http://127.0.0.1:{a.port}"
+    call([sys.executable, str(Path(__file__)), "spike", url, a.tag, "--sets", a.sets])
+    for base in [b for b in a.against.split(",") if b]:
+        for s in a.sets.split(","):
+            call([sys.executable, str(Path(__file__)), "gate", a.tag, base, s])
+    call([sys.executable, str(Path(__file__)), "lines", a.tag])
+    if a.leak:
+        call([sys.executable, str(Path(__file__)), "leak", a.leak])
+    summary = json.loads((ROWS / "summary.json").read_text(encoding="utf-8"))
+    keys = ("passage@1", "top_line_owner_passage@1", "exists_auc", "exists_auc_answer_absent",
+            "latency_ms_median", "tokens_median")
+    print("\n=== readings", flush=True)
+    for s in a.sets.split(","):
+        tags = [a.tag, *[b for b in a.against.split(",") if b]]
+        print(f"-- {s}", flush=True)
+        for k in keys:
+            print(f"   {k:32s} " + "  ".join(f"{t} {summary['spike'].get(f'{t}/{s}', {}).get(k)}" for t in tags),
+                  flush=True)
+    proc.kill()   # the numbers are read: a served checkpoint left on the card only takes memory from the next step
+    print(f"serve pid={proc.pid} stopped", flush=True)
+
+
+def cmd_run(a):
+    """`train` then `score`, for one tag: the whole stretch in one command (each half is defined above
+    and both are recorded — the recipe by `train`, the numbers by `score`)."""
+    import os
+    import subprocess
+    cmd = [sys.executable, str(Path(__file__)), "train", "--records", a.records, "--bal", str(a.bal),
+           "--bal-swe", str(a.bal_swe), "--max-state", str(a.max_state), "--epochs", str(a.epochs),
+           f"--bal-tag={a.bal_tag}", "--out", f"runs/{a.tag}"]
+    if a.no_code:
+        cmd.append("--no-code")
+    if a.judge_records:
+        cmd += ["--judge-records", a.judge_records]
+    print("$ " + " ".join(cmd), flush=True)
+    if call(cmd, cwd=REPO):
+        raise SystemExit("training failed")
+    metrics = json.loads(Path(a.kev_dir if hasattr(a, "kev_dir") else
+                              os.environ.get("KEV_DIR", "C:/Users/LEGION/kev")).joinpath("runs", a.tag,
+                                                                                          "training_metrics.json").read_text())
+    print(f"trained: {metrics['records_seen']} records, {metrics['optimizer_steps']} steps, "
+          f"{metrics['wall_seconds'] / 3600:.2f} h, peak {metrics['peak_device_bytes'] / 2**30:.2f} GiB",
+          flush=True)
+    call([sys.executable, str(Path(__file__)), "score", a.tag, "--sets", a.sets,
+                     "--against", a.against, "--port", str(a.port), "--leak", a.leak], cwd=REPO)
+    if a.judge_records:   # the index-time question it was also trained on, read in this process
+        run = Path(os.environ.get("KEV_DIR", "C:/Users/LEGION/kev")) / "runs" / a.tag
+        call([str(Path(os.environ.get("KEV_DIR", "C:/Users/LEGION/kev")) / ".venv" / "Scripts" / "python.exe"),
+                         str(Path(__file__)), "judge", a.tag, "--run", str(run)], cwd=REPO)
+
+
+def cmd_domains(a):
+    """The answer-absent reading split by the domain a query's gold comes from.
+
+    md2d's aggregate hides four stories, and one of them is a control: `studentaid` was held out of the
+    recipe whole, so a lead that holds there is not a corpus cue (the bag-of-words probe that separated
+    v1's two arms in-domain sits at chance across domains). Read with `threshold`, which cuts the same
+    reading for a caveat line.
+    """
+    from beir_bench import load_beir
+    d = data_dir(None) / "beir" / "multidoc2dial"
+    _, _, qrels = load_beir(d)
+    dom = {}
+    for qid, gold in qrels.items():
+        pref = {str(c).split("_")[0].split("-")[0] for c in gold}
+        dom[qid] = pref.pop() if len(pref) == 1 else "mixed"
+    rows = [json.loads(l) for l in (ROWS / f"{a.tag}-md2d.jsonl").open(encoding="utf-8")]
+    has = [r for r in rows if r["pos"]["gold"]]
+    absent = [r for r in rows if not r["pos"]["gold"]]
+    auc = lambda p, n: (round(sum((x > y) + 0.5 * (x == y) for x in p for y in n) / (len(p) * len(n)), 3)
+                        if p and n else None)  # noqa: E731
+    out = {"tag": a.tag, "answer_absent": len(absent),
+           "all": auc([r["pos"]["exists"] for r in has], [r["pos"]["exists"] for r in absent])}
+    for dm in sorted({dom.get(r["qid"], "?") for r in absent}):
+        n = [r["pos"]["exists"] for r in absent if dom.get(r["qid"]) == dm]
+        p = [r["pos"]["exists"] for r in has if dom.get(r["qid"]) == dm]
+        out[dm] = {"absent": len(n), "answerable": len(p), "auc": auc(p, n)}
+    record("domains", a.tag, "md2d", out)
+
+
+def cmd_fitcheck(a):
+    """Does the `exists` head fit the data it was trained on? In-sample AUC against the held-out one.
+
+    Equal numbers mean the head is underfit and more weight on it can move it; an in-sample number far
+    above the test number means it fits and the lever is elsewhere (the negatives, the labels, the
+    state). Asks each record in its own wording and in the wording the harness serves with, because the
+    wordings are picked per record (`pick`) and a head can fit one and not the other.
+    """
+    import urllib.request
+    rows = [json.loads(l) for l in open(a.records, encoding="utf-8")]
+    rng = random.Random(a.seed)
+    pos = [r for r in rows if r["_meta"]["arm"] == "pos"]
+    neg = [r for r in rows if r["_meta"]["arm"] == "neg"]
+    rng.shuffle(pos); rng.shuffle(neg)
+    sample = pos[:a.n] + neg[:a.n]
+    rng.shuffle(sample)
+    out = {"own": ([], []), "served": ([], [])}
+    for r in sample:
+        q = r["questions"]["exists"]
+        served_q = {"type": "noul", "instructions": EXISTS_ASKS[0].format(q=q["instructions"].split('"')[1]),
+                    "criteria": NOUL}
+        res = ask(a.url, r["state"], {"own": q, "served": served_q}, a.model)
+        y = 1 if q["label"] else 0
+        out["own"][y].append(res["answers"]["own"]["noul"])
+        out["served"][y].append(res["answers"]["served"]["noul"])
+    s = {"tag": Path(a.records).stem, "n_pos": len(out["own"][1]), "n_neg": len(out["own"][0])}
+    for w in ("own", "served"):
+        p_, n_ = out[w][1], out[w][0]
+        s[f"auc_{w}"] = round(sum((x > y) + 0.5 * (x == y) for x in p_ for y in n_) / (len(p_) * len(n_)), 3)
+        s[f"median_pos_{w}"] = round(statistics.median(p_), 3)
+        s[f"median_neg_{w}"] = round(statistics.median(n_), 3)
+    record("fitcheck", Path(a.records).stem, "records", s)
+
+
+def cmd_threshold(a):
+    """Where the tool says "this map may not answer": the whole curve, and the two defensible ways to cut
+    it, so the number in `inventio/systemone.py` is read off a run instead of chosen by hand.
+
+    The two classes come from the spike: the pools whose answer BM25 put in (answerable) and the pools
+    whose answer is not in the map at all (absent). A caveat costs a reader a glance; a missing caveat
+    is the failure the reading exists for — so the balanced point is the default here and the
+    90%-keep point is printed beside it for a quieter tool.
+    """
+    rows = [json.loads(l) for l in (ROWS / f"{a.tag}-{a.set}.jsonl").open(encoding="utf-8")]
+    has = [r["pos"]["exists"] for r in rows if r["pos"]["gold"]]
+    absent = [r["pos"]["exists"] for r in rows if not r["pos"]["gold"]]
+    if not has or not absent:
+        raise SystemExit(f"{a.set} needs both classes (answerable {len(has)}, absent {len(absent)})")
+    curve = []
+    for thr in [round(x / 100, 2) for x in range(5, 96, 5)]:
+        kept = sum(p >= thr for p in has) / len(has)
+        flag = sum(p < thr for p in absent) / len(absent)
+        curve.append({"thr": thr, "keeps_answerable": round(kept, 3), "flags_absent": round(flag, 3),
+                      "balanced": round((kept + flag) / 2, 3)})
+    bal = max(curve, key=lambda c: c["balanced"])
+    quiet = max((c for c in curve if c["keeps_answerable"] >= 0.9), key=lambda c: c["thr"], default=curve[0])
+    record("threshold", a.tag, a.set, {"tag": a.tag, "set": a.set, "answerable": len(has), "absent": len(absent),
+                                       "balanced_point": bal, "quiet_point": quiet, "curve": curve})
+
+
+def cmd_mix(a):
+    """Change the question mix of a record file without rebuilding it: the state, the pools and the
+    labels stay byte-identical, so two runs differ in one thing. Writes `<out>.mix.json` beside the
+    result, which `train` copies into the run's recipe."""
+    import hashlib
+    src = Path(a.records)
+    rows = [json.loads(l) for l in src.open(encoding="utf-8")]
+    mixed = mix_questions(rows, a.passage_asks, a.exists_asks)
+    out = Path(a.out)
+    with out.open("w", encoding="utf-8") as f:
+        f.writelines(json.dumps(r, ensure_ascii=False) + "\n" for r in mixed)
+    side = out.with_suffix(".mix.json")
+    side.write_text(json.dumps(
+        {"built_from": str(src), "built_from_sha256": hashlib.sha256(src.read_bytes()).hexdigest(),
+         "out_sha256": hashlib.sha256(out.read_bytes()).hexdigest(),
+         "passage_asks": a.passage_asks, "exists_asks": a.exists_asks,
+         "rule": "every gold passage kept, the rest drawn by the query key; `exists` asked in this many wordings"},
+        indent=1) + "\n", encoding="utf-8")
+    kind = Counter(("exists" if k.startswith("exists") else "P" if k.startswith("P") else k)
+                   for r in mixed for k in r["questions"])
+    total = sum(kind.values())
+    print(json.dumps({"out": str(out), "records": len(mixed), "kinds": dict(kind),
+                      "questions_per_record": round(total / len(mixed), 2),
+                      "exists_share": round(kind["exists"] / total, 3), "mix": str(side)}), flush=True)
+
+
 def cmd_lines(a):
     spans = md2d_test_spans()
     rows = [json.loads(l) for l in open(ROWS / f"{a.tag}-md2d.jsonl", encoding="utf-8")]
@@ -484,6 +1057,12 @@ def cmd_lines(a):
 def cmd_data(a):
     from collections import Counter
     DATA.mkdir(parents=True, exist_ok=True)
+    if a.judge:
+        rows = list(judge_records())
+        with (DATA / "judge.jsonl").open("w", encoding="utf-8") as f:
+            f.writelines(json.dumps(r, ensure_ascii=False) + "\n" for r in rows)
+        print("judge", len(rows), Counter(r["_meta"]["domain"] for r in rows), "->", DATA / "judge.jsonl", flush=True)
+        return
     for name, gens in (("train", [md2d_records("train"), swe_records()]), ("dev", [md2d_records("validation")])):
         rows = [r for g in gens for r in g]
         random.Random(0).shuffle(rows)
@@ -540,7 +1119,6 @@ def cmd_scale(a):
 
 
 def cmd_train(a):
-    from collections import Counter
     """The run's recipe, in the repo: the balanced record file, then Kev's trainer through
     `kev_win.py` with every knob pinned, and a `recipe.json` recording the Kev commit, the base
     revision and the data's hash so the run is reproducible from this repo alone."""
@@ -552,10 +1130,29 @@ def cmd_train(a):
     if not python.exists():
         raise SystemExit(f"no Kev environment at {kev}; set KEV_DIR")
     records = Path(a.records) if a.records else DATA / "train.jsonl"
+    mix_side = records.with_suffix(".mix.json")  # written by `mix`: which question mix these records carry
+    fit = None
     if not records.exists():
         raise SystemExit(f"{records} not built; run `systemone.py data` first")
     if a.bal or a.bal_swe:
         rows = [json.loads(l) for l in records.open(encoding="utf-8")]
+        if a.fit_max_state:
+            # The draw has to see only what the trainer admits. At `--max_state 6656` the trainer drops 4,879
+            # of 14,038 records (every long code pool: 3,550 negatives and 1,329 positives), so drawing from
+            # the unfiltered file would print a composition the run never sees and count code positives that
+            # do not exist. `kev_win.py fits` runs the trainer's own predicate.
+            unfit = Path(a.records_fit) if a.records_fit else records.parent / f"{records.stem}.fit{a.fit_max_state}.jsonl"
+            if not unfit.exists() or a.refit:
+                cmd = [str(python), str(Path(__file__).resolve().parent / "kev_win.py"),
+                       "fits", "--data", str(records), "--base", BASE, "--base_revision", BASE_REVISION,
+                       "--max_state", str(a.fit_max_state), "--out", str(unfit)]
+                print(" ".join(cmd), flush=True)
+                if call(cmd):
+                    raise SystemExit("kev_win.py fits failed")
+            else:
+                print(f"reusing the filtered file {unfit}", flush=True)
+            rows = [json.loads(l) for l in unfit.open(encoding="utf-8")]
+            fit = unfit
         rng = random.Random(a.seed)
 
         def draw(subset, target):
@@ -583,40 +1180,95 @@ def cmd_train(a):
             return kept
 
         md2d = [r for r in rows if r["_meta"]["source"] == "md2d_train"]
-        code = [r for r in rows if r["_meta"]["source"] != "md2d_train"]
+        code = [] if a.no_code else [r for r in rows if r["_meta"]["source"] != "md2d_train"]
         kept = draw(md2d, a.bal) + draw(code, a.bal_swe)
         rng.shuffle(kept)
         mix = Counter((r["_meta"]["source"], r["_meta"]["arm"]) for r in kept)
-        records = DATA / f"train_bal{a.bal}-{a.bal_swe}.jsonl"
+        records = DATA / f"train_bal{a.bal}-{a.bal_swe}{a.bal_tag}.jsonl"
         records.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in kept), encoding="utf-8")
-        print(f"balanced to {len(kept)} records: "
+        print(f"balanced to {len(kept)} records from {records if fit is None else fit.name}: "
               + " ".join(f"{s}/{arm} {n}" for (s, arm), n in sorted(mix.items()))
               + f" -> {records}", flush=True)
-    recipe = {"kev_dir": str(kev), "kev_commit": subprocess.run(
+    if a.judge_records:
+        judge = [json.loads(l) for l in open(a.judge_records, encoding="utf-8")]
+        rows = [json.loads(l) for l in records.open(encoding="utf-8")] + judge
+        random.Random(a.seed).shuffle(rows)
+        records = DATA / f"{records.stem}+judge.jsonl"
+        records.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8")
+        print(f"+{len(judge)} judge records -> {records}", flush=True)
+    if fit is not None:
+        recipe_fit = {"fit_max_state": a.fit_max_state, "fit_records": str(fit),
+                      "fit_records_sha256": hashlib.sha256(Path(fit).read_bytes()).hexdigest()}
+    else:
+        recipe_fit = {}
+    # 8 GB on this card, and the new question shape fattens the pass: 18 branches, one of them a choice
+    # over up to 512 line ids. Measured 2026-09-26 at --max_state 6656: the worst records by *packed*
+    # length (state + branches, up to 10.4k tokens by tokenizer proxy) OOM the card, while the worst by
+    # *state* length (a proxy that picks the wrong records) peak at 7,763/7,932 MiB. `--row_budget` splits
+    # a record whose row does not fit one pass into consecutive question groups, each part carrying its
+    # share of the record's questions, so the loss is a sum over variants and stays exact
+    # (kev.train.batch_loss). `expandable_segments` is not supported on Windows (torch warns), so the
+    # budget is the lever that keeps this run on the card, not the allocator flag.
+    recipe = {**recipe_fit, "kev_dir": str(kev), "kev_commit": subprocess.run(
         ["git", "-C", str(kev), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip() or None,
         "init_from": INIT_FROM, "base": BASE, "base_revision": BASE_REVISION,
         "records": str(records), "records_sha256": hashlib.sha256(records.read_bytes()).hexdigest(),
+        "judge_records": a.judge_records or None,
+        "mix": json.loads(mix_side.read_text(encoding="utf-8")) if mix_side.exists() else "as built by `data`",
         "max_state": a.max_state, "epochs": a.epochs, "lr": a.lr, "seed": a.seed,
-        "augmentations": "none (no none-option, no distractor: the options are exhaustive line ids)"}
-    out = Path(a.out)
-    out.mkdir(parents=True, exist_ok=True)
-    (out / "recipe.json").write_text(json.dumps(recipe, indent=1) + "\n", encoding="utf-8")
+        "augmentations": "none (no none-option, no distractor: the options are exhaustive line ids)",
+        "memory": {"row_budget": a.row_budget,
+                   "why": "the pass is bounded because the card is 8 GB and the worst packed record "
+                          "OOMs without it; the split is loss-exact (share-weighted) as long as "
+                          "--perm_kl and --anchor_w stay 0"}}
+    # The trainer refuses to run into an existing --out, so a non-dry run must not create it: the receipt
+    # is written next to the trainer's own files once it has made the directory. A dry run is the one that
+    # creates it (that is what a dry run is for: the recipe before the run).
+    out = kev / a.out     # the trainer runs with cwd=<kev checkout>, so --out is relative to that
+    if a.dry_run:
+        out.mkdir(parents=True, exist_ok=True)
+        (out / "recipe.json").write_text(json.dumps(recipe, indent=1) + "\n", encoding="utf-8")
+    elif out.exists():
+        raise SystemExit(f"{out} exists and Kev refuses to overwrite a run; move it aside or pick --out")
     cmd = [str(python), str(Path(__file__).resolve().parent / "kev_win.py"), "train",
            "--data", str(records), "--init_from", INIT_FROM, "--base", BASE, "--base_revision", BASE_REVISION,
            "--max_state", str(a.max_state), "--device", "cuda", "--dtype", "bf16", "--weights_dtype", "bf16",
            "--checkpointing", "1", "--shared_prefix", "1", "--batch", "1", "--accum", "8",
            "--lr", str(a.lr), "--epochs", str(a.epochs), "--seed", str(a.seed),
-           "--p_none", "0", "--p_none_distract", "0", "--p_distract", "0", "--out", a.out]
+           "--p_none", "0", "--p_none_distract", "0", "--p_distract", "0",
+           "--row_budget", str(a.row_budget), "--out", a.out]
     print(" ".join(cmd), flush=True)
     if a.dry_run:
         return 0
-    raise SystemExit(subprocess.call(cmd, cwd=kev))
+    rc = call(cmd, cwd=kev)
+    if rc == 0:
+        (out / "recipe.json").write_text(json.dumps(recipe, indent=1) + "\n", encoding="utf-8")
+        print(f"recipe -> {out / 'recipe.json'}", flush=True)
+    raise SystemExit(rc)
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
     s = sub.add_parser("data", help="build the Kev training records"); s.set_defaults(fn=cmd_data)
+    s.add_argument("--judge", action="store_true",
+                   help="build only the index-time judge's records (<data>/s1/data/judge.jsonl)")
+    s = sub.add_parser("export", help="merge a run's adapter into a full-weight checkpoint")
+    s.add_argument("run"); s.add_argument("out"); s.set_defaults(fn=cmd_export)
+    s = sub.add_parser("check-export", help="the run and its export on the same states: |dp| and argmax flips")
+    s.add_argument("run"); s.add_argument("export"); s.add_argument("--limit", type=int, default=30)
+    s.add_argument("--device", default=None); s.set_defaults(fn=cmd_check_export)
+    s = sub.add_parser("publish", help="upload an export as a tagged release (branch and tag, never main)")
+    s.add_argument("export"); s.add_argument("--repo", default="minhquan2310/dispositio")
+    s.add_argument("--tag", default="v4"); s.add_argument("--message", default="dispositio v4: the System One model")
+    s.add_argument("--device", default=None); s.add_argument("--dry-run", action="store_true")
+    s.add_argument("--scratch", default="", help="where the fresh-download check writes (default: the temp dir)")
+    s.set_defaults(fn=cmd_publish)
+    s = sub.add_parser("judge", help="the category question on its held-out passages")
+    s.add_argument("tag"); s.add_argument("--run", default=None, help="System One run (default: the recorded one)")
+    s.add_argument("--laya", default="", help="measure a Laya model instead: dispositio | laya")
+    s.add_argument("--limit", type=int, default=0)
+    s.set_defaults(fn=cmd_judge)
     s = sub.add_parser("train", help="fine-tune Kev on the records (recipe pinned here)")
     s.add_argument("--records", default="", help="record file (default <data>/s1/data/train.jsonl)")
     s.add_argument("--out", default="runs/s1", help="run directory, inside the Kev checkout")
@@ -628,8 +1280,26 @@ def main():
                         "lopsided on its own (107 positives against 3,922 negatives), so a quota here is "
                         "about the positive/negative prior the exists head sees on code-like states")
     s.add_argument("--max-state", type=int, default=6656)
+    s.add_argument("--fit-max-state", type=int, default=0,
+                   help="drop the records the trainer's admission rule drops at this state cap before the "
+                        "balance draw, so the printed composition is the run's (0: draw from everything)")
+    s.add_argument("--records-fit", default="", help="the filtered file to read/write with --fit-max-state")
+    s.add_argument("--refit", action="store_true", help="recompute the filtered file even if it exists")
+    s.add_argument("--no-code", action="store_true",
+                   help="train on prose only. The code arm's records do not fit the card: measured with the "
+                        "encoder, packed (state + branches) is p50 7,074 and max 8,310 for code against p50 "
+                        "4,063 and max 7,571 for md2d, and a ~8.2k packed row OOMs 8 GB. The code arm needs "
+                        "a smaller state budget (fewer passages, or one passage per state), not a bigger cap")
+    s.add_argument("--row-budget", type=int, default=0,
+                   help="padded row tokens per forward/backward pass (0: the whole micro-batch at once, "
+                        "which is what v1 used and what OOMs an 8 GB card on this shape's long records)")
+    s.add_argument("--bal-tag", default="",
+                   help="a suffix on the balanced file's name, so a new record shape never overwrites the "
+                        "previous shape's draw (the file a run's recipe names is its data)")
     s.add_argument("--epochs", type=int, default=1); s.add_argument("--lr", type=float, default=2e-5)
     s.add_argument("--seed", type=int, default=0)
+    s.add_argument("--judge-records", default="",
+                   help="append these records (systemone.py data --judge) after the balance draw")
     s.add_argument("--dry-run", action="store_true", help="write the recipe and print the command, then stop")
     s.set_defaults(fn=cmd_train)
     s = sub.add_parser("scale", help="request time against questions and state length")
@@ -639,18 +1309,62 @@ def main():
     s = sub.add_parser("spike", help="ask a served System One model over the pools")
     s.add_argument("url"); s.add_argument("tag"); s.add_argument("--model", default="jev-latest")
     s.add_argument("--sets", default="md2d"); s.add_argument("--limit", type=int, default=0)
+    s.add_argument("--with-passage-asks", action="store_true",
+                   help="also ask the per-passage questions (a study; the served shape is the choice heads)")
     s.add_argument("--order", choices=("bm25", "reverse", "shuffle"), default="bm25",
                    help="control: permute the passages inside the state, content unchanged. A model "
                         "that reads content keeps its accuracy; one that follows BM25's order collapses")
     s.add_argument("--seed", type=int, default=0, help="--order shuffle")
+    s.add_argument("--pool", type=int, default=K,
+                   help=f"passages rendered into the state (default {K}); what BM25 finds beyond this is "
+                        "invisible to the model, so this is the recall/quality trade in the product")
     s.set_defaults(fn=cmd_spike)
     s = sub.add_parser("disp", help="dispositio on the same pools")
     s.add_argument("tag"); s.add_argument("--sets", default="md2d"); s.add_argument("--limit", type=int, default=0)
     s.set_defaults(fn=cmd_disp)
     s = sub.add_parser("gate", help="a System One run against dispositio")
     s.add_argument("kev"); s.add_argument("v3"); s.add_argument("set"); s.set_defaults(fn=cmd_gate)
+    s = sub.add_parser("parity", help="the in-process reader against the served server, same states")
+    s.add_argument("--run", required=True, help="the run directory the server is serving")
+    s.add_argument("--url", default="", help="the served server to compare against (empty: local only)")
+    s.add_argument("--model", default="jev-latest")
+    s.add_argument("--set", default="md2d"); s.add_argument("--limit", type=int, default=5)
+    s.add_argument("--pool", type=int, default=K)
+    s.add_argument("--device", default=None, help="cpu|cuda|mps; default: this machine's accelerator")
+    s.set_defaults(fn=cmd_parity)
+    s = sub.add_parser("leak", help="can a bag of words tell a positive record from its negative arm?")
+    s.add_argument("records", help="a records file to test (the run's own data file)")
+    s.set_defaults(fn=cmd_leak)
     s = sub.add_parser("lines", help="exact-line top-1 on MultiDoc2Dial test"); s.add_argument("tag")
     s.set_defaults(fn=cmd_lines)
+    s = sub.add_parser("mix", help="rewrite a record file's question mix (which head gets how much loss)")
+    s.add_argument("records"); s.add_argument("--out", required=True)
+    s.add_argument("--passage-asks", type=int, default=6, help="per-passage questions kept per record")
+    s.add_argument("--exists-asks", type=int, default=3, help="wordings of `exists` asked per record")
+    s.set_defaults(fn=cmd_mix)
+    s = sub.add_parser("domains", help="the answer-absent reading split by md2d domain (studentaid is the control)")
+    s.add_argument("tag"); s.set_defaults(fn=cmd_domains)
+    s = sub.add_parser("fitcheck", help="does the `exists` head fit its own training data?")
+    s.add_argument("records"); s.add_argument("--url", default="http://127.0.0.1:8009")
+    s.add_argument("--model", default="jev-latest"); s.add_argument("--n", type=int, default=300)
+    s.add_argument("--seed", type=int, default=0); s.set_defaults(fn=cmd_fitcheck)
+    s = sub.add_parser("threshold", help="where the tool says the map may not answer (the curve, and two cuts)")
+    s.add_argument("tag"); s.add_argument("--set", default="md2d"); s.set_defaults(fn=cmd_threshold)
+    s = sub.add_parser("score", help="serve a run and measure it: spike, gate, lines, leak — one command")
+    s.add_argument("tag"); s.add_argument("--run", default="", help="run directory (default <kev>/runs/<tag>)")
+    s.add_argument("--sets", default="md2d,techqa,webshop"); s.add_argument("--port", type=int, default=8011)
+    s.add_argument("--against", default="", help="comma-separated tags to pair against (gate)")
+    s.add_argument("--leak", default="", help="the records file to run the acceptance test on")
+    s.set_defaults(fn=cmd_score)
+    s = sub.add_parser("run", help="train then score, for one tag")
+    s.add_argument("tag"); s.add_argument("--records", required=True); s.add_argument("--bal", type=int, default=4000)
+    s.add_argument("--bal-swe", type=int, default=0); s.add_argument("--bal-tag", default="")
+    s.add_argument("--max-state", type=int, default=6656); s.add_argument("--epochs", type=int, default=1)
+    s.add_argument("--no-code", action="store_true"); s.add_argument("--sets", default="md2d,techqa,webshop")
+    s.add_argument("--against", default=""); s.add_argument("--leak", default="")
+    s.add_argument("--port", type=int, default=8011)
+    s.add_argument("--judge-records", default="", help="passed to train; the run is then also measured by `judge`")
+    s.set_defaults(fn=cmd_run)
     a = ap.parse_args()
     return a.fn(a)
 

@@ -450,3 +450,39 @@ def test_show_names_who_decided_each_fact_and_every_coordinate_opens(tmp_path, c
     for other in [*node["links"], *node["structure"], *node["similar"]]:
         assert run(capsys, "--db", db, "show", other["coord"])[0] == 0
     assert run(capsys, "--db", db, "show", "d:ops/absent.md")[0] == 2
+
+
+def test_systemone_state_and_questions_are_the_trained_shape():
+    """The words a served model reads are the words it was trained on: one question per passage, the
+    passage and line choices over the ids in the state, and the question capped where the records cap it."""
+    from types import SimpleNamespace
+
+    from inventio.systemone import MAX_OPTIONS, MAX_QUERY_CHARS, PASSAGE_ASKS, questions, render
+
+    hits = [SimpleNamespace(path=f"src/f{i}.py", heading_path="", text=f"one {i}\n\ntwo {i}") for i in range(3)]
+    state, pids, lids, owner = render(hits)
+    assert pids == ["P01", "P02", "P03"]
+    assert lids == ["L000", "L001", "L002", "L003", "L004", "L005"] and owner == [0, 0, 1, 1, 2, 2]
+    assert "P02 [src/f1.py]" in state and "L005| two 2" in state
+
+    served = questions("q", pids, lids)          # the served shape: three branches, no per-passage asks
+    assert sorted(served) == ["exists", "where_line", "where_passage"]
+    qs = questions("q" * (MAX_QUERY_CHARS + 40), pids, lids, with_passage_asks=True)
+    assert sorted(k for k in qs if k.startswith("P")) == pids
+    assert qs["P01"]["instructions"] == PASSAGE_ASKS[0].format(p="P01", q="q" * MAX_QUERY_CHARS)
+    assert list(qs["where_passage"]["criteria"]) == pids and list(qs["where_line"]["criteria"]) == lids
+    assert "exists" in qs
+    assert "where_line" not in questions("q", pids, [f"L{i:03d}" for i in range(MAX_OPTIONS + 1)])
+
+
+def test_honesty_speaks_only_when_asked_and_only_below():
+    """The caveat is off unless the operator sets a threshold, and then it says what it knows: the
+    passages read (not the map) do not seem to answer."""
+    from inventio.systemone import EXISTS_READING, honesty
+
+    key = "exists_max" if EXISTS_READING == "max" else "exists_head"
+    assert honesty(None, 0.3) is None and honesty({}, 0.3) is None
+    assert honesty({key: 0.5}, None) is None                     # no threshold: no caveat
+    assert honesty({key: 0.35}, 0.30) is None                    # above it
+    note = honesty({key: 0.20, "line": {"text": "the answer is here"}}, 0.30)
+    assert "do not seem to answer" in note and "the answer is here" in note and "p=0.20" in note

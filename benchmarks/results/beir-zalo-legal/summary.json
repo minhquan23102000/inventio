@@ -75,5 +75,12 @@
     "recall@30chunks": 0.9454,
     "sec_per_query": 0.751,
     "timed_queries": 788
+  },
+  "dispositio-small-mask": {
+    "queries": 788,
+    "ndcg@10": 0.8176,
+    "recall@30chunks": 0.9454,
+    "sec_per_query": 0.73,
+    "timed_queries": 788
   }
 }

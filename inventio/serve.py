@@ -1,4 +1,5 @@
-"""A background process that keeps dispositio loaded, so a query pays only for reading its
+"""A background process that keeps the model ranker loaded (dispositio, or the System One
+checkpoint), so a query pays only for reading its
 candidates. Importing PyTorch and loading the model take about 5 s on a laptop; reading 15
 candidates about 1.5 s. The first `inventio query` with a local ranker starts it, later ones hand
 it their command line, and it exits after INVENTIO_SERVE_IDLE seconds (default 900) without a
@@ -72,14 +73,21 @@ def _start() -> dict | None:
     with open(log, "ab") as out:
         proc = subprocess.Popen([sys.executable, "-m", "inventio.cli", "serve"], stdin=subprocess.DEVNULL,
                                 stdout=out, stderr=out, **kw)
-    print("inventio: starting the model server (once; the first run also downloads dispositio)",
+    print("inventio: starting the model server (once; the first run also downloads a model)",
           file=sys.stderr)
-    while proc.poll() is None:  # no deadline: a first download takes minutes
+    # A first download takes minutes, so the wait is generous — but never unbounded: a server that never
+    # answers must end in this process doing the work, not in a query that hangs with nothing to show.
+    deadline = time.time() + float(os.environ.get("INVENTIO_SERVE_START", 900))
+    while time.time() < deadline:
         state = _live()
-        if state and state.get("pid") == proc.pid:
-            return state
+        if state and (state.get("fingerprint") == fingerprint() or state.get("pid") == proc.pid):
+            return state   # whatever started it: a server running this code is the one to hand work to
+        if proc.poll() is not None:
+            print(f"inventio: the model server stopped (see {log}); running here instead", file=sys.stderr)
+            return None
         time.sleep(0.2)
-    print(f"inventio: the model server stopped (see {log}); running here instead", file=sys.stderr)
+    print(f"inventio: the model server did not answer in {deadline - time.time():.0f}s (see {log}); "
+          f"running here instead", file=sys.stderr)
     return None
 
 
@@ -94,8 +102,9 @@ def forward(argv: list[str]) -> int | None:
     if not state:
         return None
     env = {k: v for k, v in os.environ.items() if k.startswith(ENV)}
+    timeout = float(os.environ.get("INVENTIO_SERVE_TIMEOUT", 3600))   # a first query loads or downloads the model
     try:
-        res = _send(state, {"op": "run", "argv": argv, "cwd": os.getcwd(), "env": env}, None)
+        res = _send(state, {"op": "run", "argv": argv, "cwd": os.getcwd(), "env": env}, timeout)
     except (OSError, ValueError) as e:
         print(f"inventio: the model server did not answer ({e}); running here instead", file=sys.stderr)
         return None

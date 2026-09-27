@@ -181,10 +181,48 @@ class LayaJudge:
                       for k, q in qs.items()}
 
 
-JUDGES = ("dispositio", "laya", "typesafe")
+class SystemOneJudge:
+    """The System One checkpoint `--ranker systemone` reads (`systemone.Model`), in this process. It packs:
+    a chunk and its ten neighbours are one state, and the ten link questions one pass.
+
+    Judgments are cached under the run that answered (`systemone:<run>`), so a map judged by one checkpoint
+    is never read back as another's."""
+
+    cloud = False
+    packs = True
+
+    def __init__(self, run: str | None = None):
+        from .systemone import Model
+
+        self.model = Model.cached(run)
+        self.name = f"systemone:{self.model.run}"
+        self.refused = self.failed = 0
+
+    def batch(self, jobs):
+        for i, (state, qs) in enumerate(jobs):
+            ans = self.model.ask(state, qs)["answers"]
+            yield i, {k: dict(ans[k]["probabilities"]) if q["type"] == "choice" else float(ans[k]["noul"])
+                      for k, q in qs.items()}
+
+
+JUDGES = ("systemone", "dispositio", "laya", "typesafe")
+
+
+def default_judge() -> str:
+    """INVENTIO_JUDGE, else the System One model when its runtime is installed, else Laya's (`dispositio`)."""
+    from ._systemone import missing
+
+    return os.environ.get("INVENTIO_JUDGE") or ("systemone" if missing() is None else "dispositio")
 
 
 def make_judge(name: str):
+    if name == "systemone":
+        from .systemone import Unreachable, README
+
+        try:
+            return SystemOneJudge()
+        except (RuntimeError, ValueError, OSError, ImportError) as e:   # not installed, not a checkpoint, no download
+            raise Unreachable(f"{e}\n{README}") from e
     if name in ("dispositio", "laya"):
         return LayaJudge(name)
     if name == "typesafe":

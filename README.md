@@ -345,16 +345,20 @@ are partitions of one dataset, not datasets of their own.
 ## dispositio
 
 [dispositio](https://huggingface.co/minhquan2310/dispositio), the second canon of rhetoric
-after *inventio*, is a [Laya](https://github.com/NandhaKishorM/laya) decision model trained for
-the two questions Inventio asks: does this passage answer the query, and what does this passage
-do for its reader. The current release (v3) is the earlier 322M model distilled into
-mmBERT-small (144M): 1.9 times as fast, 289 MB. It runs on a laptop GPU or a CPU and no query or
-document leaves the machine.
+after *inventio*, is the name of the local ranker. What ranks by default is the **System One**
+model described below (the newer shape: one pass over the question and the candidate passages);
+v3, the release in this repository, is the older per-passage shape — a
+[Laya](https://github.com/NandhaKishorM/laya) fine-tune, 322M distilled into mmBERT-small (144M),
+289 MB — and `--ranker dispositio` still reads it (it needs the `laya` extra). It is also the model
+behind `inventio facts`: the categories and the links a map is built with are still judged by Laya,
+because the System One model has no question for them yet (see the note under its section). No query
+or document leaves the machine either way.
 
 ```sh
-inventio query "..."                      # dispositio ranks by default, downloaded once from Hugging Face
-inventio facts --source wiki              # categories, judged by dispositio
-inventio update                           # fetch a newer release
+inventio query "..."                      # the System One model, when its runtime is installed
+inventio facts --source wiki              # categories and links, judged by the Laya model
+inventio systemone                        # which checkpoint answers, and where it came from
+inventio update                           # fetch a newer dispositio release (v3, the Laya shape)
 ```
 
 Once a day a query asks Hugging Face for the released dispositio's latest revision, sending the
@@ -362,9 +366,44 @@ model's name and nothing else, and prints one line when a newer one is out. The 
 is never replaced on its own: `inventio update` fetches the new one and stops the model server so
 the next query loads it. `INVENTIO_OFFLINE=1` (or `HF_HUB_OFFLINE=1`) turns the check off.
 
-`--ranker laya` is Laya as published, `--ranker none` BM25 order. `INVENTIO_DISPOSITIO_MODEL`
-points `dispositio` at another checkpoint: a directory or a Hugging Face id, such as a fine-tune
-of your own.
+`--ranker none` is BM25 order, `--ranker typesafe` the cloud, `--ranker dispositio` (or `laya`)
+the per-passage model above; `INVENTIO_DISPOSITIO_MODEL` points that one at another Laya checkpoint
+(a directory or a Hugging Face id, such as a fine-tune of your own). `INVENTIO_RANKER` fixes one for
+every query. Without the System One
+runtime installed, a query answers in BM25 order — the floor the tool always had, and the default
+never fails a query to reach for a model it cannot load.
+
+`--ranker systemone` asks a **System One** model instead: one pass over the state — the question and
+the candidate passages — reads every passage at once and answers which passage and which line hold the
+answer, and whether any passage answers at all. That last answer is what it adds: a plausible neighbour
+and an answer look the same to a reader, so the tool says when its map has neither.
+
+```sh
+pip install 'inventio[systemone]'                                       # once: torch, transformers, peft
+inventio query "..." --ranker systemone
+INVENTIO_SYSTEMONE_CAVEAT=0.15 inventio query "..." --ranker systemone
+# the passages read do not seem to answer this (p=0.12, below the 0.15 set here); they are the
+# closest the map has; the model's best line was '    if len(crit) < 2:'
+```
+
+This is what `inventio query` reaches for once `inventio[systemone]` is installed. Nothing to start and
+no port to know: the checkpoint is read in the process that answers the query, and the background server
+described below keeps it warm between queries — the first query pays for the download and the load. `inventio systemone --use <run directory or owner/name>` reads a checkpoint that
+is not the published one, a run you trained yourself; `inventio systemone --load` prints what answered.
+`INVENTIO_SYSTEMONE_URL` points at a model on another machine instead (HTTP, and the only shape that
+sends the map anywhere, so non-public sources are refused). The reader itself is part of this package
+(`inventio/_systemone`, Kev's serving path under Apache-2.0, vendored so one install carries it).
+
+The caveat is off by default: `exists` is calibrated per corpus (medians on answerable pools 0.447,
+0.232 and 0.377 across three sets), so one threshold cannot hold a stated false-alarm rate across
+them — set it yourself, and read it as "these passages do not seem to answer", which is what was
+measured; the pools it was validated on have the answer in the map, only not in BM25's fifteen.
+
+The model is **dispositio v4** while it is trained (`benchmarks/systemone.py`): a 0.8B
+decoder, 1.6 GB of weights plus a 43 MB adapter, and like the released one it never sends a query or a
+document anywhere. It is **not the default**: against the gates written before its last run it was
+level on MultiDoc2Dial and ahead on an unseen prose set and on the line question, while the reading
+that says "the map does not answer this" fell, so v3 still ranks unless you ask for this one.
 
 The first query with dispositio starts a server in the background that keeps the model loaded,
 so later queries skip importing PyTorch and loading the model (about 5 s on a laptop). It
