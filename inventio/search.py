@@ -376,7 +376,11 @@ def search(con, q: str, *, k: int = 5, pool: int = 15, ranker=None, expand_links
     if expand_links:
         hits += expand(con, hits, seeds, expand_limit, scope)
     if ranker is not None and hits:
-        scores = ranker.score(q, hits)
+        # dispositio reads BM25's pool in passes of 15 (past 15, heats and a final: three passes); what
+        # widening added stays unread and keeps its place after the pool, so the default pool of 15 costs
+        # one pass and only `--pool 30` pays for three
+        read = hits[:pool] if getattr(ranker, "passes", False) else hits
+        scores = ranker.score(q, read) + [None] * (len(hits) - len(read))
         for h, s in zip(hits, scores):
             h.score = s
         # stable sort: ties keep BM25 order, linked chunks after BM25 hits, unscored chunks last

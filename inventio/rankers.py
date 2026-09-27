@@ -133,6 +133,7 @@ class SystemOneRanker:
     """
 
     LOCAL = ("127.0.0.1", "localhost", "::1")
+    passes = True   # search hands it BM25's pool alone (search.search)
 
     def __init__(self, url: str | None = None, model: str = "jev-latest", timeout: float = 120,
                  run: str | None = None):
@@ -179,7 +180,13 @@ class SystemOneRanker:
         return self._info
 
     def score(self, query: str, hits) -> list[float | None]:
-        from .systemone import (MAX_PASSAGES, MAX_STATE_CHARS, Unreachable, ask, line_of, questions, render)
+        """One pass for up to 15 hits. Past 15 (`query --pool 30`) the hits are read
+        in heats of 15, then a final over each heat's best (8 and 7 of two heats), because a pass's
+        probabilities share one pool and cannot be compared across passes; only the final's passages get a
+        score, the rest keep their place in BM25's order. Measured against the first 15 alone, same pools:
+        MultiDoc2Dial nDCG@10 0.596 -> 0.628, SWE-bench Lite code 0.599 -> 0.643, TechQA 0.467 -> 0.489,
+        SciFact and Zalo unchanged; each extra pass costs about what the first did."""
+        from .systemone import MAX_PASSAGES
 
         if self.url and self.host not in self.LOCAL:
             # Reading the map on this machine is the promise (in this process, or a server on loopback); a
@@ -189,8 +196,28 @@ class SystemOneRanker:
                 raise CloudRefused(
                     f"ranker 'dispositio' would send text from non-public source(s) {', '.join(private)} to "
                     f"{self.host}; restrict with --source, re-init them with --public, or serve it locally")
+        if len(hits) <= MAX_PASSAGES:
+            return self._pass(query, hits)
+        heats = [list(range(i, min(i + MAX_PASSAGES, len(hits)))) for i in range(0, len(hits), MAX_PASSAGES)]
+        best, dropped = [], 0
+        for n, heat in enumerate(heats):
+            ps = self._pass(query, [hits[i] for i in heat])
+            dropped += self.last["dropped_passages"]
+            take = MAX_PASSAGES // len(heats) + (n < MAX_PASSAGES % len(heats))
+            best += sorted((i for i, p in zip(heat, ps) if p is not None), key=lambda i: -ps[i - heat[0]])[:take]
+        final = sorted(best)   # BM25's order, as each heat was
+        out: list[float | None] = [None] * len(hits)
+        for i, p in zip(final, self._pass(query, [hits[i] for i in final])):
+            out[i] = p
+        self.last.update(heats=len(heats), dropped_passages=dropped)
+        return out
+
+    def _pass(self, query: str, hits) -> list[float | None]:
+        """One state of at most 15 passages, read once; `last` is this pass's reading."""
+        from .systemone import MAX_STATE_CHARS, Unreachable, ask, line_of, questions, render
+
         info = self._served()
-        kept, dropped = list(hits[:MAX_PASSAGES]), max(0, len(hits) - MAX_PASSAGES)
+        kept, dropped = list(hits), 0
         while True:   # a state the model never read is not a state to read: drop from the tail until it fits
             state, pids, lids, owner = render(kept)
             if len(state) <= MAX_STATE_CHARS or len(kept) <= 2:
@@ -216,7 +243,7 @@ class SystemOneRanker:
         self.last = {"passages": {p: round(float(about[p]), 4) for p in pids},
                      "order": sorted(pids, key=lambda p: -about[p]), "by_line": by_line, "line": line,
                      "exists_head": float(a["exists"]["noul"]), "exists_max": round(max(about.values()), 4),
-                     "kept": [f"{h.source}:{h.coord}" for h in kept], "dropped_passages": dropped,
+                     "kept": [f"{h.source}:{h.coord}" for h in kept], "dropped_passages": dropped, "heats": 1,
                      "served": info, "model": self.model, "latency_ms": res.get("latency_ms"),
                      "wall_ms": res.get("wall_ms")}
         out: list[float | None] = [None] * len(hits)

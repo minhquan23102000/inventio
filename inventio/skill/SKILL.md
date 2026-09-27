@@ -73,8 +73,8 @@ Sources are private unless `init` gets `--public`. Never add `--public`, `--rank
    be in another (English), translate the whole question into the documents' language and ask
    again before concluding; a translated question finds more than a few translated keywords.
    If rephrasing still finds nothing that answers, ask once more with `--pool 30`: the reranker
-   reads BM25's best 15 by default, and some answers sit at ranks 16-30 (slower, about twice
-   the reading time).
+   reads BM25's best 15 by default, and some answers sit at ranks 16-30 (slower, about three
+   times the reading time).
 2. `inventio read <coordinate>` for the lines behind each promising hit; the snippet in the
    query output is cut.
 3. `inventio show <coordinate>` for where it leads: the code a runbook names, the ticket a page

@@ -83,7 +83,8 @@ git+https://github.com/minhquan23102000/inventio" inventio ...` runs it once wit
 Without `[dispositio]` it installs in seconds and ranks by BM25 alone; `[dispositio]` adds PyTorch and
 the model that ranks, judges `--facts` and predicts `--types` (1.4 GB, downloaded once from Hugging
 Face on the first query). A GPU reads 15 candidates in about 0.16 s (RTX 5070 laptop); a CPU reads
-them too, in about 15 s (fp32, 4,200 tokens of state).
+them too, in about 15 s (fp32, 4,200 tokens of state). `--pool 30` reads twice as many in three passes,
+about three times as long.
 A package install cannot write outside its own environment, so the agent skill is copied by
 `inventio skill` (or `inventio skill --project` for this repository's `.agents/skills`); run it
 again after an upgrade to refresh it.
@@ -388,9 +389,12 @@ sets), so one threshold cannot hold a stated false-alarm rate across them.
 # closest the map has; the model's best line was '    if len(crit) < 2:'
 ```
 
-The ranker reads BM25's best 15 chunks (`--pool`), plus the chunks the top hits link to and share
-distinctive words with; a state longer than the 6,656 tokens it was trained on drops passages from
-the tail. On 40 questions over a private wiki, ticket tracker and two repositories, 15 found as many
+The ranker reads BM25's best 15 chunks (`--pool`) in one pass; the chunks the top hits link to and
+share distinctive words with follow them, unread. A state longer than the 6,656 tokens it was trained
+on drops passages from the tail. `--pool 30` reads 30 as two heats of 15 and a final over the best 8
+and 7 (a pass's probabilities share its pool, so two passes cannot be merged by score), about three
+times as long; it reaches the answers BM25 puts at ranks 16-30 (MultiDoc2Dial 0.606 -> 0.640,
+SWE-bench Lite code 0.599 -> 0.643, see [Benchmarks](#benchmarks)). On 40 questions over a private wiki, ticket tracker and two repositories, 15 found as many
 answers as 30 and 10 lost some.
 
 **v4 against v3** (v3: the per-passage [Laya](https://github.com/NandhaKishorM/laya) model, 144M,
@@ -412,15 +416,17 @@ Training data, the recipe and every reading are on the model card and in `benchm
 
 nDCG@10 on every test query, through Inventio's real ingest and query path; the rankers reorder
 the same 30 BM25 candidates (`--pool 30`; `query` hands the ranker 15 by default, see
-[dispositio](#dispositio)). dispositio v4 reads the first 15 of the 30 in one pass, as `query` hands them,
-and the other 15 keep BM25's order; v3 scored all 30 one by one.
+[dispositio](#dispositio)). v3 scored all 30 one by one. dispositio v4 reads at most 15 in one pass: the
+`v4` row is the first 15 of the 30 (the rest keep BM25's order), the `v4, --pool 30` row reads all 30 the way
+`query --pool 30` does, as two heats of 15 and a final over the best 8 and 7.
 Method and reproduction: [benchmarks/README.md](benchmarks/README.md).
 
 | System | Runs on | SWE-bench Lite | SciFact | StackOverflow QA | Zalo legal | MultiDoc2Dial | TechQA |
 |---|---|---|---|---|---|---|---|
 | **Inventio + Jev** | TypeSafe cloud, ~1.2 s/query | **0.696** | **0.765** | 0.791 | not run | 0.486 | **0.655** |
+| **Inventio + dispositio v4**, `--pool 30`&nbsp;\* | laptop GPU, 0.9-2.7 s/query | 0.643 | 0.716 | 0.711 | 0.805 | **0.640** | 0.489 |
 | **Inventio + dispositio v4** | laptop GPU, 0.3-1.0 s/query | 0.599 | 0.718 | 0.702 | 0.805 | 0.606 | 0.467 |
-| **Inventio + dispositio v3** | laptop GPU, 0.15 s to rank 15 | not re-run | 0.733 | 0.691 | **0.838** | **0.622** | 0.416 |
+| **Inventio + dispositio v3** | laptop GPU, 0.15 s to rank 15 | not re-run | 0.733 | 0.691 | **0.838** | 0.622 | 0.416 |
 | **Inventio**, no model | CPU, 35-140 ms/query | 0.540 | 0.670 | 0.670 | 0.756 | 0.470 | 0.370 |
 | **Inventio + Laya**, not tuned | laptop GPU, 0.6-0.9 s/query | 0.391 | 0.302 | 0.193 | 0.512 | 0.389 | 0.171 |
 | E5-Mistral 7B | 7B embedder | – | 0.764 | **0.915** | – | – | – |
@@ -437,13 +443,21 @@ from IBM's support forums, find the passage of the technote that answers (119). 
 figures come from CodeRAG-Bench, CoIR and the models' MTEB cards; they are single-stage
 embedders over the whole corpus, while Inventio with a ranker is two-stage.
 
+\* Not re-run through the benchmark scripts: the five text sets reuse the `v4` row's first pass, cached,
+and add the second heat and the final over the same BM25 pools (the shipped ranker gives the same top 10
+on the 20 TechQA queries checked); SWE-bench Lite was run on Modal. The time is the `v4` row's plus the two
+extra passes, measured per set on the laptop.
+
 - **No model**: ahead of BGE-base and Voyage-Code-2 on SWE-bench Lite. The likely reason, not
   isolated by an ablation, is that chunks follow functions and carry their file path. On plain
   text it stays below the embedders.
 - **dispositio v4**, on a laptop: ahead of BM25 on all six, by +0.032 (StackOverflow QA) to +0.136
-  (MultiDoc2Dial); ahead of v3 on StackOverflow QA (0.702 against 0.691) and TechQA (0.467 against 0.416); behind v3 on
-  SciFact (0.718 / 0.733), Zalo (0.805 / 0.838) and MultiDoc2Dial (0.606 / 0.622), and behind v2 on
-  SWE-bench Lite code (0.599 / 0.661): v4 was trained on no code states and reads half the candidates.
+  (MultiDoc2Dial). Reading the first 15 only, it trails v3 on SciFact, Zalo and MultiDoc2Dial and v2 on
+  SWE-bench Lite code (0.599 / 0.661), and nearly all of that is the answers at ranks 16-30 it never reads:
+  on the passages both read, v4 ties v3 (and v2 on code) everywhere except Zalo, where its ranker saw no
+  Vietnamese (-0.026 [-0.041, -0.011]). With `--pool 30`: MultiDoc2Dial 0.640 against v3's 0.622,
+  StackOverflow QA 0.711 / 0.691, TechQA 0.489 / 0.416, SciFact 0.716 / 0.733 (interval touching zero),
+  SWE-bench Lite code 0.643 / v2's 0.661 (-0.017 [-0.051, +0.015]); Zalo stays below (0.805 / 0.838).
   Where it leads is what these tables do not score: the line, and saying the map does not answer
   ([dispositio](#dispositio)). SWE-bench rows were run on Modal (ingest on CPU, the ranker on an L4).
 - **dispositio** (v3), on a laptop: ahead of BM25 on all five text sets, by +0.021 (StackOverflow

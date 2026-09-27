@@ -683,7 +683,8 @@ there. Every command prints source:path:start-end coordinates that read and show
         s.add_argument("--ranker", choices=RANKERS, default=default_ranker(),
                        help="reorder the pool: dispositio (local; the default when the dispositio extra is "
                             "installed), none (BM25 order), typesafe (cloud, public sources only)")
-        s.add_argument("--pool", type=int, default=15, help="BM25 candidates handed to the ranker")
+        s.add_argument("--pool", type=int, default=15, help="BM25 candidates handed to the ranker (dispositio reads 15 in one pass; "
+                       "past 15, two heats and a final: better when answers sit at ranks 16-30, ~3x the time)")
         s.add_argument("--no-links", action="store_true",
                        help="do not hand the ranker the chunks the top BM25 hits link to (on with a ranker)")
         s.add_argument("--no-symbols", action="store_true",

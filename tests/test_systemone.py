@@ -130,6 +130,24 @@ def test_the_vendored_reader_loads_a_checkpoint_and_answers_one_state(tmp_path):
     assert res["usage"]["input_tokens"] > 0 and res["latency_ms"] >= 0
 
 
+def test_a_pool_of_30_is_read_in_two_heats_and_one_final(tmp_path, monkeypatch):
+    """`query --pool 30` must reach ranks 16-30 (the reader once kept the first 15 and left the rest in BM25's
+    order, which cost v4 its MultiDoc2Dial and SWE-bench answers there). The final holds each heat's best,
+    and only its probabilities are returned: they share one pool, so the order they give is comparable."""
+    from dataclasses import replace
+    from inventio.rankers import SystemOneRanker
+
+    monkeypatch.setenv("INVENTIO_DEVICE", "cpu")
+    run = tiny_run(tmp_path)
+    pool = [replace(hits()[0], id=i, path=f"api{i}.md") for i in range(30)]
+    ranker = SystemOneRanker(run=str(run))
+    out = ranker.score("how many requests a minute?", pool)
+    scored = [i for i, p in enumerate(out) if p is not None]
+    assert sum(i < 15 for i in scored) == 8 and sum(i >= 15 for i in scored) == 7, scored
+    assert abs(sum(out[i] for i in scored) - 1) < 0.02
+    assert ranker.last["heats"] == 2
+
+
 def test_private_text_is_read_in_process_but_never_sent_to_a_remote_model(tmp_path, monkeypatch):
     """The default reads the map in this process, so a private source is ranked like any other; the same
     ranker pointed at a remote URL refuses it before anything is sent."""
