@@ -1,0 +1,72 @@
+{
+ "arms": {
+  "facts@systemone": {
+   "judge": "systemone:/vol/runs/s1-v1.2",
+   "categories": {
+    "chunks": 5183,
+    "asked": 5183,
+    "cached": 0,
+    "refused": 0,
+    "failed": 0
+   },
+   "links": {
+    "chunks": 4288,
+    "pairs": 21328,
+    "asked": 21328,
+    "cached": 0,
+    "links": 1,
+    "refused": 0,
+    "failed": 0
+   },
+   "kept": {
+    "Finding": 3481,
+    "Explanation": 689,
+    "Reference": 83,
+    "Procedure": 28,
+    "Record": 6,
+    "Rule": 1
+   }
+  },
+  "none@systemone": {
+   "base": {
+    "queries": 300,
+    "ndcg@10": 0.6703,
+    "recall@pool": 0.8494,
+    "mean_pool": 30.0
+   },
+   "facts": {
+    "queries": 300,
+    "ndcg@10": 0.6703,
+    "recall@pool": 0.8494,
+    "mean_pool": 37.0
+   },
+   "control": {
+    "queries": 300,
+    "ndcg@10": 0.6703,
+    "recall@pool": 0.8494,
+    "mean_pool": 37.0
+   },
+   "facts_vs_control": {
+    "wins": 0,
+    "losses": 0,
+    "ties": 300,
+    "mean_diff": 0.0,
+    "ci95": [
+     0.0,
+     0.0
+    ]
+   },
+   "facts_vs_base": {
+    "wins": 0,
+    "losses": 0,
+    "ties": 300,
+    "mean_diff": 0.0,
+    "ci95": [
+     0.0,
+     0.0
+    ]
+   },
+   "unscored_pairs": 0
+  }
+ }
+}

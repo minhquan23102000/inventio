@@ -1,0 +1,48 @@
+{
+ "judge": {
+  "s1-v1.2-modal/category": {
+   "all": {
+    "accuracy": 0.445,
+    "macro_f1": 0.451,
+    "n": 380
+   },
+   "coir-stackoverflow-qa": {
+    "accuracy": 0.183,
+    "macro_f1": 0.115,
+    "n": 60
+   },
+   "held-repo": {
+    "accuracy": 0.61,
+    "macro_f1": 0.47,
+    "n": 200
+   },
+   "in_domain": {
+    "accuracy": 0.3,
+    "macro_f1": 0.27,
+    "n": 120
+   },
+   "judge": "systemone:/vol/runs/s1-v1.2",
+   "ms_per_passage": 230.1,
+   "out_of_domain": {
+    "accuracy": 0.512,
+    "macro_f1": 0.427,
+    "n": 260
+   },
+   "scifact": {
+    "accuracy": 0.65,
+    "macro_f1": 0.274,
+    "n": 40
+   },
+   "swe-issue": {
+    "accuracy": 0.15,
+    "macro_f1": 0.052,
+    "n": 40
+   },
+   "zalo-legal": {
+    "accuracy": 0.1,
+    "macro_f1": 0.169,
+    "n": 40
+   }
+  }
+ }
+}

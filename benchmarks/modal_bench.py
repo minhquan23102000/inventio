@@ -26,7 +26,7 @@ BASE, BASE_REV = "Qwen/Qwen3.5-0.8B-Base", "dc7cdfe2ee4154fa7e30f5b51ca41bfa4017
 SWE_REPOS = ("astropy__astropy", "django__django", "matplotlib__matplotlib", "mwaskom__seaborn", "pallets__flask",
              "psf__requests", "pydata__xarray", "pylint-dev__pylint", "pytest-dev__pytest",
              "scikit-learn__scikit-learn", "sphinx-doc__sphinx", "sympy__sympy")
-GPU = "H100"
+GPU = "L4"   # a 0.8B model: L4 costs ~5x less than H100 and is enough for the judge and the facts arms
 
 
 def _fetch_base():
