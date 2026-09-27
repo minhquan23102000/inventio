@@ -1,7 +1,38 @@
 # Status
 
-Where the work stands, for picking it up on another machine. Last updated 2026-09-26, on `main`
-(the former `dispositio-small` branch merged at `8b44f14`; nothing pushed, nothing published).
+Where the work stands, for picking it up on another machine. Last updated 2026-09-27, on `main`.
+
+## Now (2026-09-27): dispositio v4 shipped, Laya removed
+
+- **Published:** `minhquan2310/dispositio@v4` (tag and branch `v4`; `main` there keeps v3). Merged bf16
+  weights of run `s1-v1.3` (Kev 0.8B + LoRA, 2 epochs, 1,838 steps, 6.2 h on the 5070), card = the
+  export's README.md. `DEFAULT_MODEL` points at it; a fresh download loads and scores (below).
+- **One model for everything local:** ranker (`--ranker dispositio`, the default once `[dispositio]` is
+  installed), `facts` judge, `--types` head. Laya code, the `laya` extra, `finetune_laya.py`,
+  `probe_model.py`, `synth_data.py` and the Laya `publish.py` are gone (they live at `d4214f2`).
+  Names a user had keep their meaning: `INVENTIO_DISPOSITIO_MODEL`, `INVENTIO_DEVICE`;
+  `inventio model --use` replaces `inventio systemone --use`.
+- **Fixed on the way:** the in-process reader refused private sources (an empty URL has no loopback
+  host) — on the old `main` the Kev default failed on every real map; the CPU path (see below).
+- **v1.3 against its gates:** judge 0.811 / 0.769 vs Laya 0.663 / 0.642 (passes by far); md2d first
+  0.638 vs v1.2 0.640 (−0.007 [−0.033, +0.018], passes); techqa 0.322 = v1.2; exists answer-absent 0.805
+  (≥ 0.80, passes); **webshop 9/13 vs v1.2 11/13 — failed**, shipped on Zero's call (the judge gain is
+  what lets Laya go; two lost questions of 13, one of them points at the right code line).
+- **Type head (v1.3, SWE-bench Lite mixed, 300 issues, Modal):** answer file in pool **0.793** vs BM25 30
+  0.63 and same-size control 0.73 (+0.063 over control); TypeSafe as predictor 0.813 vs 0.72 (+0.093).
+  Rows in `results/swe-lite-types/results.jsonl` (`predictor: systemone`, `machine` field).
+- **Facts on SciFact (v1.3, Modal L4):** recall in pool facts 0.849 vs control 0.854 vs base 0.849;
+  2 links of 30,517 pairs. Categories on SciFact: Finding 4,183, Explanation 955 of 5,183 (abstracts).
+- **Links are the next piece of work** (Zero, 2026-09-27: after v4). What is known: Jev's own `about`
+  links lost to unjudged shared-word neighbours on SciFact (0.769 vs 0.785, CI below 0); link questions
+  in training were memorised (held-out 11/23 = BM25); v1.2 linked 1 pair of 21,328. Proposed order:
+  ask the link question at query time, against the user's question, with the model already reading
+  the whole pool (no training); measure on the 28 Jira-linked private questions on the Mac; train
+  (v1.4, public pairs only: SWE-bench issue→fix code, MultiDoc2Dial cross-page grounding) only if the
+  question change helps. Modal credit: $5.09 spent of $30 on 2026-09-27 (v1.2 rehearsal).
+- **Measuring on Modal:** `benchmarks/modal_bench.py` (volume `inventio-bench`: runs under /runs, public
+  data under /bench) runs judge, SciFact facts and SWE types; types split into 28 shards of one
+  repository each. The judge read on Modal equals the laptop's to the third decimal (v1.2: 0.445).
 
 ## Training the small ranker
 
@@ -390,9 +421,9 @@ repository because they name internal documents.
   test that builds a 300-line state (`tests/test_systemone.py`). (2) A query could end in silence: the
   client waited on the background worker with no deadline. Both waits are bounded now
   (`INVENTIO_SERVE_START` 900 s, `INVENTIO_SERVE_TIMEOUT` 3600 s) and end in "running here instead" with
-  a line naming the log. Recorded limit, not a bug: the hybrid base on **CPU** dies inside a Triton
-  kernel (`fla` is installed and transformers falls back to its GPU kernels; `USE_HUB_KERNELS=NO` does
-  not reach that fallback), so this reader is verified on the accelerator.
+  a line naming the log. The hybrid base on **CPU** used to die inside a Triton kernel (`fla` installed,
+  transformers picks its GPU kernels); fixed on 2026-09-27 by making `fla` and `causal_conv1d`
+  unimportable before transformers loads on CPU: 15 passages (4,234 tokens) in about 15 s, fp32.
 - **D5 verdict (2026-09-27).** v1.1 against v1, paired on the same pools (`benchmarks/results/s1/`):
   md2d top1 0.658 vs 0.642, diff **+0.015 [-0.015, +0.046]**, 29W/22L -> **noise, the gate's md2d arm
   fails**; exists on the answer-absent reading **0.757 vs 0.839** and exists_auc 0.666 vs 0.714 -> the

@@ -347,90 +347,73 @@ are partitions of one dataset, not datasets of their own.
 ## dispositio
 
 [dispositio](https://huggingface.co/minhquan2310/dispositio), the second canon of rhetoric
-after *inventio*, is the name of the local ranker. What ranks by default is the **System One**
-model described below (the newer shape: one pass over the question and the candidate passages);
-v3, the release in this repository, is the older per-passage shape — a
-[Laya](https://github.com/NandhaKishorM/laya) fine-tune, 322M distilled into mmBERT-small (144M),
-289 MB — and `--ranker dispositio` still reads it (it needs the `laya` extra). It is also the model
-behind `inventio facts`: the categories and the links a map is built with are still judged by Laya,
-because the System One model has no question for them yet (see the note under its section). No query
-or document leaves the machine either way.
+after *inventio*, is the local model. Since v4 it is a **System One** decision model: a 0.8B
+decoder ([Kev](https://huggingface.co/jaredpalmer/kev-0.8b) on Qwen3.5-0.8B-Base, fine-tuned on
+Inventio's data) that reads one state — the question and the candidate passages — and answers every
+question about it in a single pass: which passage holds the answer, which line, and whether any
+passage answers at all. The same checkpoint judges `inventio facts` (the category of every prose
+chunk, and the `about` links) and predicts the document types `--types` widens by. No query or
+document leaves the machine.
 
 ```sh
-inventio query "..."                      # the System One model, when its runtime is installed
-inventio facts --source wiki              # categories and links, judged by the Laya model
-inventio systemone                        # which checkpoint answers, and where it came from
-inventio update                           # fetch a newer dispositio release (v3, the Laya shape)
+inventio query "..."                      # ranked by dispositio once [dispositio] is installed
+inventio facts --source wiki              # categories and links, judged by the same model
+inventio model                            # which checkpoint answers, and where it came from
+inventio model --use <run dir or owner/name[@rev]>   # a checkpoint of your own
+inventio update                           # fetch a newer release of the published model
 ```
 
-Once a day a query asks Hugging Face for the released dispositio's latest revision, sending the
-model's name and nothing else, and prints one line when a newer one is out. The downloaded model
-is never replaced on its own: `inventio update` fetches the new one and stops the model server so
-the next query loads it. `INVENTIO_OFFLINE=1` (or `HF_HUB_OFFLINE=1`) turns the check off.
+The checkpoint is read in the process that answers the query: nothing to start, no port. The first
+query with it starts a background server that keeps it loaded (127.0.0.1 only, a token in
+`serve.json`, exits after 15 minutes idle: `INVENTIO_SERVE_IDLE`; `INVENTIO_SERVE=0` runs every query
+in its own process; `inventio serve --stop` stops it). The reader is part of this package
+(`inventio/_systemone`, Kev's serving path under Apache-2.0, vendored so one install carries it).
+Without the `[dispositio]` extra, or with no GPU memory to spare, a query answers in BM25 order with
+one line saying why; an explicit `--ranker dispositio` or `--facts` fails instead (exit 3).
 
-`--ranker none` is BM25 order, `--ranker typesafe` the cloud, `--ranker dispositio` (or `laya`)
-the per-passage model above; `INVENTIO_DISPOSITIO_MODEL` points that one at another Laya checkpoint
-(a directory or a Hugging Face id, such as a fine-tune of your own). `INVENTIO_RANKER` fixes one for
-every query. Without the System One
-runtime installed, a query answers in BM25 order — the floor the tool always had, and the default
-never fails a query to reach for a model it cannot load.
+Once a day a query asks Hugging Face for the release's latest revision, sending the model's name
+and nothing else, and prints one line when a newer one is out; `inventio update` fetches it.
+`INVENTIO_OFFLINE=1` (or `HF_HUB_OFFLINE=1`) turns the check off. `--ranker none` is BM25 order,
+`--ranker typesafe` the cloud; `INVENTIO_RANKER` fixes one for every query, `INVENTIO_DEVICE`
+picks the device. `INVENTIO_DISPOSITIO_URL` reads a model served on another machine (the only shape
+that sends the map anywhere, so non-public sources are refused).
 
-`--ranker systemone` asks a **System One** model instead: one pass over the state — the question and
-the candidate passages — reads every passage at once and answers which passage and which line hold the
-answer, and whether any passage answers at all. That last answer is what it adds: a plausible neighbour
-and an answer look the same to a reader, so the tool says when its map has neither.
+The model also says when the passages it read do not seem to answer. That caveat is off by default:
+`exists` is calibrated per corpus (medians on answerable pools 0.447, 0.232 and 0.377 across three
+sets), so one threshold cannot hold a stated false-alarm rate across them.
+`INVENTIO_DISPOSITIO_CAVEAT=0.15` turns it on at a threshold you choose:
 
-```sh
-pip install 'inventio[systemone]'                                       # once: torch, transformers, peft
-inventio query "..." --ranker systemone
-INVENTIO_SYSTEMONE_CAVEAT=0.15 inventio query "..." --ranker systemone
+```
 # the passages read do not seem to answer this (p=0.12, below the 0.15 set here); they are the
 # closest the map has; the model's best line was '    if len(crit) < 2:'
 ```
 
-This is what `inventio query` reaches for once `inventio[systemone]` is installed. Nothing to start and
-no port to know: the checkpoint is read in the process that answers the query, and the background server
-described below keeps it warm between queries — the first query pays for the download and the load. `inventio systemone --use <run directory or owner/name>` reads a checkpoint that
-is not the published one, a run you trained yourself; `inventio systemone --load` prints what answered.
-`INVENTIO_SYSTEMONE_URL` points at a model on another machine instead (HTTP, and the only shape that
-sends the map anywhere, so non-public sources are refused). The reader itself is part of this package
-(`inventio/_systemone`, Kev's serving path under Apache-2.0, vendored so one install carries it).
+The ranker reads BM25's best 15 chunks (`--pool`), plus the chunks the top hits link to and share
+distinctive words with; a state longer than the 6,656 tokens it was trained on drops passages from
+the tail. On 40 questions over a private wiki, ticket tracker and two repositories, 15 found as many
+answers as 30 and 10 lost some.
 
-The caveat is off by default: `exists` is calibrated per corpus (medians on answerable pools 0.447,
-0.232 and 0.377 across three sets), so one threshold cannot hold a stated false-alarm rate across
-them — set it yourself, and read it as "these passages do not seem to answer", which is what was
-measured; the pools it was validated on have the answer in the map, only not in BM25's fifteen.
+**v4 against v3** (v3: the per-passage [Laya](https://github.com/NandhaKishorM/laya) model, 144M,
+still fetchable as revision `main` of the model repository). Same pools of 15, one pass per question:
 
-The model is **dispositio v4** while it is trained (`benchmarks/systemone.py`): a 0.8B
-decoder, 1.6 GB of weights plus a 43 MB adapter, and like the released one it never sends a query or a
-document anywhere. It is **not the default**: against the gates written before its last run it was
-level on MultiDoc2Dial and ahead on an unseen prose set and on the line question, while the reading
-that says "the map does not answer this" fell, so v3 still ranks unless you ask for this one.
+| | v3 | **v4** |
+|---|---|---|
+| MultiDoc2Dial: the passage that answers ranked first (453 questions whose answer is in the pool) | 0.614 | **0.638** |
+| TechQA, never trained on (87) | 0.200 | **0.322** (BM25 0.149) |
+| examples/webshop, 13 on-call questions | 4/13 | **9/13** (BM25 6/13) |
+| Category judge, held-out passages (380): accuracy / macro-F1 | 0.663 / 0.642 | **0.811 / 0.769** |
+| SWE-bench Lite: answer file in pool after `--types` (300; BM25 30: 0.63, same-size BM25: 0.73) | not measured | **0.793** (TypeSafe as predictor: 0.813) |
+| Time to read 15 candidates, RTX 5070 laptop | 0.15 s | 0.17 s (MultiDoc2Dial), 0.37 s (TechQA's long notes) |
 
-The first query with dispositio starts a server in the background that keeps the model loaded,
-so later queries skip importing PyTorch and loading the model (about 5 s on a laptop). It
-listens on 127.0.0.1 only, answers only requests carrying the token in `serve.json` in the data
-directory, and exits after 15 minutes without a request (`INVENTIO_SERVE_IDLE`, in seconds).
-`INVENTIO_SERVE=0` runs every query in its own process; `inventio serve --stop` stops it.
-
-The ranker reads BM25's best 15 chunks (`--pool`). Reading time grows with the pool: on a
-laptop GPU, 15 take about half as long as 30. On 40 questions over a private wiki, ticket
-tracker and two repositories, 15 found as many answers as 30 and 10 lost some. Raise `--pool`
-when BM25 is likely to rank the answer lower, such as questions worded unlike the documents.
-
-Relevance labels are written by people: the train splits of MultiDoc2Dial (questions about the
-pages of US public services: rules, eligibility, procedures), StackOverflow QA, SciFact and Zalo
-legal, and 3,923 SWE-bench train issues paired with the code their fix changed (35 repositories,
-none of them in SWE-bench Lite). Category labels, for which no human set exists, are a small
-general model's. `benchmarks/finetune_laya.py` reproduces it: two stages on mmBERT-base, then a
-distillation into mmBERT-small, about two hours on an RTX 5070 laptop GPU; results, training data
-and terms are on the model card. The previous release stays fetchable as revision `v2`.
+Training data, the recipe and every reading are on the model card and in `benchmarks/systemone.py`;
+`benchmarks/modal_bench.py` runs the judge, facts and type measurements on Modal.
 
 ## Benchmarks
 
 nDCG@10 on every test query, through Inventio's real ingest and query path; the rankers reorder
 the same 30 BM25 candidates (`--pool 30`; `query` hands the ranker 15 by default, see
-[dispositio](#dispositio)).
+[dispositio](#dispositio)). The dispositio row is v3, the per-passage model: v4 reads a whole pool of
+15 in one pass and was measured on those pools instead (the table under [dispositio](#dispositio)).
 Method and reproduction: [benchmarks/README.md](benchmarks/README.md).
 
 | System | Runs on | SWE-bench Lite | SciFact | StackOverflow QA | Zalo legal | MultiDoc2Dial | TechQA |
@@ -502,13 +485,13 @@ embedders over the whole corpus, while Inventio with a ranker is two-stage.
 - Filtering by a connector's fields needs mirrors written by this version: the first `sync`
   after upgrading fetches every Confluence page and Jira ticket once more.
 - Text inside images, diagrams and attached files is not read.
-- dispositio misses a paraphrase that needs an inference ("without loading the main database"
-  for "from the replica") and finds one step of a numbered list less often than a section that
-  answers whole. On the 13 questions of examples/webshop, worded the way someone on call asks,
-  v3 ranks below BM25 alone; how well it carries to a team's own documents is measured on
-  those 13 only.
+- dispositio v4 puts the right passage first for 9 of the 13 questions of examples/webshop (v4's
+  previous training run: 11): asked which date a backup taken the next morning gets, it points at
+  `from datetime import timedelta`. How well it carries to a team's own documents is measured on
+  those 13 and on 40 private questions only.
 - `about` links need a judge of "are these two passages about the same thing". dispositio was
-  not trained for it, and Laya as published calls nearly every pair the same; use Jev for links.
+  not trained for it and links almost nothing (2 pairs of 30,517 on SciFact); the earlier Laya model
+  linked nearly every pair. Use Jev for links. Link training is the next piece of work (STATUS.md).
 - The categories above are new. Whether `--facts` with them finds answers a same-size BM25 pool
   does not is not measured yet; the earlier measurement, with schema.org types, is in
   [benchmarks/README.md](benchmarks/README.md#categories-and-fact-links---arms).
