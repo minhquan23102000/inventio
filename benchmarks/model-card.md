@@ -36,7 +36,7 @@ and answers every question asked about it in one pass:
   Record or Other;
 - **type** (the question alone): which kind of document would hold the answer.
 
-v3, the per-passage Laya model (144M), stays on `main` of this repository, so an Inventio that
+v3, the per-passage Laya model (144M), is revision `v3`; its files also stay on `main`, so an Inventio that
 reads `main` still loads what it can read. v4 lives on the tag `v4`.
 
 ## Use

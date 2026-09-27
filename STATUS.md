@@ -4,7 +4,7 @@ Where the work stands, for picking it up on another machine. Last updated 2026-0
 
 ## Now (2026-09-27): dispositio v4 shipped, Laya removed
 
-- **Published:** `minhquan2310/dispositio@v4` (tag and branch `v4`; `main` there keeps v3). Merged bf16
+- **Published:** `minhquan2310/dispositio@v4` (tag and branch `v4`; `main` there keeps v3's files so an older inventio still loads, with v4's card and a note on top; v3's own card and files at tag `v3`). Merged bf16
   weights of run `s1-v1.3` (Kev 0.8B + LoRA, 2 epochs, 1,838 steps, 6.2 h on the 5070), card = the
   export's README.md. `DEFAULT_MODEL` points at it; a fresh download loads and scores (below).
 - **One model for everything local:** ranker (`--ranker dispositio`, the default once `[dispositio]` is
@@ -30,6 +30,15 @@ Where the work stands, for picking it up on another machine. Last updated 2026-0
   the whole pool (no training); measure on the 28 Jira-linked private questions on the Mac; train
   (v1.4, public pairs only: SWE-bench issue→fix code, MultiDoc2Dial cross-page grounding) only if the
   question change helps. Modal credit: $5.09 spent of $30 on 2026-09-27 (v1.2 rehearsal).
+- **Links, where the code stands (for the linking session).** At index time `facts.link_facts` asks each
+  prose chunk's 10 BM25 neighbours from other files and of another category `same_question()` ("do the
+  passage and X each state something about the same specific thing?"), packed into one state; p ≥ 0.5
+  (`KEEP_P`) becomes an `about` link. At query time `search.widen_by_facts` adds BM25's best chunks of the
+  query's predicted categories, then what the top 5 seeds link to by `about` (up to 10). The question is
+  asked without the user's question in view: that is the part the proposed change replaces. Measurements
+  to reuse: `beir_bench.py --arms --mlt` (arms base/facts/control/about/mlt, same-size control) and
+  the 28 Jira-linked questions on the Mac (`~/demo/qa`, file-level answers). Webshop smoke with v4:
+  12 pairs asked, 2 links, and the "why 07:00" question reaches the incident report through one.
 - **Measuring on Modal:** `benchmarks/modal_bench.py` (volume `inventio-bench`: runs under /runs, public
   data under /bench) runs judge, SciFact facts and SWE types; types split into 28 shards of one
   repository each. The judge read on Modal equals the laptop's to the third decimal (v1.2: 0.445).

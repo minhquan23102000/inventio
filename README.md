@@ -394,7 +394,7 @@ the tail. On 40 questions over a private wiki, ticket tracker and two repositori
 answers as 30 and 10 lost some.
 
 **v4 against v3** (v3: the per-passage [Laya](https://github.com/NandhaKishorM/laya) model, 144M,
-still fetchable as revision `main` of the model repository). Same pools of 15, one pass per question:
+still fetchable as revision `v3` of the model repository; `main` carries v3's files with v4's card). Same pools of 15, one pass per question:
 
 | | v3 | **v4** |
 |---|---|---|
