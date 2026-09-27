@@ -1,7 +1,6 @@
-"""A background process that keeps the model ranker loaded (dispositio, or the System One
-checkpoint), so a query pays only for reading its
-candidates. Importing PyTorch and loading the model take about 5 s on a laptop; reading 15
-candidates about 1.5 s. The first `inventio query` with a local ranker starts it, later ones hand
+"""A background process that keeps the model ranker (dispositio) loaded, so a query pays only for
+reading its candidates: importing PyTorch and loading the checkpoint take seconds, reading 15
+candidates about 0.16 s on a laptop GPU. The first `inventio query` with a local ranker starts it, later ones hand
 it their command line, and it exits after INVENTIO_SERVE_IDLE seconds (default 900) without a
 request. INVENTIO_SERVE=0 runs every query in its own process, as before.
 
@@ -159,7 +158,9 @@ def serve(idle: float) -> int:
     srv.bind(("127.0.0.1", 0))
     srv.listen()
     srv.settimeout(idle)
-    cached(rankers.default_ranker())  # load before announcing, so the first query finds it warm
+    # the ranker object only: dispositio reads its checkpoint on the first query (a first run downloads it), and
+    # a server that loaded before announcing would leave the client's ping unanswered for that long
+    cached(rankers.default_ranker())
     path = state_file()
     tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps({"port": srv.getsockname()[1], "token": token, "pid": os.getpid(),
