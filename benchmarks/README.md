@@ -19,36 +19,31 @@ the same; everything else is noise a real user would have.
 ## Reproduce
 
 ```sh
-pip install -e ".[bench,laya,typesafe]"
+uv pip install -e ".[bench,dispositio,typesafe]"
 
 python benchmarks/data.py beir scifact
 python benchmarks/data.py coir stackoverflow-qa
 python benchmarks/data.py swe-lite                 # about 2 GB of clones
 
-# dispositio is the released model (INVENTIO_DISPOSITIO_MODEL for another checkpoint; results go
-# under its last path part), laya is Laya multilingual as published
-python benchmarks/beir_bench.py scifact --rankers none,laya,dispositio,typesafe
-python benchmarks/beir_bench.py coir-stackoverflow-qa --rankers none,laya,dispositio,typesafe
-python benchmarks/swe_bench.py --rankers none,laya,dispositio,typesafe
-python benchmarks/data.py zalo && python benchmarks/beir_bench.py zalo-legal --rankers none,laya,dispositio
-python benchmarks/data.py multidoc2dial && python benchmarks/beir_bench.py multidoc2dial --rankers none,laya,dispositio,typesafe
-python benchmarks/data.py techqa && python benchmarks/beir_bench.py techqa --rankers none,laya,dispositio,typesafe
-python benchmarks/example_bench.py none laya dispositio typesafe    # examples/webshop, 13 on-call questions
-python benchmarks/swe_bench.py --types --variants mixed --rankers none,typesafe
-
-# categories and fact links: Jev judges every chunk and candidate pair, then the arms
-python benchmarks/beir_bench.py scifact --arms --mlt --rankers none,typesafe,dispositio
-python benchmarks/beir_bench.py coir-stackoverflow-qa --arms --mlt --rankers none,typesafe,dispositio
-python benchmarks/swe_bench.py --strat --variants mixed --rankers none,dispositio   # names and code-decided widening
+# dispositio is the released model, v4 (INVENTIO_DISPOSITIO_MODEL for another checkpoint)
+python benchmarks/systemone.py score <tag> --sets md2d,techqa,webshop   # the pools of 15 v4 reads
+python benchmarks/systemone.py judge <tag> --run <run dir>              # category test split
+python benchmarks/swe_bench.py --types --variants mixed --rankers none --type-predictor dispositio
+python benchmarks/beir_bench.py scifact --arms --judge dispositio --rankers none
+uvx modal run benchmarks/modal_bench.py --run <name>                    # the last three on Modal
+python benchmarks/beir_bench.py scifact --rankers none,typesafe
+python benchmarks/example_bench.py none dispositio typesafe          # examples/webshop, 13 on-call questions
 python benchmarks/pack_check.py                    # packed neighbour call vs one call per pair
 
-# dispositio: SWE-bench train groups, category passages (labelled by a small LLM), two stages
-python benchmarks/swe_train.py --per-repo 150 --workers 12
+# dispositio v4: MultiDoc2Dial states and category passages, then a LoRA run on Kev 0.8B
 python benchmarks/category_data.py
-python benchmarks/finetune_laya.py --out <stage 1>
-python benchmarks/finetune_laya.py --init <stage 1> --out <stage 2> \
-    --mix coir-stackoverflow-qa=16000,multidoc2dial=4000,swe=3000,scifact=2000,zalo-legal=2000,category=2000
+python benchmarks/systemone.py data && python benchmarks/systemone.py data --judge
+python benchmarks/systemone.py run <tag> --judge-records <data>/s1/data/judge.jsonl   # recipe: STATUS.md
+python benchmarks/systemone.py export <run dir> <export dir> && python benchmarks/systemone.py publish <export dir> --dry-run
 ```
+
+The tables below the v4 note were measured with v3 (the per-passage Laya model, 30 candidates) and
+are kept as its record; `finetune_laya.py`, which trained it, lives at commit `d4214f2`.
 
 Data goes to `<user cache>/inventio/bench` (`--data` or `INVENTIO_BENCH_DATA` to move it), never
 into this repository. Results go to `benchmarks/results/`: a `summary.json` per benchmark, and
@@ -57,8 +52,8 @@ Ranker scores are cached (ignored by git), so an interrupted run resumes and a r
 
 Every ranker reorders the same 30 BM25 candidates (chunks); chunks are then collapsed to
 documents or files, first occurrence wins. `recall@30chunks` is therefore the ceiling for
-every ranker. `dispositio` is [dispositio](https://huggingface.co/minhquan2310/dispositio), Laya
-fine-tuned for Inventio; `laya` is Laya multilingual as published.
+every ranker. In these tables `dispositio` is v3 of [dispositio](https://huggingface.co/minhquan2310/dispositio),
+Laya fine-tuned for Inventio; `laya` is Laya multilingual as published.
 `typesafe` is Jev through the TypeSafe API, asked the same yes/no question with the same
 criteria (`inventio/rankers.py`).
 

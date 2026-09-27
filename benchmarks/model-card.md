@@ -1,171 +1,128 @@
 ---
 license: apache-2.0
-base_model: jhu-clsp/mmBERT-small
+base_model: jaredpalmer/kev-0.8b
 language:
 - en
 - vi
 - multilingual
-pipeline_tag: text-classification
 tags:
 - reranker
 - retrieval
 - rag
-- code-search
-- laya
+- decision-model
 - inventio
 datasets:
 - IBM/multidoc2dial
-- BeIR/scifact
-- CoIR-Retrieval/stackoverflow-qa
-- GreenNode/zalo-ai-legal-text-retrieval-vn
 - princeton-nlp/SWE-bench
+- BeIR/scifact
+- GreenNode/zalo-ai-legal-text-retrieval-vn
 ---
 
-# dispositio
+# dispositio v4
 
 *Dispositio* is the second canon of classical rhetoric: after *inventio* finds the material,
-*dispositio* puts it in order. This model is the local ranker and category judge of
-[Inventio](https://github.com/minhquan23102000/inventio), a retrieval tool for code and
-documents that uses BM25 and structure instead of embeddings.
+*dispositio* puts it in order. This model is the local ranker, category judge and type head of
+[Inventio](https://github.com/minhquan23102000/inventio), a retrieval tool for code and documents
+that uses BM25 and structure instead of embeddings.
 
-This release (v3) is the previous dispositio (v2, a 322M fine-tune of
-[Laya](https://huggingface.co/convaiinnovations/laya) on mmBERT-base) distilled into a
-[Laya](https://github.com/NandhaKishorM/laya) decision model on
-[mmBERT-small](https://huggingface.co/jhu-clsp/mmBERT-small): 144M parameters, 98M of them the
-token embeddings. It answers the two questions Inventio asks:
+v4 is a **System One** decision model: [Kev 0.8B](https://huggingface.co/jaredpalmer/kev-0.8b)
+(Qwen3.5-0.8B-Base with a decision head) fine-tuned on Inventio's data, weights merged, 1.4 GB in
+bf16. It reads one *state* — a question and up to 15 candidate passages whose lines are numbered —
+and answers every question asked about it in one pass:
 
-- **Relevance**, a yes/no question: does this `passage` answer the `query`? Used to reorder
-  BM25's candidates.
-- **Category**, a choice question: what does this `passage` do for its reader? One of Rule,
-  Procedure, Reference, Explanation, Finding, Record, Other.
+- **where**: which passage holds the answer, and which line;
+- **exists**: does any passage answer at all;
+- **category** (one passage in the state): Rule, Procedure, Reference, Explanation, Finding,
+  Record or Other;
+- **type** (the question alone): which kind of document would hold the answer.
 
-It ranks 15 candidates in 0.15 s on an RTX 5070 laptop GPU (v2: 0.29 s), weighs 289 MB (v2:
-644 MB), and runs on a CPU too, so private documents never leave the machine.
-
-**What changed for a user of v2.** Public benchmarks are level with v2 or better; on the 13
-on-call questions of Inventio's own example, the kind of question Inventio is built for, it
-puts the answer first less often than v2 and than BM25 alone (below). The previous release
-stays fetchable as revision `v2`.
+v3, the per-passage Laya model (144M), stays on `main` of this repository, so an Inventio that
+reads `main` still loads what it can read. v4 lives on the tag `v4`.
 
 ## Use
 
-With Inventio:
-
 ```sh
-pip install "inventio[laya] @ git+https://github.com/minhquan23102000/inventio"
+pip install "inventio[dispositio] @ git+https://github.com/minhquan23102000/inventio"
 inventio init ~/code/webshop --name app
-inventio query "the nightly backup has not finished, what do I do?"   # ranked by dispositio by default
-inventio update                                                      # an install that has v2 moves to this one
+inventio query "the nightly backup has not finished, what do I do?"   # ranked by this model
+inventio facts --source app                                            # categories, judged by it
 ```
 
-Directly, with the `laya` package:
-
-```python
-import laya
-
-agent = laya.load("minhquan2310/dispositio")
-q = {"type": "noul",
-     "instructions": "Does the `passage` answer the `query`?",
-     "criteria": {"true": "The passage states the specific answer, rule, or instruction the query asks for.",
-                  "false": "The passage is only on a related topic, or uses the same words without answering the query."}}
-state = {"query": "how do I rotate the API key?",
-         "passage": "[docs/ops.md > Keys]\nRun `ops keys rotate --service api`, then restart the workers."}
-print(agent.predict(state, {"rel": q})["answers"]["rel"]["noul"])   # probability of "true": 0.095
-```
-
-On this two-line passage v3 says 0.095 and 0.033 for "The office is closed on public holidays."
-(v2: 0.58 and 0.02). The order is right, and the order is all Inventio uses, but v3's
-probabilities are lower than v2's on short passages; on the real runbook section of Inventio's
-example it gives 0.97. Do not read 0.5 as a threshold.
-
-The model was trained on exactly these instructions and criteria and on passages rendered as
-`[path > heading]` followed by the text; other wordings work less well. The category question
-and its criteria are `category_question()` in
-[inventio/facts.py](https://github.com/minhquan23102000/inventio/blob/main/inventio/facts.py).
-A query is cut to its first 384 tokens, and a passage longer than the rest of the model's 1,024
-is read in windows of whole lines, scored by its best window.
-
-The previous release: `huggingface_hub.snapshot_download("minhquan2310/dispositio",
-revision="v2")`, then point `INVENTIO_DISPOSITIO_MODEL` at the folder. `v1` is kept the same way.
+The state format, the question wordings and the reader are Inventio's (`inventio/systemone.py`,
+`inventio/_systemone`, Kev's serving path vendored under Apache-2.0); other wordings were not trained.
+A state longer than 6,656 tokens was never seen in training.
 
 ## Results
 
-nDCG@10 on every test query, the ranker reordering the same 30 BM25 candidates inside Inventio
-(`benchmarks/beir_bench.py`). v3 − v2 is a paired bootstrap over queries.
+All numbers are from this checkpoint (`s1-v1.3`), on an RTX 5070 laptop GPU unless marked. Pools are
+BM25's best 15 chunks through Inventio's real ingest; "first" means the passage that holds the answer
+is ranked first, among questions whose answer BM25 put in the pool.
 
-| Benchmark | BM25 | v2 | **v3 (this)** | v3 − v2 (95% CI) |
-|---|---|---|---|---|
-| SciFact (300 claims) | 0.670 | 0.737 | 0.733 | −0.006 (−0.028, +0.014) |
-| StackOverflow QA as published (1,994) | 0.670 | 0.676 | **0.691** | +0.015 (+0.006, +0.024) |
-| Zalo legal, Vietnamese (788) | 0.756 | 0.820 | **0.838** | +0.017 (+0.003, +0.032) |
-| MultiDoc2Dial, all four domains (615) | 0.470 | **0.638** | 0.622 | −0.015 (−0.032, +0.000) |
-| TechQA, IBM support notes, never trained on (119) | 0.370 | 0.405 | 0.416 | +0.010 (−0.035, +0.051) |
+| Set | Questions | BM25 first | v3 first | **v4 first** | v4 exists AUC, answer absent |
+|---|---|---|---|---|---|
+| MultiDoc2Dial (US public-service pages; student aid domain held out whole) | 453 | 0.375 | 0.614 | **0.638** | 0.805 (160 pools) |
+| TechQA (IBM technotes, never trained on) | 87 | 0.149 | 0.200 | **0.322** | 0.895 (32 pools) |
+| examples/webshop (13 on-call questions, written after training) | 13 | 6/13 | 4/13 | **9/13** | — |
 
-- **Inventio's own example.**
-  [examples/webshop](https://github.com/minhquan23102000/inventio/tree/main/examples/webshop):
-  13 on-call questions over a runbook, a policy, an incident report and code, written after
-  training, most without the words of the section that answers. The answer is first for **4**
-  (MRR@10 0.58), against 7 for v2 (0.69) and 6 for BM25 alone (0.67). Thirteen questions are
-  few, but a user's own questions look more like these than like the benchmarks.
-- **Categories** fell in distillation, against the labelling model's choice on data held out
-  from training: 59% agreement out of domain (v2 64%), 64% on repositories held out whole (v2
-  68%), 40% on StackOverflow answers (v2 50%).
-- **StackOverflow QA** puts train and test answers in one corpus, and this model was trained on
-  the train answers as answers; earlier releases scored some of them too high. Here it is ahead
-  of BM25 as published. The variant without train answers among the candidates was not re-run.
-- **Not re-run for this release**: SWE-bench Lite (the `v2` revision's card reports 0.661 code only, 0.486 whole
-  repository), the student aid slice of MultiDoc2Dial held out whole, and speed on Apple GPUs.
-  See the `v2` revision's card for those.
+- The right line: on MultiDoc2Dial the top line is inside the answer for 0.561 of the questions.
+- Against the previous training run (v1.2) paired per query: MultiDoc2Dial −0.007 (−0.033, +0.018),
+  TechQA +0.011 (−0.069, +0.080), webshop 2 questions lost (below).
+- Time to read one pool: median 168 ms on MultiDoc2Dial (3,270 tokens), 368 ms on TechQA (6,480).
+  On a CPU the same model reads 15 passages (4,200 tokens) in about 15 s.
+
+**Categories**, against the labelling model's choice on 380 held-out passages:
+
+| | v3 | **v4** |
+|---|---|---|
+| All: accuracy / macro-F1 | 0.663 / 0.642 | **0.811 / 0.769** |
+| Repositories held out whole (200) | 0.615 | **0.780** |
+| StackOverflow answers, never trained on (60) | 0.333 | **0.617** |
+| SciFact (40) / Zalo (40) / SWE-bench issues (40) | 0.825 / 0.900 / 1.000 | 0.975 / 0.900 / 1.000 |
+| ms per passage | 53 | 96 |
+
+**Types** (SWE-bench Lite, 300 issues over whole repositories, BM25's 30 plus the best chunks of the
+types this model predicts): the file the fix changes is in the pool for **0.793** of the issues, against
+0.63 for BM25's 30 and 0.73 for BM25 grown to the same size (57.6 chunks). With TypeSafe predicting the
+types the same pool reached 0.813 (control 0.72). Measured on Modal (type head on an L4).
+
+**Facts on SciFact** (categories and `about` links drawn by this model, then the pool widened by them):
+recall of the answer in the pool 0.849, the same as BM25's 30, while a same-size BM25 pool reaches
+0.854. The model linked 2 of 30,517 pairs it was asked: links do not work yet (Limitations).
+
 
 ## Training
 
-Distilled from v2 in one stage: 3 epochs over 55,786 items, 57 minutes on an RTX 5070 laptop
-GPU, token embeddings frozen. Each relevance target is half the written label and half v2's
-probability (51,422 items; v2 moved them by 0.079 on average). Category targets are the written
-labels.
+Two epochs, 1,838 optimizer steps over 7,346 records, 6.2 hours on the laptop GPU (peak 4.6 GiB),
+LoRA on Kev 0.8B then merged. `recipe.json` pins the Kev commit, the base revision and the sha256 of
+every data file.
 
-| Source | Items | Label |
+| Source | Records | Label |
 |---|---|---|
-| MultiDoc2Dial train dialogues (US public-service pages), without the student aid domain | 16,304 | human: the section the agent's answer was grounded in |
-| StackOverflow QA train split | 12,004 | human: the accepted answer |
-| Zalo legal train split | 10,002 | human |
-| SWE-bench train split: 3,923 issues from 35 repositories, none in SWE-bench Lite | 10,001 | human: the code the fix changed |
-| SciFact train split | 3,683 | human |
-| Category passages: prose of 25 of those repositories, SciFact, Zalo, SWE-bench issues | 4,364 | a small general LLM |
+| MultiDoc2Dial train dialogues, three domains (student aid held out) | 2,987 states | human: the grounding section; each state asks where, the line, `exists` in three wordings, and one question per passage in six |
+| Category passages: prose of 25 SWE-bench train repositories, SciFact, Zalo, SWE-bench issues | 4,364 | a small general LLM (Gemini Flash), soft target 0.94 / 0.01 |
 
-- **Negatives.** For every relevance question, BM25 candidates from other documents that are not
-  answers, half from ranks 1-10 and half from 11-30. For a MultiDoc2Dial question grounded in one
-  section, also the answer page's own section BM25 ranks highest, at a soft target of 0.25.
-- **SWE-bench.** Each issue is the query; the chunks whose lines the merged fix changed are the
-  answers; other source-code chunks among BM25's 30 are the negatives.
-- **Categories.** No human-labelled set exists for this question. Passages were labelled by
-  Gemini Flash with one prompt and a one-of-seven schema; one repository in five is held out
-  whole for the test.
-- Relevance targets are 0.95 / 0.05 before the teacher's half; category targets 0.94 / 0.01.
-  Half of the passages lose their path so file names are not a cue. Every test query of every
-  benchmark, and any train query with the same text, is kept out.
+- Some states have their gold passages removed from the pool, so `exists` is also taught "no".
+- A bag-of-bigrams probe tells answerable states from unanswerable ones at AUC 0.598 in domain
+  and 0.50–0.54 on a held-out domain, so the `exists` answer is not read off surface words.
 
-Reproduce with `benchmarks/data.py`, `benchmarks/swe_train.py`, `benchmarks/category_data.py`
-and `benchmarks/finetune_laya.py --student jhu-clsp/mmBERT-small --teacher <v2>` in the Inventio
-repository.
+Reproduce with `benchmarks/systemone.py data`, `data --judge`, then `run` in the Inventio repository.
 
 ## Limitations
 
-- On Inventio's own example it ranks below v2 and below BM25 (above). Use revision `v2` if your
-  questions are worded unlike your documents and the time per query matters less.
-- It leans on the words the query and the passage share: a passage rewritten without the query's
-  words loses 0.35 of its score on average, and asking "does the passage *fail* to answer?"
-  returns the same order as asking whether it answers. It was not trained to read other questions.
-- A paraphrase that needs an inference is missed: asked "how do I take a new backup without
-  loading the main database?", it does not see that "take it from the replica" answers.
-- Category labels are one model's reading, not a gold set.
+- Asked "which date does a backup taken the next morning get?" (examples/webshop), it points at
+  `from datetime import timedelta` instead of the policy; the previous run got it. Asked how long
+  backups are kept, it points at `BACKUP_RETENTION_DAYS = 35` in code, which answers, while the
+  labelled answer is the policy section. Thirteen questions are few.
+- `exists` is calibrated per corpus (answerable medians 0.447, 0.232 and 0.377 on three sets): do not
+  read 0.5 as a threshold. It was validated on pools whose answer is in the map but not in BM25's 15.
 - It was not trained to judge whether two passages are about the same thing (Inventio's `about`
-  links).
+  links) and links almost none.
+- Code: this fine-tune has no code retrieval states (their packed length does not fit the 8 GB card);
+  what it knows of ranking code is Kev's.
+- Category labels are one model's reading, not a gold set.
 
 ## Terms
 
-The weights are released under Apache-2.0, like Laya (mmBERT is MIT). The training data carries
-its own terms, which you should consider for your use: MultiDoc2Dial Apache-2.0; SciFact claims
-CC BY 4.0 and abstracts ODC-By 1.0; StackOverflow content CC BY-SA 4.0; Zalo legal (card: MIT);
-SWE-bench MIT, with each repository's code under its own licence; category labels generated
-with Gemini.
+Apache-2.0, like Kev and Qwen3.5. The training data carries its own terms: MultiDoc2Dial
+Apache-2.0; SciFact claims CC BY 4.0 and abstracts ODC-By 1.0; Zalo legal (card: MIT); SWE-bench MIT,
+with each repository's text under its own licence; category labels generated with Gemini.
