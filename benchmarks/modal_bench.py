@@ -158,9 +158,12 @@ class Ranker:
 
 
 @app.function(cpu=4, memory=16384, timeout=3 * 3600, ephemeral_disk=524_288)
-def swe_rank_shard(rows: list[dict], variants: str) -> str:
+def swe_rank_shard(rows: list[dict], variants: str, heats: bool = False) -> str:
     """swe_bench.py --rankers dispositio over these issues (one repository, consecutive): checkout and ingest
-    here on CPU, the pool of 30 scored by the shared GPU ranker. The tag is the published model's."""
+    here on CPU, the pool of 30 scored by the shared GPU ranker. The tag is the published model's.
+
+    `heats`: the model reads the 30 as two heats of 15 (1-15, 16-30) and a final over the best 8 and 7 of
+    them; the final's order comes first, then heat 1's other passages, then BM25's order (tag `...-heats`)."""
     import sys
 
     data = Path("/tmp/bench/swe-lite")
@@ -179,10 +182,26 @@ def swe_rank_shard(rows: list[dict], variants: str) -> str:
         cloud = False
 
         def score(self, query, hits):
-            return remote.score.remote(query, hits)
+            if not heats:
+                return remote.score.remote(query, hits)
+            p1 = remote.score.remote(query, hits[:15])
+            p2 = remote.score.remote(query, hits[15:30]) if len(hits) > 15 else []
+            best = lambda ps, k, off: [off + i for i in sorted((i for i, p in enumerate(ps) if p is not None),
+                                                                key=lambda i: -ps[i])[:k]]
+            fin = sorted(set(best(p1, 8, 0)) | set(best(p2, 7, 15)))
+            pf = remote.score.remote(query, [hits[i] for i in fin])
+            out = [None] * len(hits)
+            for i, p in enumerate(p1):
+                out[i] = None if p is None else 1 + p
+            for i, p in zip(fin, pf):
+                out[i] = 2 + (p or 0.0)
+            return out
 
     local = swe_bench.make_ranker
     swe_bench.make_ranker = lambda name: Remote() if name == "dispositio" else local(name)
+    if heats:
+        tag = swe_bench.ranker_tag
+        swe_bench.ranker_tag = lambda name: tag(name) + "-heats"
     sys.argv = ["swe_bench.py", "--rankers", "dispositio", "--variants", variants]
     swe_bench.main()
     return _read("benchmarks/results/swe-lite/results.jsonl")
@@ -206,7 +225,7 @@ def _mark(entries: dict, machine: str) -> dict:
 
 @app.local_entrypoint()
 def main(run: str = "", tag: str = "", only: str = "judge,facts,types", shard: int = 15, merge: bool = True,
-         variants: str = "code,mixed"):
+         variants: str = "code,mixed", heats: bool = False):
     """`--no-merge` (a rehearsal) keeps what came back under results/modal/<tag>/ and touches nothing else."""
     tag, parts, res = tag or run, set(only.split(",")), REPO / "benchmarks" / "results"
     raw = res / "modal" / tag
@@ -225,9 +244,9 @@ def main(run: str = "", tag: str = "", only: str = "judge,facts,types", shard: i
             by_repo.setdefault(r["repo"], []).append(r)
         chunks = [rs[i:i + shard] for rs in by_repo.values() for i in range(0, len(rs), shard)]
         print(f"rank: {len(rows)} issues in {len(chunks)} shards, variants {variants}", flush=True)
-        got = [l for h in [swe_rank_shard.spawn(c, variants) for c in chunks] for l in h.get().splitlines() if l.strip()]
+        got = [l for h in [swe_rank_shard.spawn(c, variants, heats) for c in chunks] for l in h.get().splitlines() if l.strip()]
         got = [json.dumps({**json.loads(l), "machine": "modal cpu4 + L4 ranker"}) for l in got]
-        (raw / "rank.jsonl").write_text("".join(l + "\n" for l in got), encoding="utf-8")
+        (raw / ("rank-heats.jsonl" if heats else "rank.jsonl")).write_text("".join(l + "\n" for l in got), encoding="utf-8")
         out = res / "swe-lite" / "results.jsonl"
         tags = {json.loads(l)["ranker"] for l in got}
         keep = [l for l in out.read_text(encoding="utf-8").splitlines() if json.loads(l)["ranker"] not in tags]

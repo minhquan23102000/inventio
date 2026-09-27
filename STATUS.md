@@ -30,6 +30,16 @@ Where the work stands, for picking it up on another machine. Last updated 2026-0
   the whole pool (no training); measure on the 28 Jira-linked private questions on the Mac; train
   (v1.4, public pairs only: SWE-bench issue→fix code, MultiDoc2Dial cross-page grounding) only if the
   question change helps. Modal credit: $5.09 spent of $30 on 2026-09-27 (v1.2 rehearsal).
+- **Why v4 trails v3 at pool 30, and the fix measured (2026-09-27).** v4 reads BM25's first 15 only; the loss
+  is the answers at ranks 16-30 (46/613 md2d queries, 29+4 of 300 SWE code issues), not the model: on the
+  passages it reads v4 ties v3/v2, except Zalo (-0.026 [-0.041, -0.011]; its ranker saw no Vietnamese).
+  Two heats of 15 plus a final over the best 8+7 (nDCG@10, same pools; md2d without the 68 empty pools):
+  md2d 0.596 -> 0.628 (v3 0.629), TechQA 0.467 -> 0.489 (v3 0.416), SO 0.702 -> 0.711 (v3 0.691),
+  SciFact 0.718 -> 0.716 (v3 0.733), Zalo 0.805 -> 0.805 (v3 0.838), SWE code 0.599 -> 0.643 (v2 0.661,
+  diff -0.017 [-0.051, +0.015]). Cost +0.55 to +1.7 s/query on the 5070. Rows: `results/modal/v4-heats/`
+  (SWE, `dispositio@v4-heats`); BEIR from a throwaway probe (%TEMP%/tourney*.py) — proposed next: make
+  `query --pool 30` run the heats (today the reader ignores past 15), then reproduce these rows through it.
+  RRF of v3+v4 measured too: +0.01 on average, not worth a second model.
 - **Links, where the code stands (for the linking session).** At index time `facts.link_facts` asks each
   prose chunk's 10 BM25 neighbours from other files and of another category `same_question()` ("do the
   passage and X each state something about the same specific thing?"), packed into one state; p ≥ 0.5
