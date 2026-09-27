@@ -88,11 +88,20 @@ def load(run, device=None, *, dtype=None, merge: bool = True, attn: str | None =
 
     dev = str(device or os.environ.get("INVENTIO_DEVICE") or default_device())
     if dev == "cpu":
-        # the hybrid (Qwen3.5) DeltaNet layers take a compiled kernel from the Hugging Face kernel hub when
-        # one is installed, and that kernel needs a GPU: on CPU it raises inside a Triton launch. The
-        # pure-torch fallback is the only path that runs there, so ask for it before transformers is
-        # imported (the flag is read at its import time).
+        # The hybrid (Qwen3.5) DeltaNet layers take a compiled kernel when one can be imported: from the
+        # Hugging Face kernel hub, or from flash-linear-attention (`fla`) and `causal_conv1d` if those are
+        # installed. Each is a GPU kernel, and on CPU it raises inside a Triton launch ("cannot be accessed
+        # from Triton (cpu tensor?)", measured with fla in the environment). transformers picks the
+        # implementation when its model module is imported, so the pure-torch path has to be asked for
+        # before that: the hub flag off, and the two packages made unimportable in this process.
+        import sys
+
         os.environ.setdefault("USE_HUB_KERNELS", "NO")
+        for pkg in ("fla", "causal_conv1d"):
+            sys.modules.setdefault(pkg, None)   # `import fla` now raises ImportError: transformers falls back
+        if "transformers.models.qwen3_5.modeling_qwen3_5" in sys.modules and sys.modules.get("fla"):
+            raise RuntimeError("this process already loaded the GPU kernels for the model's DeltaNet layers; "
+                               "run on CPU in a fresh process (INVENTIO_DEVICE=cpu)")
     miss = missing()
     if miss:
         raise RuntimeError(miss)
