@@ -107,7 +107,7 @@ def run_arms(con, args, queries, qrels, safe, out_dir, summary) -> None:
     t = time.time()
     warm_query_categories(con, judge, list(queries.values()))
     print(f"query categories in {time.time() - t:.0f}s", flush=True)
-    pools = {qid: arm_pools(con, q, judge, args.pool, [args.dataset]) for qid, q in queries.items()}
+    pools = {qid: arm_pools(con, q, judge, args.pool, Scope.only([args.dataset])) for qid, q in queries.items()}
     arms = ARMS
     if args.mlt:
         arms += ("about", "mlt")
