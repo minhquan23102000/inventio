@@ -1,12 +1,12 @@
 {
   "mixed/none/base": {
-    "n": 300,
+    "n": 600,
     "ndcg@10": 0.4006,
     "top1": 0.2367,
     "top5": 0.48,
     "in_pool": 0.63,
-    "sec_query": 0.0867,
-    "sec_index": 16.2066,
+    "sec_query": 0.1629,
+    "sec_index": 12.1509,
     "mean_pool": 30.0
   },
   "mixed/none/types": {
@@ -28,6 +28,26 @@
     "sec_query": 0.0866,
     "sec_index": 16.2066,
     "mean_pool": 56.5333
+  },
+  "mixed/none/types@systemone": {
+    "n": 300,
+    "ndcg@10": 0.4006,
+    "top1": 0.2367,
+    "top5": 0.48,
+    "in_pool": 0.7933,
+    "sec_query": 8.6503,
+    "sec_index": 8.0951,
+    "mean_pool": 57.59
+  },
+  "mixed/none/control@systemone": {
+    "n": 300,
+    "ndcg@10": 0.4006,
+    "top1": 0.2367,
+    "top5": 0.48,
+    "in_pool": 0.73,
+    "sec_query": 0.2391,
+    "sec_index": 8.0951,
+    "mean_pool": 57.59
   },
   "mixed/typesafe/base": {
     "n": 300,

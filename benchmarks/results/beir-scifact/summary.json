@@ -308,6 +308,76 @@
         ]
       },
       "unscored_pairs": 0
+    },
+    "facts@systemone": {
+      "judge": "systemone:/vol/runs/s1-v1.3",
+      "categories": {
+        "chunks": 5183,
+        "asked": 5183,
+        "cached": 0,
+        "refused": 0,
+        "failed": 0
+      },
+      "links": {
+        "chunks": 5176,
+        "pairs": 30517,
+        "asked": 30517,
+        "cached": 0,
+        "links": 2,
+        "refused": 0,
+        "failed": 0
+      },
+      "kept": {
+        "Finding": 4183,
+        "Explanation": 955,
+        "Record": 14,
+        "Reference": 14,
+        "Procedure": 6,
+        "Rule": 4
+      },
+      "machine": "modal L4"
+    },
+    "none@systemone": {
+      "base": {
+        "queries": 300,
+        "ndcg@10": 0.6703,
+        "recall@pool": 0.8494,
+        "mean_pool": 30.0
+      },
+      "facts": {
+        "queries": 300,
+        "ndcg@10": 0.6703,
+        "recall@pool": 0.8494,
+        "mean_pool": 39.8
+      },
+      "control": {
+        "queries": 300,
+        "ndcg@10": 0.6703,
+        "recall@pool": 0.8544,
+        "mean_pool": 39.8
+      },
+      "facts_vs_control": {
+        "wins": 0,
+        "losses": 0,
+        "ties": 300,
+        "mean_diff": 0.0,
+        "ci95": [
+          0.0,
+          0.0
+        ]
+      },
+      "facts_vs_base": {
+        "wins": 0,
+        "losses": 0,
+        "ties": 300,
+        "mean_diff": 0.0,
+        "ci95": [
+          0.0,
+          0.0
+        ]
+      },
+      "unscored_pairs": 0,
+      "machine": "modal L4"
     }
   },
   "none+phrases": {

@@ -314,6 +314,90 @@
    "top1_s1-v1": 0.846,
    "top1_s1-v1.2": 0.923,
    "wins": 1
+  },
+  "s1-v1.3-vs-s1-v1.2/md2d": {
+   "diff": -0.007,
+   "diff_hi": 0.018,
+   "diff_lo": -0.033,
+   "dropped_no_line_question": 0,
+   "exists_auc_s1-v1.2": 0.699,
+   "exists_auc_s1-v1.3": 0.69,
+   "losses": 19,
+   "n": 453,
+   "set": "md2d",
+   "top1_s1-v1.2": 0.638,
+   "top1_s1-v1.3": 0.631,
+   "wins": 16
+  },
+  "s1-v1.3-vs-s1-v1.2/techqa": {
+   "diff": 0.011,
+   "diff_hi": 0.08,
+   "diff_lo": -0.069,
+   "dropped_no_line_question": 0,
+   "exists_auc_s1-v1.2": 0.643,
+   "exists_auc_s1-v1.3": 0.649,
+   "losses": 5,
+   "n": 87,
+   "set": "techqa",
+   "top1_s1-v1.2": 0.333,
+   "top1_s1-v1.3": 0.345,
+   "wins": 6
+  },
+  "s1-v1.3-vs-s1-v1.2/webshop": {
+   "diff": -0.077,
+   "diff_hi": 0.0,
+   "diff_lo": -0.231,
+   "dropped_no_line_question": 0,
+   "exists_auc_s1-v1.2": 0.728,
+   "exists_auc_s1-v1.3": 0.793,
+   "losses": 1,
+   "n": 13,
+   "set": "webshop",
+   "top1_s1-v1.2": 0.923,
+   "top1_s1-v1.3": 0.846,
+   "wins": 0
+  },
+  "s1-v1.3-vs-s1-v1/md2d": {
+   "diff": -0.011,
+   "diff_hi": 0.02,
+   "diff_lo": -0.042,
+   "dropped_no_line_question": 0,
+   "exists_auc_s1-v1": 0.714,
+   "exists_auc_s1-v1.3": 0.69,
+   "losses": 28,
+   "n": 453,
+   "set": "md2d",
+   "top1_s1-v1": 0.642,
+   "top1_s1-v1.3": 0.631,
+   "wins": 23
+  },
+  "s1-v1.3-vs-s1-v1/techqa": {
+   "diff": 0.115,
+   "diff_hi": 0.207,
+   "diff_lo": 0.023,
+   "dropped_no_line_question": 0,
+   "exists_auc_s1-v1": 0.645,
+   "exists_auc_s1-v1.3": 0.649,
+   "losses": 3,
+   "n": 87,
+   "set": "techqa",
+   "top1_s1-v1": 0.23,
+   "top1_s1-v1.3": 0.345,
+   "wins": 13
+  },
+  "s1-v1.3-vs-s1-v1/webshop": {
+   "diff": 0.0,
+   "diff_hi": 0.0,
+   "diff_lo": 0.0,
+   "dropped_no_line_question": 0,
+   "exists_auc_s1-v1": 0.769,
+   "exists_auc_s1-v1.3": 0.793,
+   "losses": 0,
+   "n": 13,
+   "set": "webshop",
+   "top1_s1-v1": 0.846,
+   "top1_s1-v1.3": 0.846,
+   "wins": 0
   }
  },
  "judge": {
@@ -404,6 +488,50 @@
     "macro_f1": 0.169,
     "n": 40
    }
+  },
+  "s1-v1.3/category": {
+   "all": {
+    "accuracy": 0.811,
+    "macro_f1": 0.769,
+    "n": 380
+   },
+   "coir-stackoverflow-qa": {
+    "accuracy": 0.617,
+    "macro_f1": 0.47,
+    "n": 60
+   },
+   "held-repo": {
+    "accuracy": 0.78,
+    "macro_f1": 0.765,
+    "n": 200
+   },
+   "in_domain": {
+    "accuracy": 0.958,
+    "macro_f1": 0.768,
+    "n": 120
+   },
+   "judge": "systemone:C:\\Users\\LEGION\\kev\\runs\\s1-v1.3",
+   "ms_per_passage": 96.2,
+   "out_of_domain": {
+    "accuracy": 0.742,
+    "macro_f1": 0.678,
+    "n": 260
+   },
+   "scifact": {
+    "accuracy": 0.975,
+    "macro_f1": 0.965,
+    "n": 40
+   },
+   "swe-issue": {
+    "accuracy": 1.0,
+    "macro_f1": 1.0,
+    "n": 40
+   },
+   "zalo-legal": {
+    "accuracy": 0.9,
+    "macro_f1": 0.474,
+    "n": 40
+   }
   }
  },
  "leak": {
@@ -441,6 +569,12 @@
    "n": 453,
    "set": "md2d",
    "tag": "s1-v1.2"
+  },
+  "s1-v1.3/md2d": {
+   "exact_line@1": 0.561,
+   "n": 453,
+   "set": "md2d",
+   "tag": "s1-v1.3"
   },
   "s1-v1/md2d": {
    "exact_line@1": 0.603,
@@ -613,6 +747,69 @@
    "tokens_max": 1280,
    "tokens_median": 1174,
    "top_line_owner_passage@1": "12/13"
+  },
+  "s1-v1.3/md2d": {
+   "answer_absent_queries": 160,
+   "bm25@1": 0.375,
+   "exists_auc": 0.69,
+   "exists_auc_answer_absent": 0.805,
+   "exists_auc_answer_absent_pmax": null,
+   "exists_auc_pmax": null,
+   "exists_neg_median": 0.1757,
+   "exists_pos_median": 0.4396,
+   "gold_in_pool": 453,
+   "latency_ms_median": 168.5,
+   "latency_ms_p90": 224.7,
+   "passage@1": 0.638,
+   "passage@1_pmax": null,
+   "queries": 613,
+   "set": "md2d",
+   "tag": "s1-v1.3",
+   "tokens_max": 5652,
+   "tokens_median": 3270,
+   "top_line_owner_passage@1": "286/453"
+  },
+  "s1-v1.3/techqa": {
+   "answer_absent_queries": 32,
+   "bm25@1": 0.149,
+   "exists_auc": 0.649,
+   "exists_auc_answer_absent": 0.895,
+   "exists_auc_answer_absent_pmax": null,
+   "exists_auc_pmax": null,
+   "exists_neg_median": 0.1291,
+   "exists_pos_median": 0.3213,
+   "gold_in_pool": 87,
+   "latency_ms_median": 367.8,
+   "latency_ms_p90": 463.3,
+   "passage@1": 0.322,
+   "passage@1_pmax": null,
+   "queries": 119,
+   "set": "techqa",
+   "tag": "s1-v1.3",
+   "tokens_max": 9475,
+   "tokens_median": 6480,
+   "top_line_owner_passage@1": "30/87"
+  },
+  "s1-v1.3/webshop": {
+   "answer_absent_queries": 0,
+   "bm25@1": 0.462,
+   "exists_auc": 0.793,
+   "exists_auc_answer_absent": null,
+   "exists_auc_answer_absent_pmax": null,
+   "exists_auc_pmax": null,
+   "exists_neg_median": 0.0845,
+   "exists_pos_median": 0.6444,
+   "gold_in_pool": 13,
+   "latency_ms_median": 70.4,
+   "latency_ms_p90": 139.0,
+   "passage@1": 0.692,
+   "passage@1_pmax": null,
+   "queries": 13,
+   "set": "webshop",
+   "tag": "s1-v1.3",
+   "tokens_max": 1280,
+   "tokens_median": 1174,
+   "top_line_owner_passage@1": "11/13"
   },
   "s1-v1/md2d": {
    "answer_absent_queries": 160,
