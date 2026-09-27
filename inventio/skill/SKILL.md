@@ -31,13 +31,13 @@ copies source text onto the machine.
 ## Install
 
 ```sh
-uv tool install "inventio[dispositio] @ git+https://github.com/minhquan23102000/inventio"
+uv tool install "inventio[dispositio]"
 ```
 
 `[dispositio]` adds the local model that reranks, judges `--facts` and predicts `--types` (PyTorch;
 the weights, 1.4 GB, download once); without it results come in BM25 order. Schema cards need `[data]`
 plus the database's driver in the same tool environment:
-`uv tool install "inventio[dispositio,data] @ git+..." --with psycopg2-binary` (Postgres; `pymysql` for
+`uv tool install "inventio[dispositio,data]" --with psycopg2-binary` (Postgres; `pymysql` for
 MySQL). A `pip install` into another environment is invisible to a `uv tool` install.
 
 ## Sign in and add sources

@@ -1,0 +1,20 @@
+# A tag v* builds the sdist and wheel and publishes them to PyPI through trusted publishing: PyPI trusts
+# this workflow file of this repository (no token is stored anywhere). The tag must match the version
+# in inventio/__init__.py, or the run stops before uploading.
+name: publish
+on:
+  push:
+    tags: ["v*"]
+jobs:
+  pypi:
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: tag matches the package version
+        run: test "v$(uv run --no-project python -c 'import re;print(re.search(r"__version__ = \"(.+)\"", open("inventio/__init__.py").read())[1])')" = "$GITHUB_REF_NAME"
+      - run: uv build
+      - run: uv publish

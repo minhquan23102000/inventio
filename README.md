@@ -19,7 +19,7 @@ The repository carries a small example: the code of an online shop's nightly dat
 and the wiki around it, a runbook, a retention policy and an incident report.
 
 ```sh
-uv tool install "inventio[dispositio] @ git+https://github.com/minhquan23102000/inventio"
+uv tool install "inventio[dispositio]"
 inventio skill                   # teaches your coding agents (~/.agents/skills) to install and use inventio
 git clone https://github.com/minhquan23102000/inventio && cd inventio
 
@@ -78,8 +78,9 @@ example are from dispositio v2; the facts path was not re-run for v3). Without `
 dispositio v2 judges offline: here it gives five of the six chunks the category Jev gives, but it
 links every pair it is asked about (see [Limitations](#limitations)).
 
-`uv tool install` puts `inventio` on your PATH for every terminal; `uvx --from "inventio[dispositio] @
-git+https://github.com/minhquan23102000/inventio" inventio ...` runs it once without installing.
+`uv tool install` puts `inventio` on your PATH for every terminal; `uvx --from "inventio[dispositio]"
+inventio ...` runs it once without installing. The unreleased `main` installs with
+`"inventio[dispositio] @ git+https://github.com/minhquan23102000/inventio"`.
 Without `[dispositio]` it installs in seconds and ranks by BM25 alone; `[dispositio]` adds PyTorch and
 the model that ranks, judges `--facts` and predicts `--types` (1.4 GB, downloaded once from Hugging
 Face on the first query). A GPU reads 15 candidates in about 0.16 s (RTX 5070 laptop); a CPU reads
@@ -324,7 +325,7 @@ fetched: index your clone with `inventio init <dir>`.
 ### Where the data lives
 
 ```sh
-uv tool install "inventio[dispositio,data] @ git+https://github.com/minhquan23102000/inventio" --with psycopg2-binary
+uv tool install "inventio[dispositio,data]" --with psycopg2-binary
 #   DuckDB, SQLAlchemy, Kafka, boto3, and your database's driver in the same environment (pymysql for MySQL ...)
 inventio init postgresql://reader@db.internal/core  # password from `inventio login`, INVENTIO_SQL_PASSWORD or PGPASSWORD
 inventio init "kafka://broker:9092?registry=http://registry:8081"
