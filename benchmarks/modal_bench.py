@@ -55,7 +55,7 @@ WORK = "/root/inventio"
 
 
 def _env(run: str, data: str) -> dict:
-    os.environ.update({"INVENTIO_SYSTEMONE_RUN": f"/vol/runs/{run}", "INVENTIO_SYSTEMONE_DEVICE": "cuda",
+    os.environ.update({"INVENTIO_DISPOSITIO_MODEL": f"/vol/runs/{run}", "INVENTIO_DEVICE": "cuda",
                        "INVENTIO_BENCH_DATA": data})
     return dict(os.environ)
 
@@ -82,15 +82,15 @@ def judge(run: str, tag: str) -> str:
 
 @app.function(gpu=GPU, timeout=4 * 3600, ephemeral_disk=524_288)
 def facts(run: str) -> dict:
-    """beir_bench.py scifact --arms --judge systemone on a local copy of the SciFact data (the run writes its own
+    """beir_bench.py scifact --arms --judge dispositio on a local copy of the SciFact data (the run writes its own
     map copy and a materialized tree beside the corpus, so it must not write into the shared volume)."""
     import shutil
 
     shutil.copytree("/vol/bench/beir/scifact", "/tmp/bench/beir/scifact")
     env = _env(run, "/tmp/bench")
-    _sh(["python", "benchmarks/beir_bench.py", "scifact", "--arms", "--judge", "systemone", "--rankers", "none"], env)
+    _sh(["python", "benchmarks/beir_bench.py", "scifact", "--arms", "--judge", "dispositio", "--rankers", "none"], env)
     return {"summary": _read("benchmarks/results/beir-scifact/summary.json"),
-            "rows": _read("benchmarks/results/beir-scifact/arms@systemone.jsonl")}
+            "rows": _read("benchmarks/results/beir-scifact/arms@dispositio.jsonl")}
 
 
 @app.cls(gpu="L4", timeout=3 * 3600, max_containers=2, scaledown_window=300)
@@ -134,8 +134,8 @@ def swe_shard(run: str, rows: list[dict]) -> str:
             return head.types.remote(query, offered)
 
     local = swe_bench.make_ranker
-    swe_bench.make_ranker = lambda name: Remote() if name == "systemone" else local(name)
-    sys.argv = ["swe_bench.py", "--types", "--variants", "mixed", "--rankers", "none", "--type-predictor", "systemone"]
+    swe_bench.make_ranker = lambda name: Remote() if name == "dispositio" else local(name)
+    sys.argv = ["swe_bench.py", "--types", "--variants", "mixed", "--rankers", "none", "--type-predictor", "dispositio"]
     swe_bench.main()
     return _read("benchmarks/results/swe-lite-types/results.jsonl")
 
@@ -188,16 +188,16 @@ def main(run: str, tag: str = "", only: str = "judge,facts,types", shard: int = 
         got = calls["facts"].get()
         new = json.loads(got["summary"])
         (raw / "facts.json").write_text(json.dumps(new, indent=1), encoding="utf-8")
-        (raw / "arms@systemone.jsonl").write_text(got["rows"], encoding="utf-8")
+        (raw / "arms@dispositio.jsonl").write_text(got["rows"], encoding="utf-8")
         if merge:
-            (res / "beir-scifact" / "arms@systemone.jsonl").write_text(got["rows"], encoding="utf-8")
+            (res / "beir-scifact" / "arms@dispositio.jsonl").write_text(got["rows"], encoding="utf-8")
             _merge_file(res / "beir-scifact" / "summary.json", {"arms": _mark(new.get("arms", {}), f"modal {GPU}")},
                         indent=2, sort_keys=False)
         print("facts:", json.dumps(new.get("arms", {})), flush=True)
     if "types" in calls:
         out = res / "swe-lite-types" / "results.jsonl"
         keep = [l for l in out.read_text(encoding="utf-8").splitlines()
-                if json.loads(l).get("predictor") != "systemone"] if out.exists() else []
+                if json.loads(l).get("predictor") not in ("systemone", "dispositio")] if out.exists() else []
         new = [l for h in calls["types"] for l in h.get().splitlines() if l.strip()]
         new = [json.dumps({**json.loads(l), "machine": "modal cpu4 + L4 type head"}) for l in new]
         (raw / "types.jsonl").write_text("".join(l + "\n" for l in new), encoding="utf-8")
@@ -206,4 +206,4 @@ def main(run: str, tag: str = "", only: str = "judge,facts,types", shard: int = 
             return
         out.write_text("".join(l + "\n" for l in keep + new), encoding="utf-8")
         print(f"types: {len(new)} rows merged into {out}; summary: python benchmarks/swe_bench.py --types "
-              f"--variants mixed --rankers none --type-predictor systemone (every row is done, it only sums)", flush=True)
+              f"--variants mixed --rankers none --type-predictor dispositio (every row is done, it only sums)", flush=True)
