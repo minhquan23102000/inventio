@@ -66,12 +66,41 @@ Sources are private unless `init` gets `--public`. Never add `--public`, `--rank
 
 ## Answer a question
 
-1. `inventio query "<the question in the user's words>" -k 5`. Ask it as a question; the reranker
-   reads meaning, BM25 needs the words the documents use, so a second query with the likely
-   terms (a table name, a job name, a ticket key) often finds what the first missed. BM25 does
-   not cross languages: when the question is in one language (Vietnamese) and the documents may
-   be in another (English), translate the whole question into the documents' language and ask
-   again before concluding; a translated question finds more than a few translated keywords.
+### Ask in the documents' language, first
+
+BM25 picks the 15 candidates the reranker reads, and BM25 matches words, not meaning: it does not
+cross languages. A Vietnamese question over English pages usually brings the right page but not
+the right section, and the reranker cannot choose a passage that never reached it. On a real map,
+"Muốn thêm một bảng mới vào job đồng bộ thì làm thế nào?" missed the answer entirely, while "How do
+I add a new table to the sync job?" put the English page's "Adding a New Sync Job" section first.
+
+- Before the first query, judge which language the answer is written in: code, PR titles, DAGs,
+  dbt models and most design pages are English; Jira tickets and some pages may be Vietnamese.
+- Translate the **whole question** into that language, keeping names verbatim (table, job,
+  ticket key). A translated sentence finds more than a few translated keywords.
+- When the sources are mixed or you are unsure, ask both: the translated question and the user's
+  own words. Do not conclude "not written down" from a query in only one language.
+- Keep the user's language for your answer; only the query changes language.
+
+### Time and counting are filters, not words
+
+"recent", "gần đây", "this month" mean nothing to BM25 or the reranker: they rank by content, so
+"recent urgent PRs" returns old hotfix PRs. Put time in `-w` and keep the query about content:
+
+```sh
+inventio query "urgent hotfix incident fix production" -w "kind:github item:pull created:>=-30d" -k 10
+inventio grep -i "hotfix|incident|urgent" -w "kind:github item:pull created:>=-30d"   # every match, with the total
+```
+
+`query` shows the best few, it never counts. For "how many", enumerate with `grep` (it prints
+the total) or `query --json -k 50` under the same `-w`, read the items, and count them yourself,
+saying what you counted as urgent.
+
+### Steps
+
+1. `inventio query "<the question, in the documents' language>" -k 5`. Ask it as a question; the
+   reranker reads meaning, BM25 needs the words the documents use, so a second query with the
+   likely terms (a table name, a job name, a ticket key) often finds what the first missed.
    If rephrasing still finds nothing that answers, ask once more with `--pool 30`: the reranker
    reads BM25's best 15 by default, and some answers sit at ranks 16-30 (slower, about three
    times the reading time).
