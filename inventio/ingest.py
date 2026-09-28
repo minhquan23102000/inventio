@@ -181,15 +181,24 @@ def _trimmed(start: int, ls: list[str]) -> tuple[int, list[str]]:
     return start + lo, ls[lo:hi]
 
 
-def split_long(lines: list[str], first: int, kind: str, heading_path: str, anchor: str) -> list[Chunk]:
-    """Split a span into pieces of at most MAX_CHARS, cutting at blank lines where possible."""
+# A line that opens a list item or a numbered clause: `1.`, `2.1.`, `a)`, `đ)`, `-`, `+`, `*`, `•`.
+LIST_ITEM = re.compile(r"^\s*(?:[-+*•]\s|\d+(?:\.\d+)*[.)]\s|\w\)\s)")
+
+
+def split_long(lines: list[str], first: int, kind: str, heading_path: str, anchor: str,
+               prose: bool = False) -> list[Chunk]:
+    """Split a span into pieces of about MAX_CHARS, cutting at blank lines where possible. In prose, the
+    start of a list item or numbered clause is a cut too: Vietnamese law (Zalo) writes `1.`, `a)`, `-`
+    one per line with no blank between them, so a section only found its cut at 2 x MAX_CHARS: a tenth of
+    Zalo's chunks were 3,000+ chars, and BM25's 15 ran past the ranker's state cap on most test queries.
+    Code keeps blank lines only."""
     pieces, cur, cur_start, size = [], [], 0, 0
     for i, line in enumerate(lines):
         if not cur:
             cur_start = i
         cur.append(line)
         size += len(line) + 1
-        at_break = line.strip() == ""
+        at_break = line.strip() == "" or (prose and i + 1 < len(lines) and bool(LIST_ITEM.match(lines[i + 1])))
         if size >= MAX_CHARS and (at_break or size >= 2 * MAX_CHARS):
             pieces.append((cur_start, cur))
             cur, size = [], 0
@@ -242,7 +251,7 @@ def chunk_markdown(text: str) -> list[Chunk]:
             parent = section_index.get(tuple(heads[:k]))
             if parent is not None:
                 break
-        pieces = split_long(body, start + 1, "section", hp, anchor)
+        pieces = split_long(body, start + 1, "section", hp, anchor, prose=True)
         for p in pieces:
             p.parent = parent
         if pieces:

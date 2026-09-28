@@ -38,22 +38,19 @@ from pathlib import Path
 from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from beir_bench import load_beir, safe_name  # noqa: E402
+from beir_bench import load_beir, materialize, safe_name  # noqa: E402
 from data import data_dir  # noqa: E402
 from inventio.scope import Scope  # noqa: E402
 from inventio.search import bm25  # noqa: E402
 from inventio.store import connect  # noqa: E402
 from inventio.systemone import (EXISTS_ASKS, MAX_OPTIONS, MAX_QUERY_CHARS, MAX_STATE_CHARS, NOUL,  # noqa: E402
                                 PASSAGE_ASKS, WHERE_ASKS, ask, exists, questions, render, where_line)
+from recipe import BASE, BASE_REVISION, INIT_FROM, trainer_args  # noqa: E402
 
 REPO = Path(__file__).resolve().parent.parent
 ROWS = Path(__file__).resolve().parent / "results" / "s1"
 DATA = data_dir(None) / "s1" / "data"
 K = 15
-# the Kev checkpoint we fine-tune from, and the base it was trained on (its own training_config.json)
-INIT_FROM = "jaredpalmer/kev-0.8b"
-BASE = "Qwen/Qwen3.5-0.8B-Base"
-BASE_REVISION = "dc7cdfe2ee4154fa7e30f5b51ca41bfa40174e68"
 norm = lambda t: " ".join(t.split())  # noqa: E731
 WORD = re.compile(r"\w+", re.UNICODE)   # the lexical probe's tokens (cmd_leak)
 
@@ -249,7 +246,21 @@ def pick(wordings, key, salt):
     return wordings[int(hashlib.sha1(f"{key}\t{salt}".encode()).hexdigest()[:8], 16) % len(wordings)]
 
 
-def records(q, pos, neg, lines_of, src, key, domain=None):
+def arrange(pos, neg, key, p):
+    """With probability `p` (fixed per query by its key) the same permutation of the slots on both arms:
+    every passage keeps its text and its label, only its place in the state moves. RankZephyr (Pradeep et
+    al. 2023, arXiv:2312.02724) trains on shuffled input orders so a listwise reranker reads content rather
+    than position. Here position costs: `exists` AUC 0.805 in BM25's order and 0.688 reversed (md2d, v1.3),
+    and everything names and links bring in sits after BM25's hits. -> (pos, neg, order)."""
+    h = int(hashlib.sha1(f"{key}\torder".encode()).hexdigest()[:8], 16)
+    if p <= 0 or h % 10_000 >= p * 10_000:
+        return pos, neg, "bm25"
+    perm = list(range(max(len(pos), len(neg))))
+    random.Random(h).shuffle(perm)
+    return [pos[i] for i in perm if i < len(pos)], [neg[i] for i in perm if i < len(neg)], "shuffled"
+
+
+def records(q, pos, neg, lines_of, src, key, domain=None, line_question=True, order="bm25"):
     """The questions one query asks, on both arms of the same query:
 
     - `where_line` (when the pool fits the option cap) and `where_passage`: which line, which passage;
@@ -257,6 +268,9 @@ def records(q, pos, neg, lines_of, src, key, domain=None):
     - one question per passage, which is the decomposition `exists` needs. Without it the head is asked a
       single judgement over 3.3-6.5k tokens and never learns to compare slots, while dispositio, which
       beats it on this, is exactly a max over per-passage scores.
+
+    Labels per passage only (`line_question=False`): `lines_of` names every line of a relevant passage,
+    and `where_line` is not asked, since no line is known to hold the answer.
     """
     q = q[:MAX_QUERY_CHARS]
     out = []
@@ -278,7 +292,7 @@ def records(q, pos, neg, lines_of, src, key, domain=None):
                                    "instructions": pick(WHERE_ASKS, key, "wp").format(q=q),
                                    "criteria": {p: None for p in pids},
                                    "target": {pids[i]: 1 / len(passages) for i in passages}}
-            if len(lids) <= MAX_OPTIONS:
+            if line_question and len(lids) <= MAX_OPTIONS:
                 gl = [lids[j] for j in gold]
                 qs["where_line"] = {"type": "choice", "label": gl[0],
                                     "instructions": f'Which line contains the answer to: "{q}"?',
@@ -286,7 +300,7 @@ def records(q, pos, neg, lines_of, src, key, domain=None):
                                     "target": {l: 1 / len(gl) for l in gl}}
         out.append({"state": state, "questions": qs,
                     "_meta": {"source": src, "group_id": key, "domain": domain,
-                              "arm": "pos" if gold else "neg"}})
+                              "arm": "pos" if gold else "neg", "order": order}})
     if neg:
         state, pids, _, _ = render(neg)
         qs = {p: {"type": "noul", "instructions": pick(PASSAGE_ASKS, key, p).format(p=p, q=q),
@@ -294,11 +308,11 @@ def records(q, pos, neg, lines_of, src, key, domain=None):
         qs["exists"] = {"type": "noul", "instructions": pick(EXISTS_ASKS, key, "exists").format(q=q),
                         "criteria": NOUL, "label": False}
         out.append({"state": state, "questions": qs,
-                    "_meta": {"source": src, "group_id": key, "domain": domain, "arm": "neg"}})
+                    "_meta": {"source": src, "group_id": key, "domain": domain, "arm": "neg", "order": order}})
     return out
 
 
-def md2d_records(split):
+def md2d_records(split, shuffle=0.0):
     """MultiDoc2Dial topics (studentaid held out whole, like dispositio's recipe). Gold lines are the
     paragraphs holding the spans the agent's reply was grounded in; a heading span is skipped, its
     section's paragraphs are where the answer is read."""
@@ -369,8 +383,9 @@ def md2d_records(split):
                             continue   # a section heading the reply was grounded in, not the answering line
                         out.append(k)
                     return out
-                yield from records(q, pos, neg, lines_of, f"md2d_{split}", f"{dial['dial_id']}:{i}",
-                                    domain=dname)
+                key = f"{dial['dial_id']}:{i}"
+                pos, neg, order = arrange(pos, neg, key, shuffle)
+                yield from records(q, pos, neg, lines_of, f"md2d_{split}", key, domain=dname, order=order)
 
 
 def swe_records():
@@ -399,6 +414,84 @@ def swe_records():
                 return sorted(out)
             yield from records(g["query"], pos, neg, lines_of, "swe_train", g["iid"],
                                 domain=g["iid"].split("__")[0])
+
+
+def whole(is_gold):
+    """`lines_of` for labels per passage: every line of a relevant passage (records filters the index)."""
+    return lambda i, h: list(range(len(h.text.split("\n")))) if is_gold(h) else []
+
+
+def zalo_records(shuffle=0.0):
+    """Zalo AI 2021 legal retrieval, train split: Vietnamese questions over articles of Vietnamese law, the
+    article relevant as a whole (human-annotated). A train query whose id or text is a test query is dropped,
+    as fetch_zalo's note asks. v3 trained on this split and v4 did not, and Zalo is the one set where v4
+    trails v3 at the same read budget (-0.026 [-0.041, -0.011], pool 15)."""
+    ds = data_dir(None) / "beir" / "zalo-legal"
+    _, queries, qrels = load_beir(ds, "train")
+    _, test_q, _ = load_beir(ds, "test")
+    held = set(test_q) | {norm(t) for t in test_q.values()}
+    con = connect(ds / "inventio.db")
+    scope = Scope.only(["zalo-legal"])
+    for qid, q in queries.items():
+        if qid in held or norm(q) in held:
+            continue
+        gold = {safe_name(d) for d in qrels[qid]}
+        is_gold = lambda h: Path(h.path).stem in gold  # noqa: E731
+        hits = bm25(con, q, K + 40, scope)
+        key = f"zalo:{qid}"
+        pos, neg, order = arrange(hits[:K], slot_swap(hits, is_gold), key, shuffle)
+        yield from records(q, pos, neg, whole(is_gold), "zalo_train", key, domain="zalo",
+                           line_question=False, order=order)
+
+
+class Seats:
+    """A ranker that keeps BM25's order and records what `search` hands it, so a training state is built by
+    the query path itself: `first` hits are BM25's pool, the rest what names and links added."""
+    passes = True
+
+    def score(self, q, hits, first=None):
+        self.hits, self.first = list(hits), first or len(hits)
+        return [1.0 - i / 10_000 for i in range(len(hits))]
+
+
+def hotpot_records(shuffle=0.0):
+    """HotpotQA train bridge questions over their own linked map (data.py hotpotqa train): the answer page
+    is one the question's best page links to and the question barely names. Two states per question, the
+    two passes `SystemOneRanker.score` reads: BM25's 15 (with the slot-swapped arm without the answer), and
+    the final pass, BM25's best 8 by the first pass (here BM25's own order) with the up to 7 chunks the
+    names and links of the top hits brought, in the seats they take. Both supporting pages are relevant, as
+    in BEIR's HotpotQA; the Hugging Face copy holds each page as one paragraph, so labels are per page."""
+    from inventio.ingest import ingest_source
+    from inventio.links import rebuild_links
+    from inventio.search import search
+    from inventio.systemone import MAX_PASSAGES
+
+    ds = data_dir(None) / "beir" / "hotpotqa-train-links"
+    corpus, queries, qrels = load_beir(ds, "train")
+    con = connect(ds / "inventio.db")
+    if not con.execute("SELECT 1 FROM sources WHERE name = 'hotpotqa-train-links'").fetchone():
+        materialize(corpus, ds / "inventio-tree")
+        with con:
+            ingest_source(con, "hotpotqa-train-links", ds / "inventio-tree", True, [])
+            rebuild_links(con)
+    scope = Scope.only(["hotpotqa-train-links"])
+    seats = Seats()
+    for qid, q in queries.items():
+        gold = set(qrels[qid])
+        is_gold = lambda h: Path(h.path).stem in gold  # noqa: E731
+        hits = bm25(con, q, K + 40, scope)
+        key = f"hotpot:{qid}"
+        pos, neg, order = arrange(hits[:K], slot_swap(hits, is_gold), key, shuffle)
+        yield from records(q, pos, neg, whole(is_gold), "hotpot_train", key, domain="hotpot",
+                           line_question=False, order=order)
+        search(con, q, k=K, pool=K, ranker=seats, expand_links=True, scope=scope)
+        extra = seats.hits[seats.first:seats.first + MAX_PASSAGES // 2]
+        if not extra:
+            continue
+        final = seats.hits[:MAX_PASSAGES - len(extra)] + extra
+        final, _, order = arrange(final, [], key + ":final", shuffle)
+        yield from records(q, final, [], whole(is_gold), "hotpot_train", key, domain="hotpot",
+                           line_question=False, order=order)
 
 
 CAT_ON, CAT_OFF = 0.94, 0.01   # v3's soft target: the label is a small model's (Gemini Flash), not a gold one
@@ -1062,7 +1155,13 @@ def cmd_data(a):
             f.writelines(json.dumps(r, ensure_ascii=False) + "\n" for r in rows)
         print("judge", len(rows), Counter(r["_meta"]["domain"] for r in rows), "->", DATA / "judge.jsonl", flush=True)
         return
-    for name, gens in (("train", [md2d_records("train"), swe_records()]), ("dev", [md2d_records("validation")])):
+    train = {"md2d": lambda: md2d_records("train", a.shuffle), "swe": swe_records,
+             "zalo": lambda: zalo_records(a.shuffle), "hotpot": lambda: hotpot_records(a.shuffle)}
+    unknown = set(a.sources.split(",")) - set(train)
+    if unknown:
+        raise SystemExit(f"unknown sources {sorted(unknown)}; choose from {sorted(train)}")
+    for name, gens in ((f"train{a.tag}", [train[s]() for s in a.sources.split(",")]),
+                       (f"dev{a.tag}", [md2d_records("validation")])):
         rows = [r for g in gens for r in g]
         random.Random(0).shuffle(rows)
         with (DATA / f"{name}.jsonl").open("w", encoding="utf-8") as f:
@@ -1178,9 +1277,12 @@ def cmd_train(a):
                     break
             return kept
 
+        quota = dict((s, int(n)) for s, n in (x.split("=") for x in a.bal_source))
         md2d = [r for r in rows if r["_meta"]["source"] == "md2d_train"]
-        code = [] if a.no_code else [r for r in rows if r["_meta"]["source"] != "md2d_train"]
+        code = [] if a.no_code else [r for r in rows if r["_meta"]["source"] == "swe_train"]
         kept = draw(md2d, a.bal) + draw(code, a.bal_swe)
+        for src, n in quota.items():   # a source not named here is not drawn
+            kept += draw([r for r in rows if r["_meta"]["source"] == src], n)
         rng.shuffle(kept)
         mix = Counter((r["_meta"]["source"], r["_meta"]["arm"]) for r in kept)
         records = DATA / f"train_bal{a.bal}-{a.bal_swe}{a.bal_tag}.jsonl"
@@ -1190,9 +1292,11 @@ def cmd_train(a):
               + f" -> {records}", flush=True)
     if a.judge_records:
         judge = [json.loads(l) for l in open(a.judge_records, encoding="utf-8")]
+        if a.judge_sample:   # a delta run replays part of what its init learned, so the judge is not forgotten
+            judge = random.Random(a.seed).sample(judge, min(a.judge_sample, len(judge)))
         rows = [json.loads(l) for l in records.open(encoding="utf-8")] + judge
         random.Random(a.seed).shuffle(rows)
-        records = DATA / f"{records.stem}+judge.jsonl"
+        records = DATA / f"{records.stem}+judge{a.judge_sample or ''}.jsonl"
         records.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8")
         print(f"+{len(judge)} judge records -> {records}", flush=True)
     if fit is not None:
@@ -1230,12 +1334,8 @@ def cmd_train(a):
     elif out.exists():
         raise SystemExit(f"{out} exists and Kev refuses to overwrite a run; move it aside or pick --out")
     cmd = [str(python), str(Path(__file__).resolve().parent / "kev_win.py"), "train",
-           "--data", str(records), "--init_from", INIT_FROM, "--base", BASE, "--base_revision", BASE_REVISION,
-           "--max_state", str(a.max_state), "--device", "cuda", "--dtype", "bf16", "--weights_dtype", "bf16",
-           "--checkpointing", "1", "--shared_prefix", "1", "--batch", "1", "--accum", "8",
-           "--lr", str(a.lr), "--epochs", str(a.epochs), "--seed", str(a.seed),
-           "--p_none", "0", "--p_none_distract", "0", "--p_distract", "0",
-           "--row_budget", str(a.row_budget), "--out", a.out]
+           *trainer_args(str(records), a.out, max_state=a.max_state, lr=a.lr, epochs=a.epochs, seed=a.seed,
+                         row_budget=a.row_budget)]
     print(" ".join(cmd), flush=True)
     if a.dry_run:
         return 0
@@ -1252,6 +1352,11 @@ def main():
     s = sub.add_parser("data", help="build the Kev training records"); s.set_defaults(fn=cmd_data)
     s.add_argument("--judge", action="store_true",
                    help="build only the index-time judge's records (<data>/s1/data/judge.jsonl)")
+    s.add_argument("--sources", default="md2d,swe", help="train sources: md2d, swe, zalo, hotpot")
+    s.add_argument("--shuffle", type=float, default=0.0,
+                   help="share of queries whose passages are permuted in the state, both arms alike (arrange)")
+    s.add_argument("--tag", default="", help="suffix on train/dev file names, so a new build never overwrites one "
+                                            "a recipe names")
     s = sub.add_parser("export", help="merge a run's adapter into a full-weight checkpoint")
     s.add_argument("run"); s.add_argument("out"); s.set_defaults(fn=cmd_export)
     s = sub.add_parser("check-export", help="the run and its export on the same states: |dp| and argmax flips")
@@ -1277,6 +1382,9 @@ def main():
                    help="balance the code part to about this many records; 0 keeps all. The code arm is "
                         "lopsided on its own (107 positives against 3,922 negatives), so a quota here is "
                         "about the positive/negative prior the exists head sees on code-like states")
+    s.add_argument("--bal-source", action="append", default=[], metavar="SOURCE=N",
+                   help="also draw this source (zalo_train, hotpot_train) to about N records, queries whole; "
+                        "0 keeps all of it")
     s.add_argument("--max-state", type=int, default=6656)
     s.add_argument("--fit-max-state", type=int, default=0,
                    help="drop the records the trainer's admission rule drops at this state cap before the "
@@ -1298,6 +1406,7 @@ def main():
     s.add_argument("--seed", type=int, default=0)
     s.add_argument("--judge-records", default="",
                    help="append these records (systemone.py data --judge) after the balance draw")
+    s.add_argument("--judge-sample", type=int, default=0, help="append only this many of them (a delta run's replay)")
     s.add_argument("--dry-run", action="store_true", help="write the recipe and print the command, then stop")
     s.set_defaults(fn=cmd_train)
     s = sub.add_parser("scale", help="request time against questions and state length")

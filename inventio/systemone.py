@@ -164,10 +164,10 @@ you trained yourself:
 Two settings still belong to a checkpoint: INVENTIO_DISPOSITIO_MODEL says the same thing for one command,
 and INVENTIO_DISPOSITIO_CAVEAT turns on the caveat line below a probability."""
 
-# The weights: a local run directory (a LoRA adapter or merged weights, plus head.pt) or a Hub repo id. v4 is
-# published as the tag `v4` of the same repository as the earlier releases (`main` keeps v3's files, the older
-# per-passage shape, so an older inventio that loads `main` is not handed a checkpoint it cannot read).
-DEFAULT_MODEL = "minhquan2310/dispositio@v4"
+# The weights: a local run directory (a LoRA adapter or merged weights, plus head.pt) or a Hub repo id. Each
+# System One release is a tag of the same repository as the earlier ones (v4, v5; `main` keeps v3's files, the
+# older per-passage shape, so an older inventio that loads `main` is not handed a checkpoint it cannot read).
+DEFAULT_MODEL = "minhquan2310/dispositio@v5"
 ENV = "INVENTIO_DISPOSITIO_MODEL"
 
 

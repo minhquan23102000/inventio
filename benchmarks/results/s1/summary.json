@@ -398,6 +398,48 @@
    "top1_s1-v1": 0.846,
    "top1_s1-v1.3": 0.846,
    "wins": 0
+  },
+  "s1-v1.4-vs-s1-v1.3/md2d": {
+   "diff": 0.002,
+   "diff_hi": 0.031,
+   "diff_lo": -0.026,
+   "dropped_no_line_question": 0,
+   "exists_auc_s1-v1.3": 0.69,
+   "exists_auc_s1-v1.4": 0.698,
+   "losses": 23,
+   "n": 453,
+   "set": "md2d",
+   "top1_s1-v1.3": 0.631,
+   "top1_s1-v1.4": 0.634,
+   "wins": 24
+  },
+  "s1-v1.4-vs-s1-v1.3/techqa": {
+   "diff": -0.034,
+   "diff_hi": 0.046,
+   "diff_lo": -0.115,
+   "dropped_no_line_question": 0,
+   "exists_auc_s1-v1.3": 0.649,
+   "exists_auc_s1-v1.4": 0.653,
+   "losses": 7,
+   "n": 87,
+   "set": "techqa",
+   "top1_s1-v1.3": 0.345,
+   "top1_s1-v1.4": 0.31,
+   "wins": 4
+  },
+  "s1-v1.4-vs-s1-v1.3/webshop": {
+   "diff": 0.077,
+   "diff_hi": 0.231,
+   "diff_lo": 0.0,
+   "dropped_no_line_question": 0,
+   "exists_auc_s1-v1.3": 0.793,
+   "exists_auc_s1-v1.4": 0.775,
+   "losses": 0,
+   "n": 13,
+   "set": "webshop",
+   "top1_s1-v1.3": 0.846,
+   "top1_s1-v1.4": 0.923,
+   "wins": 1
   }
  },
  "judge": {
@@ -515,6 +557,1914 @@
    "out_of_domain": {
     "accuracy": 0.742,
     "macro_f1": 0.678,
+    "n": 260
+   },
+   "scifact": {
+    "accuracy": 0.975,
+    "macro_f1": 0.965,
+    "n": 40
+   },
+   "swe-issue": {
+    "accuracy": 1.0,
+    "macro_f1": 1.0,
+    "n": 40
+   },
+   "zalo-legal": {
+    "accuracy": 0.9,
+    "macro_f1": 0.474,
+    "n": 40
+   }
+  },
+  "s1-v1.4/category": {
+   "all": {
+    "accuracy": 0.811,
+    "macro_f1": 0.774,
+    "n": 380
+   },
+   "calibration": {
+    "Explanation": {
+     "curve": [
+      {
+       "all": {
+        "kept": 37,
+        "n": 37,
+        "precision": 0.73
+       },
+       "ood": {
+        "kept": 31,
+        "n": 31,
+        "precision": 0.71
+       },
+       "tau": 0.0
+      },
+      {
+       "all": {
+        "kept": 37,
+        "n": 37,
+        "precision": 0.73
+       },
+       "ood": {
+        "kept": 31,
+        "n": 31,
+        "precision": 0.71
+       },
+       "tau": 0.05
+      },
+      {
+       "all": {
+        "kept": 37,
+        "n": 37,
+        "precision": 0.73
+       },
+       "ood": {
+        "kept": 31,
+        "n": 31,
+        "precision": 0.71
+       },
+       "tau": 0.1
+      },
+      {
+       "all": {
+        "kept": 37,
+        "n": 37,
+        "precision": 0.73
+       },
+       "ood": {
+        "kept": 31,
+        "n": 31,
+        "precision": 0.71
+       },
+       "tau": 0.15
+      },
+      {
+       "all": {
+        "kept": 37,
+        "n": 37,
+        "precision": 0.73
+       },
+       "ood": {
+        "kept": 31,
+        "n": 31,
+        "precision": 0.71
+       },
+       "tau": 0.2
+      },
+      {
+       "all": {
+        "kept": 37,
+        "n": 37,
+        "precision": 0.73
+       },
+       "ood": {
+        "kept": 31,
+        "n": 31,
+        "precision": 0.71
+       },
+       "tau": 0.25
+      },
+      {
+       "all": {
+        "kept": 37,
+        "n": 37,
+        "precision": 0.73
+       },
+       "ood": {
+        "kept": 31,
+        "n": 31,
+        "precision": 0.71
+       },
+       "tau": 0.3
+      },
+      {
+       "all": {
+        "kept": 36,
+        "n": 37,
+        "precision": 0.722
+       },
+       "ood": {
+        "kept": 30,
+        "n": 31,
+        "precision": 0.7
+       },
+       "tau": 0.35
+      },
+      {
+       "all": {
+        "kept": 36,
+        "n": 37,
+        "precision": 0.722
+       },
+       "ood": {
+        "kept": 30,
+        "n": 31,
+        "precision": 0.7
+       },
+       "tau": 0.4
+      },
+      {
+       "all": {
+        "kept": 35,
+        "n": 37,
+        "precision": 0.743
+       },
+       "ood": {
+        "kept": 29,
+        "n": 31,
+        "precision": 0.724
+       },
+       "tau": 0.45
+      },
+      {
+       "all": {
+        "kept": 31,
+        "n": 37,
+        "precision": 0.806
+       },
+       "ood": {
+        "kept": 25,
+        "n": 31,
+        "precision": 0.8
+       },
+       "tau": 0.5
+      },
+      {
+       "all": {
+        "kept": 28,
+        "n": 37,
+        "precision": 0.857
+       },
+       "ood": {
+        "kept": 23,
+        "n": 31,
+        "precision": 0.826
+       },
+       "tau": 0.55
+      },
+      {
+       "all": {
+        "kept": 27,
+        "n": 37,
+        "precision": 0.852
+       },
+       "ood": {
+        "kept": 22,
+        "n": 31,
+        "precision": 0.818
+       },
+       "tau": 0.6
+      },
+      {
+       "all": {
+        "kept": 26,
+        "n": 37,
+        "precision": 0.846
+       },
+       "ood": {
+        "kept": 21,
+        "n": 31,
+        "precision": 0.81
+       },
+       "tau": 0.65
+      },
+      {
+       "all": {
+        "kept": 26,
+        "n": 37,
+        "precision": 0.846
+       },
+       "ood": {
+        "kept": 21,
+        "n": 31,
+        "precision": 0.81
+       },
+       "tau": 0.7
+      },
+      {
+       "all": {
+        "kept": 21,
+        "n": 37,
+        "precision": 0.81
+       },
+       "ood": {
+        "kept": 17,
+        "n": 31,
+        "precision": 0.765
+       },
+       "tau": 0.75
+      },
+      {
+       "all": {
+        "kept": 19,
+        "n": 37,
+        "precision": 0.789
+       },
+       "ood": {
+        "kept": 15,
+        "n": 31,
+        "precision": 0.733
+       },
+       "tau": 0.8
+      },
+      {
+       "all": {
+        "kept": 17,
+        "n": 37,
+        "precision": 0.882
+       },
+       "ood": {
+        "kept": 13,
+        "n": 31,
+        "precision": 0.846
+       },
+       "tau": 0.85
+      },
+      {
+       "all": {
+        "kept": 14,
+        "n": 37,
+        "precision": 0.929
+       },
+       "ood": {
+        "kept": 10,
+        "n": 31,
+        "precision": 0.9
+       },
+       "tau": 0.9
+      },
+      {
+       "all": {
+        "kept": 9,
+        "n": 37,
+        "precision": 0.889
+       },
+       "ood": {
+        "kept": 6,
+        "n": 31,
+        "precision": 0.833
+       },
+       "tau": 0.95
+      }
+     ],
+     "predicted": 37,
+     "tau": null
+    },
+    "Finding": {
+     "curve": [
+      {
+       "all": {
+        "kept": 35,
+        "n": 35,
+        "precision": 0.971
+       },
+       "ood": {
+        "kept": 2,
+        "n": 2,
+        "precision": 0.5
+       },
+       "tau": 0.0
+      },
+      {
+       "all": {
+        "kept": 35,
+        "n": 35,
+        "precision": 0.971
+       },
+       "ood": {
+        "kept": 2,
+        "n": 2,
+        "precision": 0.5
+       },
+       "tau": 0.05
+      },
+      {
+       "all": {
+        "kept": 35,
+        "n": 35,
+        "precision": 0.971
+       },
+       "ood": {
+        "kept": 2,
+        "n": 2,
+        "precision": 0.5
+       },
+       "tau": 0.1
+      },
+      {
+       "all": {
+        "kept": 35,
+        "n": 35,
+        "precision": 0.971
+       },
+       "ood": {
+        "kept": 2,
+        "n": 2,
+        "precision": 0.5
+       },
+       "tau": 0.15
+      },
+      {
+       "all": {
+        "kept": 35,
+        "n": 35,
+        "precision": 0.971
+       },
+       "ood": {
+        "kept": 2,
+        "n": 2,
+        "precision": 0.5
+       },
+       "tau": 0.2
+      },
+      {
+       "all": {
+        "kept": 35,
+        "n": 35,
+        "precision": 0.971
+       },
+       "ood": {
+        "kept": 2,
+        "n": 2,
+        "precision": 0.5
+       },
+       "tau": 0.25
+      },
+      {
+       "all": {
+        "kept": 35,
+        "n": 35,
+        "precision": 0.971
+       },
+       "ood": {
+        "kept": 2,
+        "n": 2,
+        "precision": 0.5
+       },
+       "tau": 0.3
+      },
+      {
+       "all": {
+        "kept": 33,
+        "n": 35,
+        "precision": 1.0
+       },
+       "ood": {
+        "kept": 1,
+        "n": 2,
+        "precision": 1.0
+       },
+       "tau": 0.35
+      },
+      {
+       "all": {
+        "kept": 33,
+        "n": 35,
+        "precision": 1.0
+       },
+       "ood": {
+        "kept": 1,
+        "n": 2,
+        "precision": 1.0
+       },
+       "tau": 0.4
+      },
+      {
+       "all": {
+        "kept": 33,
+        "n": 35,
+        "precision": 1.0
+       },
+       "ood": {
+        "kept": 1,
+        "n": 2,
+        "precision": 1.0
+       },
+       "tau": 0.45
+      },
+      {
+       "all": {
+        "kept": 32,
+        "n": 35,
+        "precision": 1.0
+       },
+       "ood": {
+        "kept": 1,
+        "n": 2,
+        "precision": 1.0
+       },
+       "tau": 0.5
+      },
+      {
+       "all": {
+        "kept": 32,
+        "n": 35,
+        "precision": 1.0
+       },
+       "ood": {
+        "kept": 1,
+        "n": 2,
+        "precision": 1.0
+       },
+       "tau": 0.55
+      },
+      {
+       "all": {
+        "kept": 31,
+        "n": 35,
+        "precision": 1.0
+       },
+       "ood": {
+        "kept": 1,
+        "n": 2,
+        "precision": 1.0
+       },
+       "tau": 0.6
+      },
+      {
+       "all": {
+        "kept": 31,
+        "n": 35,
+        "precision": 1.0
+       },
+       "ood": {
+        "kept": 1,
+        "n": 2,
+        "precision": 1.0
+       },
+       "tau": 0.65
+      },
+      {
+       "all": {
+        "kept": 31,
+        "n": 35,
+        "precision": 1.0
+       },
+       "ood": {
+        "kept": 1,
+        "n": 2,
+        "precision": 1.0
+       },
+       "tau": 0.7
+      },
+      {
+       "all": {
+        "kept": 31,
+        "n": 35,
+        "precision": 1.0
+       },
+       "ood": {
+        "kept": 1,
+        "n": 2,
+        "precision": 1.0
+       },
+       "tau": 0.75
+      },
+      {
+       "all": {
+        "kept": 31,
+        "n": 35,
+        "precision": 1.0
+       },
+       "ood": {
+        "kept": 1,
+        "n": 2,
+        "precision": 1.0
+       },
+       "tau": 0.8
+      },
+      {
+       "all": {
+        "kept": 30,
+        "n": 35,
+        "precision": 1.0
+       },
+       "ood": {
+        "kept": 1,
+        "n": 2,
+        "precision": 1.0
+       },
+       "tau": 0.85
+      },
+      {
+       "all": {
+        "kept": 29,
+        "n": 35,
+        "precision": 1.0
+       },
+       "ood": {
+        "kept": 1,
+        "n": 2,
+        "precision": 1.0
+       },
+       "tau": 0.9
+      },
+      {
+       "all": {
+        "kept": 16,
+        "n": 35,
+        "precision": 1.0
+       },
+       "ood": {
+        "kept": 1,
+        "n": 2,
+        "precision": 1.0
+       },
+       "tau": 0.95
+      }
+     ],
+     "predicted": 35,
+     "tau": 0.35
+    },
+    "Other": {
+     "curve": [
+      {
+       "all": {
+        "kept": 18,
+        "n": 18,
+        "precision": 0.611
+       },
+       "ood": {
+        "kept": 18,
+        "n": 18,
+        "precision": 0.611
+       },
+       "tau": 0.0
+      },
+      {
+       "all": {
+        "kept": 18,
+        "n": 18,
+        "precision": 0.611
+       },
+       "ood": {
+        "kept": 18,
+        "n": 18,
+        "precision": 0.611
+       },
+       "tau": 0.05
+      },
+      {
+       "all": {
+        "kept": 18,
+        "n": 18,
+        "precision": 0.611
+       },
+       "ood": {
+        "kept": 18,
+        "n": 18,
+        "precision": 0.611
+       },
+       "tau": 0.1
+      },
+      {
+       "all": {
+        "kept": 18,
+        "n": 18,
+        "precision": 0.611
+       },
+       "ood": {
+        "kept": 18,
+        "n": 18,
+        "precision": 0.611
+       },
+       "tau": 0.15
+      },
+      {
+       "all": {
+        "kept": 18,
+        "n": 18,
+        "precision": 0.611
+       },
+       "ood": {
+        "kept": 18,
+        "n": 18,
+        "precision": 0.611
+       },
+       "tau": 0.2
+      },
+      {
+       "all": {
+        "kept": 18,
+        "n": 18,
+        "precision": 0.611
+       },
+       "ood": {
+        "kept": 18,
+        "n": 18,
+        "precision": 0.611
+       },
+       "tau": 0.25
+      },
+      {
+       "all": {
+        "kept": 18,
+        "n": 18,
+        "precision": 0.611
+       },
+       "ood": {
+        "kept": 18,
+        "n": 18,
+        "precision": 0.611
+       },
+       "tau": 0.3
+      },
+      {
+       "all": {
+        "kept": 18,
+        "n": 18,
+        "precision": 0.611
+       },
+       "ood": {
+        "kept": 18,
+        "n": 18,
+        "precision": 0.611
+       },
+       "tau": 0.35
+      },
+      {
+       "all": {
+        "kept": 18,
+        "n": 18,
+        "precision": 0.611
+       },
+       "ood": {
+        "kept": 18,
+        "n": 18,
+        "precision": 0.611
+       },
+       "tau": 0.4
+      },
+      {
+       "all": {
+        "kept": 17,
+        "n": 18,
+        "precision": 0.588
+       },
+       "ood": {
+        "kept": 17,
+        "n": 18,
+        "precision": 0.588
+       },
+       "tau": 0.45
+      },
+      {
+       "all": {
+        "kept": 16,
+        "n": 18,
+        "precision": 0.625
+       },
+       "ood": {
+        "kept": 16,
+        "n": 18,
+        "precision": 0.625
+       },
+       "tau": 0.5
+      },
+      {
+       "all": {
+        "kept": 15,
+        "n": 18,
+        "precision": 0.667
+       },
+       "ood": {
+        "kept": 15,
+        "n": 18,
+        "precision": 0.667
+       },
+       "tau": 0.55
+      },
+      {
+       "all": {
+        "kept": 15,
+        "n": 18,
+        "precision": 0.667
+       },
+       "ood": {
+        "kept": 15,
+        "n": 18,
+        "precision": 0.667
+       },
+       "tau": 0.6
+      },
+      {
+       "all": {
+        "kept": 12,
+        "n": 18,
+        "precision": 0.75
+       },
+       "ood": {
+        "kept": 12,
+        "n": 18,
+        "precision": 0.75
+       },
+       "tau": 0.65
+      },
+      {
+       "all": {
+        "kept": 12,
+        "n": 18,
+        "precision": 0.75
+       },
+       "ood": {
+        "kept": 12,
+        "n": 18,
+        "precision": 0.75
+       },
+       "tau": 0.7
+      },
+      {
+       "all": {
+        "kept": 11,
+        "n": 18,
+        "precision": 0.818
+       },
+       "ood": {
+        "kept": 11,
+        "n": 18,
+        "precision": 0.818
+       },
+       "tau": 0.75
+      },
+      {
+       "all": {
+        "kept": 9,
+        "n": 18,
+        "precision": 0.778
+       },
+       "ood": {
+        "kept": 9,
+        "n": 18,
+        "precision": 0.778
+       },
+       "tau": 0.8
+      },
+      {
+       "all": {
+        "kept": 9,
+        "n": 18,
+        "precision": 0.778
+       },
+       "ood": {
+        "kept": 9,
+        "n": 18,
+        "precision": 0.778
+       },
+       "tau": 0.85
+      },
+      {
+       "all": {
+        "kept": 7,
+        "n": 18,
+        "precision": 0.714
+       },
+       "ood": {
+        "kept": 7,
+        "n": 18,
+        "precision": 0.714
+       },
+       "tau": 0.9
+      },
+      {
+       "all": {
+        "kept": 4,
+        "n": 18,
+        "precision": 1.0
+       },
+       "ood": {
+        "kept": 4,
+        "n": 18,
+        "precision": 1.0
+       },
+       "tau": 0.95
+      }
+     ],
+     "predicted": 18,
+     "tau": null
+    },
+    "Procedure": {
+     "curve": [
+      {
+       "all": {
+        "kept": 56,
+        "n": 56,
+        "precision": 0.946
+       },
+       "ood": {
+        "kept": 56,
+        "n": 56,
+        "precision": 0.946
+       },
+       "tau": 0.0
+      },
+      {
+       "all": {
+        "kept": 56,
+        "n": 56,
+        "precision": 0.946
+       },
+       "ood": {
+        "kept": 56,
+        "n": 56,
+        "precision": 0.946
+       },
+       "tau": 0.05
+      },
+      {
+       "all": {
+        "kept": 56,
+        "n": 56,
+        "precision": 0.946
+       },
+       "ood": {
+        "kept": 56,
+        "n": 56,
+        "precision": 0.946
+       },
+       "tau": 0.1
+      },
+      {
+       "all": {
+        "kept": 56,
+        "n": 56,
+        "precision": 0.946
+       },
+       "ood": {
+        "kept": 56,
+        "n": 56,
+        "precision": 0.946
+       },
+       "tau": 0.15
+      },
+      {
+       "all": {
+        "kept": 56,
+        "n": 56,
+        "precision": 0.946
+       },
+       "ood": {
+        "kept": 56,
+        "n": 56,
+        "precision": 0.946
+       },
+       "tau": 0.2
+      },
+      {
+       "all": {
+        "kept": 56,
+        "n": 56,
+        "precision": 0.946
+       },
+       "ood": {
+        "kept": 56,
+        "n": 56,
+        "precision": 0.946
+       },
+       "tau": 0.25
+      },
+      {
+       "all": {
+        "kept": 56,
+        "n": 56,
+        "precision": 0.946
+       },
+       "ood": {
+        "kept": 56,
+        "n": 56,
+        "precision": 0.946
+       },
+       "tau": 0.3
+      },
+      {
+       "all": {
+        "kept": 54,
+        "n": 56,
+        "precision": 0.944
+       },
+       "ood": {
+        "kept": 54,
+        "n": 56,
+        "precision": 0.944
+       },
+       "tau": 0.35
+      },
+      {
+       "all": {
+        "kept": 54,
+        "n": 56,
+        "precision": 0.944
+       },
+       "ood": {
+        "kept": 54,
+        "n": 56,
+        "precision": 0.944
+       },
+       "tau": 0.4
+      },
+      {
+       "all": {
+        "kept": 53,
+        "n": 56,
+        "precision": 0.943
+       },
+       "ood": {
+        "kept": 53,
+        "n": 56,
+        "precision": 0.943
+       },
+       "tau": 0.45
+      },
+      {
+       "all": {
+        "kept": 53,
+        "n": 56,
+        "precision": 0.943
+       },
+       "ood": {
+        "kept": 53,
+        "n": 56,
+        "precision": 0.943
+       },
+       "tau": 0.5
+      },
+      {
+       "all": {
+        "kept": 52,
+        "n": 56,
+        "precision": 0.962
+       },
+       "ood": {
+        "kept": 52,
+        "n": 56,
+        "precision": 0.962
+       },
+       "tau": 0.55
+      },
+      {
+       "all": {
+        "kept": 50,
+        "n": 56,
+        "precision": 0.98
+       },
+       "ood": {
+        "kept": 50,
+        "n": 56,
+        "precision": 0.98
+       },
+       "tau": 0.6
+      },
+      {
+       "all": {
+        "kept": 50,
+        "n": 56,
+        "precision": 0.98
+       },
+       "ood": {
+        "kept": 50,
+        "n": 56,
+        "precision": 0.98
+       },
+       "tau": 0.65
+      },
+      {
+       "all": {
+        "kept": 46,
+        "n": 56,
+        "precision": 0.978
+       },
+       "ood": {
+        "kept": 46,
+        "n": 56,
+        "precision": 0.978
+       },
+       "tau": 0.7
+      },
+      {
+       "all": {
+        "kept": 44,
+        "n": 56,
+        "precision": 0.977
+       },
+       "ood": {
+        "kept": 44,
+        "n": 56,
+        "precision": 0.977
+       },
+       "tau": 0.75
+      },
+      {
+       "all": {
+        "kept": 44,
+        "n": 56,
+        "precision": 0.977
+       },
+       "ood": {
+        "kept": 44,
+        "n": 56,
+        "precision": 0.977
+       },
+       "tau": 0.8
+      },
+      {
+       "all": {
+        "kept": 43,
+        "n": 56,
+        "precision": 0.977
+       },
+       "ood": {
+        "kept": 43,
+        "n": 56,
+        "precision": 0.977
+       },
+       "tau": 0.85
+      },
+      {
+       "all": {
+        "kept": 29,
+        "n": 56,
+        "precision": 1.0
+       },
+       "ood": {
+        "kept": 29,
+        "n": 56,
+        "precision": 1.0
+       },
+       "tau": 0.9
+      },
+      {
+       "all": {
+        "kept": 7,
+        "n": 56,
+        "precision": 1.0
+       },
+       "ood": {
+        "kept": 7,
+        "n": 56,
+        "precision": 1.0
+       },
+       "tau": 0.95
+      }
+     ],
+     "predicted": 56,
+     "tau": 0.55
+    },
+    "Record": {
+     "curve": [
+      {
+       "all": {
+        "kept": 105,
+        "n": 105,
+        "precision": 0.895
+       },
+       "ood": {
+        "kept": 64,
+        "n": 64,
+        "precision": 0.828
+       },
+       "tau": 0.0
+      },
+      {
+       "all": {
+        "kept": 105,
+        "n": 105,
+        "precision": 0.895
+       },
+       "ood": {
+        "kept": 64,
+        "n": 64,
+        "precision": 0.828
+       },
+       "tau": 0.05
+      },
+      {
+       "all": {
+        "kept": 105,
+        "n": 105,
+        "precision": 0.895
+       },
+       "ood": {
+        "kept": 64,
+        "n": 64,
+        "precision": 0.828
+       },
+       "tau": 0.1
+      },
+      {
+       "all": {
+        "kept": 105,
+        "n": 105,
+        "precision": 0.895
+       },
+       "ood": {
+        "kept": 64,
+        "n": 64,
+        "precision": 0.828
+       },
+       "tau": 0.15
+      },
+      {
+       "all": {
+        "kept": 105,
+        "n": 105,
+        "precision": 0.895
+       },
+       "ood": {
+        "kept": 64,
+        "n": 64,
+        "precision": 0.828
+       },
+       "tau": 0.2
+      },
+      {
+       "all": {
+        "kept": 105,
+        "n": 105,
+        "precision": 0.895
+       },
+       "ood": {
+        "kept": 64,
+        "n": 64,
+        "precision": 0.828
+       },
+       "tau": 0.25
+      },
+      {
+       "all": {
+        "kept": 104,
+        "n": 105,
+        "precision": 0.904
+       },
+       "ood": {
+        "kept": 63,
+        "n": 64,
+        "precision": 0.841
+       },
+       "tau": 0.3
+      },
+      {
+       "all": {
+        "kept": 104,
+        "n": 105,
+        "precision": 0.904
+       },
+       "ood": {
+        "kept": 63,
+        "n": 64,
+        "precision": 0.841
+       },
+       "tau": 0.35
+      },
+      {
+       "all": {
+        "kept": 103,
+        "n": 105,
+        "precision": 0.913
+       },
+       "ood": {
+        "kept": 62,
+        "n": 64,
+        "precision": 0.855
+       },
+       "tau": 0.4
+      },
+      {
+       "all": {
+        "kept": 102,
+        "n": 105,
+        "precision": 0.922
+       },
+       "ood": {
+        "kept": 61,
+        "n": 64,
+        "precision": 0.869
+       },
+       "tau": 0.45
+      },
+      {
+       "all": {
+        "kept": 100,
+        "n": 105,
+        "precision": 0.92
+       },
+       "ood": {
+        "kept": 60,
+        "n": 64,
+        "precision": 0.867
+       },
+       "tau": 0.5
+      },
+      {
+       "all": {
+        "kept": 99,
+        "n": 105,
+        "precision": 0.929
+       },
+       "ood": {
+        "kept": 59,
+        "n": 64,
+        "precision": 0.881
+       },
+       "tau": 0.55
+      },
+      {
+       "all": {
+        "kept": 99,
+        "n": 105,
+        "precision": 0.929
+       },
+       "ood": {
+        "kept": 59,
+        "n": 64,
+        "precision": 0.881
+       },
+       "tau": 0.6
+      },
+      {
+       "all": {
+        "kept": 98,
+        "n": 105,
+        "precision": 0.929
+       },
+       "ood": {
+        "kept": 58,
+        "n": 64,
+        "precision": 0.879
+       },
+       "tau": 0.65
+      },
+      {
+       "all": {
+        "kept": 94,
+        "n": 105,
+        "precision": 0.936
+       },
+       "ood": {
+        "kept": 54,
+        "n": 64,
+        "precision": 0.889
+       },
+       "tau": 0.7
+      },
+      {
+       "all": {
+        "kept": 90,
+        "n": 105,
+        "precision": 0.967
+       },
+       "ood": {
+        "kept": 51,
+        "n": 64,
+        "precision": 0.941
+       },
+       "tau": 0.75
+      },
+      {
+       "all": {
+        "kept": 87,
+        "n": 105,
+        "precision": 0.966
+       },
+       "ood": {
+        "kept": 49,
+        "n": 64,
+        "precision": 0.939
+       },
+       "tau": 0.8
+      },
+      {
+       "all": {
+        "kept": 85,
+        "n": 105,
+        "precision": 0.965
+       },
+       "ood": {
+        "kept": 48,
+        "n": 64,
+        "precision": 0.938
+       },
+       "tau": 0.85
+      },
+      {
+       "all": {
+        "kept": 82,
+        "n": 105,
+        "precision": 0.976
+       },
+       "ood": {
+        "kept": 46,
+        "n": 64,
+        "precision": 0.957
+       },
+       "tau": 0.9
+      },
+      {
+       "all": {
+        "kept": 58,
+        "n": 105,
+        "precision": 0.983
+       },
+       "ood": {
+        "kept": 29,
+        "n": 64,
+        "precision": 0.966
+       },
+       "tau": 0.95
+      }
+     ],
+     "predicted": 105,
+     "tau": 0.9
+    },
+    "Reference": {
+     "curve": [
+      {
+       "all": {
+        "kept": 68,
+        "n": 68,
+        "precision": 0.647
+       },
+       "ood": {
+        "kept": 68,
+        "n": 68,
+        "precision": 0.647
+       },
+       "tau": 0.0
+      },
+      {
+       "all": {
+        "kept": 68,
+        "n": 68,
+        "precision": 0.647
+       },
+       "ood": {
+        "kept": 68,
+        "n": 68,
+        "precision": 0.647
+       },
+       "tau": 0.05
+      },
+      {
+       "all": {
+        "kept": 68,
+        "n": 68,
+        "precision": 0.647
+       },
+       "ood": {
+        "kept": 68,
+        "n": 68,
+        "precision": 0.647
+       },
+       "tau": 0.1
+      },
+      {
+       "all": {
+        "kept": 68,
+        "n": 68,
+        "precision": 0.647
+       },
+       "ood": {
+        "kept": 68,
+        "n": 68,
+        "precision": 0.647
+       },
+       "tau": 0.15
+      },
+      {
+       "all": {
+        "kept": 68,
+        "n": 68,
+        "precision": 0.647
+       },
+       "ood": {
+        "kept": 68,
+        "n": 68,
+        "precision": 0.647
+       },
+       "tau": 0.2
+      },
+      {
+       "all": {
+        "kept": 68,
+        "n": 68,
+        "precision": 0.647
+       },
+       "ood": {
+        "kept": 68,
+        "n": 68,
+        "precision": 0.647
+       },
+       "tau": 0.25
+      },
+      {
+       "all": {
+        "kept": 67,
+        "n": 68,
+        "precision": 0.642
+       },
+       "ood": {
+        "kept": 67,
+        "n": 68,
+        "precision": 0.642
+       },
+       "tau": 0.3
+      },
+      {
+       "all": {
+        "kept": 67,
+        "n": 68,
+        "precision": 0.642
+       },
+       "ood": {
+        "kept": 67,
+        "n": 68,
+        "precision": 0.642
+       },
+       "tau": 0.35
+      },
+      {
+       "all": {
+        "kept": 66,
+        "n": 68,
+        "precision": 0.652
+       },
+       "ood": {
+        "kept": 66,
+        "n": 68,
+        "precision": 0.652
+       },
+       "tau": 0.4
+      },
+      {
+       "all": {
+        "kept": 62,
+        "n": 68,
+        "precision": 0.645
+       },
+       "ood": {
+        "kept": 62,
+        "n": 68,
+        "precision": 0.645
+       },
+       "tau": 0.45
+      },
+      {
+       "all": {
+        "kept": 61,
+        "n": 68,
+        "precision": 0.656
+       },
+       "ood": {
+        "kept": 61,
+        "n": 68,
+        "precision": 0.656
+       },
+       "tau": 0.5
+      },
+      {
+       "all": {
+        "kept": 56,
+        "n": 68,
+        "precision": 0.643
+       },
+       "ood": {
+        "kept": 56,
+        "n": 68,
+        "precision": 0.643
+       },
+       "tau": 0.55
+      },
+      {
+       "all": {
+        "kept": 52,
+        "n": 68,
+        "precision": 0.673
+       },
+       "ood": {
+        "kept": 52,
+        "n": 68,
+        "precision": 0.673
+       },
+       "tau": 0.6
+      },
+      {
+       "all": {
+        "kept": 42,
+        "n": 68,
+        "precision": 0.762
+       },
+       "ood": {
+        "kept": 42,
+        "n": 68,
+        "precision": 0.762
+       },
+       "tau": 0.65
+      },
+      {
+       "all": {
+        "kept": 40,
+        "n": 68,
+        "precision": 0.8
+       },
+       "ood": {
+        "kept": 40,
+        "n": 68,
+        "precision": 0.8
+       },
+       "tau": 0.7
+      },
+      {
+       "all": {
+        "kept": 36,
+        "n": 68,
+        "precision": 0.861
+       },
+       "ood": {
+        "kept": 36,
+        "n": 68,
+        "precision": 0.861
+       },
+       "tau": 0.75
+      },
+      {
+       "all": {
+        "kept": 34,
+        "n": 68,
+        "precision": 0.853
+       },
+       "ood": {
+        "kept": 34,
+        "n": 68,
+        "precision": 0.853
+       },
+       "tau": 0.8
+      },
+      {
+       "all": {
+        "kept": 25,
+        "n": 68,
+        "precision": 0.96
+       },
+       "ood": {
+        "kept": 25,
+        "n": 68,
+        "precision": 0.96
+       },
+       "tau": 0.85
+      },
+      {
+       "all": {
+        "kept": 17,
+        "n": 68,
+        "precision": 1.0
+       },
+       "ood": {
+        "kept": 17,
+        "n": 68,
+        "precision": 1.0
+       },
+       "tau": 0.9
+      },
+      {
+       "all": {
+        "kept": 9,
+        "n": 68,
+        "precision": 1.0
+       },
+       "ood": {
+        "kept": 9,
+        "n": 68,
+        "precision": 1.0
+       },
+       "tau": 0.95
+      }
+     ],
+     "predicted": 68,
+     "tau": null
+    },
+    "Rule": {
+     "curve": [
+      {
+       "all": {
+        "kept": 61,
+        "n": 61,
+        "precision": 0.738
+       },
+       "ood": {
+        "kept": 21,
+        "n": 21,
+        "precision": 0.429
+       },
+       "tau": 0.0
+      },
+      {
+       "all": {
+        "kept": 61,
+        "n": 61,
+        "precision": 0.738
+       },
+       "ood": {
+        "kept": 21,
+        "n": 21,
+        "precision": 0.429
+       },
+       "tau": 0.05
+      },
+      {
+       "all": {
+        "kept": 61,
+        "n": 61,
+        "precision": 0.738
+       },
+       "ood": {
+        "kept": 21,
+        "n": 21,
+        "precision": 0.429
+       },
+       "tau": 0.1
+      },
+      {
+       "all": {
+        "kept": 61,
+        "n": 61,
+        "precision": 0.738
+       },
+       "ood": {
+        "kept": 21,
+        "n": 21,
+        "precision": 0.429
+       },
+       "tau": 0.15
+      },
+      {
+       "all": {
+        "kept": 61,
+        "n": 61,
+        "precision": 0.738
+       },
+       "ood": {
+        "kept": 21,
+        "n": 21,
+        "precision": 0.429
+       },
+       "tau": 0.2
+      },
+      {
+       "all": {
+        "kept": 61,
+        "n": 61,
+        "precision": 0.738
+       },
+       "ood": {
+        "kept": 21,
+        "n": 21,
+        "precision": 0.429
+       },
+       "tau": 0.25
+      },
+      {
+       "all": {
+        "kept": 61,
+        "n": 61,
+        "precision": 0.738
+       },
+       "ood": {
+        "kept": 21,
+        "n": 21,
+        "precision": 0.429
+       },
+       "tau": 0.3
+      },
+      {
+       "all": {
+        "kept": 60,
+        "n": 61,
+        "precision": 0.75
+       },
+       "ood": {
+        "kept": 20,
+        "n": 21,
+        "precision": 0.45
+       },
+       "tau": 0.35
+      },
+      {
+       "all": {
+        "kept": 60,
+        "n": 61,
+        "precision": 0.75
+       },
+       "ood": {
+        "kept": 20,
+        "n": 21,
+        "precision": 0.45
+       },
+       "tau": 0.4
+      },
+      {
+       "all": {
+        "kept": 60,
+        "n": 61,
+        "precision": 0.75
+       },
+       "ood": {
+        "kept": 20,
+        "n": 21,
+        "precision": 0.45
+       },
+       "tau": 0.45
+      },
+      {
+       "all": {
+        "kept": 60,
+        "n": 61,
+        "precision": 0.75
+       },
+       "ood": {
+        "kept": 20,
+        "n": 21,
+        "precision": 0.45
+       },
+       "tau": 0.5
+      },
+      {
+       "all": {
+        "kept": 58,
+        "n": 61,
+        "precision": 0.776
+       },
+       "ood": {
+        "kept": 18,
+        "n": 21,
+        "precision": 0.5
+       },
+       "tau": 0.55
+      },
+      {
+       "all": {
+        "kept": 56,
+        "n": 61,
+        "precision": 0.804
+       },
+       "ood": {
+        "kept": 16,
+        "n": 21,
+        "precision": 0.562
+       },
+       "tau": 0.6
+      },
+      {
+       "all": {
+        "kept": 56,
+        "n": 61,
+        "precision": 0.804
+       },
+       "ood": {
+        "kept": 16,
+        "n": 21,
+        "precision": 0.562
+       },
+       "tau": 0.65
+      },
+      {
+       "all": {
+        "kept": 53,
+        "n": 61,
+        "precision": 0.849
+       },
+       "ood": {
+        "kept": 13,
+        "n": 21,
+        "precision": 0.692
+       },
+       "tau": 0.7
+      },
+      {
+       "all": {
+        "kept": 51,
+        "n": 61,
+        "precision": 0.863
+       },
+       "ood": {
+        "kept": 11,
+        "n": 21,
+        "precision": 0.727
+       },
+       "tau": 0.75
+      },
+      {
+       "all": {
+        "kept": 51,
+        "n": 61,
+        "precision": 0.863
+       },
+       "ood": {
+        "kept": 11,
+        "n": 21,
+        "precision": 0.727
+       },
+       "tau": 0.8
+      },
+      {
+       "all": {
+        "kept": 49,
+        "n": 61,
+        "precision": 0.898
+       },
+       "ood": {
+        "kept": 9,
+        "n": 21,
+        "precision": 0.889
+       },
+       "tau": 0.85
+      },
+      {
+       "all": {
+        "kept": 46,
+        "n": 61,
+        "precision": 0.913
+       },
+       "ood": {
+        "kept": 7,
+        "n": 21,
+        "precision": 1.0
+       },
+       "tau": 0.9
+      },
+      {
+       "all": {
+        "kept": 25,
+        "n": 61,
+        "precision": 0.96
+       },
+       "ood": {
+        "kept": 1,
+        "n": 21,
+        "precision": 1.0
+       },
+       "tau": 0.95
+      }
+     ],
+     "predicted": 61,
+     "tau": null
+    }
+   },
+   "coir-stackoverflow-qa": {
+    "accuracy": 0.583,
+    "macro_f1": 0.457,
+    "n": 60
+   },
+   "held-repo": {
+    "accuracy": 0.79,
+    "macro_f1": 0.727,
+    "n": 200
+   },
+   "in_domain": {
+    "accuracy": 0.958,
+    "macro_f1": 0.768,
+    "n": 120
+   },
+   "judge": "dispositio:C:/Users/LEGION/kev/runs/s1-v1.4",
+   "ms_per_passage": 84.5,
+   "out_of_domain": {
+    "accuracy": 0.742,
+    "macro_f1": 0.658,
     "n": 260
    },
    "scifact": {
@@ -2484,6 +4434,12 @@
    "set": "md2d",
    "tag": "s1-v1.3"
   },
+  "s1-v1.4/md2d": {
+   "exact_line@1": 0.552,
+   "n": 453,
+   "set": "md2d",
+   "tag": "s1-v1.4"
+  },
   "s1-v1/md2d": {
    "exact_line@1": 0.603,
    "n": 453,
@@ -2760,6 +4716,69 @@
    "tokens_max": 1280,
    "tokens_median": 1174,
    "top_line_owner_passage@1": "11/13"
+  },
+  "s1-v1.4/md2d": {
+   "answer_absent_queries": 160,
+   "bm25@1": 0.375,
+   "exists_auc": 0.698,
+   "exists_auc_answer_absent": 0.82,
+   "exists_auc_answer_absent_pmax": null,
+   "exists_auc_pmax": null,
+   "exists_neg_median": 0.1936,
+   "exists_pos_median": 0.432,
+   "gold_in_pool": 453,
+   "latency_ms_median": 169.3,
+   "latency_ms_p90": 228.4,
+   "passage@1": 0.664,
+   "passage@1_pmax": null,
+   "queries": 613,
+   "set": "md2d",
+   "tag": "s1-v1.4",
+   "tokens_max": 5652,
+   "tokens_median": 3270,
+   "top_line_owner_passage@1": "287/453"
+  },
+  "s1-v1.4/techqa": {
+   "answer_absent_queries": 32,
+   "bm25@1": 0.149,
+   "exists_auc": 0.653,
+   "exists_auc_answer_absent": 0.875,
+   "exists_auc_answer_absent_pmax": null,
+   "exists_auc_pmax": null,
+   "exists_neg_median": 0.1459,
+   "exists_pos_median": 0.5104,
+   "gold_in_pool": 87,
+   "latency_ms_median": 378.6,
+   "latency_ms_p90": 479.0,
+   "passage@1": 0.345,
+   "passage@1_pmax": null,
+   "queries": 119,
+   "set": "techqa",
+   "tag": "s1-v1.4",
+   "tokens_max": 9475,
+   "tokens_median": 6480,
+   "top_line_owner_passage@1": "27/87"
+  },
+  "s1-v1.4/webshop": {
+   "answer_absent_queries": 0,
+   "bm25@1": 0.462,
+   "exists_auc": 0.775,
+   "exists_auc_answer_absent": null,
+   "exists_auc_answer_absent_pmax": null,
+   "exists_auc_pmax": null,
+   "exists_neg_median": 0.0935,
+   "exists_pos_median": 0.8662,
+   "gold_in_pool": 13,
+   "latency_ms_median": 72.3,
+   "latency_ms_p90": 112.2,
+   "passage@1": 0.846,
+   "passage@1_pmax": null,
+   "queries": 13,
+   "set": "webshop",
+   "tag": "s1-v1.4",
+   "tokens_max": 1280,
+   "tokens_median": 1174,
+   "top_line_owner_passage@1": "12/13"
   },
   "s1-v1/md2d": {
    "answer_absent_queries": 160,

@@ -351,6 +351,19 @@ def test_a_passes_ranker_reads_what_widening_added(tmp_path, capsys):
     assert len(ranker.read) == 2 and len(ranker.read[1]) <= 15   # the pool, then one final with the named file
 
 
+def test_a_law_section_without_blank_lines_is_cut_at_its_clauses():
+    from inventio.ingest import MAX_CHARS, chunk_markdown
+
+    items = [f"{c}) Người sử dụng lao động phải thông báo bằng văn bản cho người lao động trước {n} ngày làm việc;"
+             for n in range(3) for c in "abcdđeghik"]
+    text = "# Điều 36. Quyền đơn phương chấm dứt hợp đồng\n\n1. Trong các trường hợp sau:\n" + "\n".join(items) + "\n"
+    chunks = chunk_markdown(text)
+    assert len(chunks) > 1
+    assert all(len(c.text) < MAX_CHARS + 200 for c in chunks)   # a clause past the size, not 2 x MAX_CHARS
+    assert all(c.text.split("\n")[0][1] == ")" for c in chunks[1:])   # each piece starts at a clause
+    assert [c.start_line for c in chunks[1:]] == [c.end_line + 1 for c in chunks[:-1]]   # no line lost
+
+
 def test_vietnamese_query_matches_words_not_scattered_syllables(tmp_path, capsys):
     from inventio.search import bm25
     from inventio.store import connect

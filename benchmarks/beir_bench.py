@@ -181,7 +181,8 @@ def run_widen(con, args, queries, qrels, safe, out_dir, summary) -> None:
     scope = Scope.only([args.dataset])
     for rname in args.rankers.split(","):
         ranker, rname = make_ranker(rname), tag(rname)
-        key = f"{rname}@pool{args.pool}" + (f"@first{args.limit}" if args.limit else "")
+        key = (f"{rname}@pool{args.pool}" + ("+neighbours" if args.neighbours else "")
+               + (f"@first{args.limit}" if args.limit else ""))
         arms = ("base", "widened", "control")
         nd, rec, secs, came = ({a: [] for a in arms}, {a: [] for a in arms}, {a: 0.0 for a in arms}, 0)
         with (out_dir / f"widen-{key}.jsonl").open("w", encoding="utf-8") as rf:
@@ -198,7 +199,8 @@ def run_widen(con, args, queries, qrels, safe, out_dir, summary) -> None:
                             hits.sort(key=rank_key)
                     else:
                         hits = search(con, q, k=10_000, pool=args.pool, ranker=ranker, symbols=on,
-                                      expand_links=on and ranker is not None, neighbours=on and ranker is not None,
+                                      expand_links=on and ranker is not None,
+                                      neighbours=on and ranker is not None and args.neighbours,
                                       scope=scope)
                     secs[arm] += time.time() - t
                     ranked = list(dict.fromkeys(safe[Path(h.path).stem] for h in hits))
@@ -241,7 +243,10 @@ def main() -> int:
                     help="with --arms: also `about` (judged links only) and `mlt` (the same candidates unjudged)")
     ap.add_argument("--widen", action="store_true",
                     help="through inventio's own search(), as `inventio query` runs: `base` (BM25's pool alone) "
-                         "against `widened` (plus named files, links and neighbours, read by the ranker)")
+                         "against `widened` (plus named files and links, read by the ranker)")
+    ap.add_argument("--neighbours", action="store_true",
+                    help="with --widen: the widened arm also adds neighbours, as `inventio query --neighbours` "
+                         "(off by default, like the query path; the rows of 2026-09-28 before this flag had them)")
     args = ap.parse_args()
     ds = data_dir(args.data) / "beir" / args.dataset
     out_dir = RESULTS / f"beir-{args.dataset}"

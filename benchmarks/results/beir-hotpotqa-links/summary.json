@@ -1,0 +1,121 @@
+{
+  "widen": {
+    "dispositio@v4@pool15@first300": {
+      "queries": 300,
+      "base": {
+        "ndcg@10": 0.7592,
+        "recall@10": 0.8,
+        "sec_per_query": 0.453
+      },
+      "widened": {
+        "ndcg@10": 0.8459,
+        "recall@10": 0.925,
+        "sec_per_query": 0.551
+      },
+      "control": {
+        "ndcg@10": 0.7647,
+        "recall@10": 0.8117,
+        "sec_per_query": 0.559
+      },
+      "widened_vs_base": {
+        "wins": 99,
+        "losses": 33,
+        "ties": 168,
+        "mean_diff": 0.0867,
+        "ci95": [
+          0.0662,
+          0.1068
+        ]
+      },
+      "widened_vs_control": {
+        "wins": 99,
+        "losses": 36,
+        "ties": 165,
+        "mean_diff": 0.0812,
+        "ci95": [
+          0.0608,
+          0.1026
+        ]
+      },
+      "queries_with_an_answer_via_widening_in_top10": 79
+    },
+    "none@pool15@first300": {
+      "queries": 300,
+      "base": {
+        "ndcg@10": 0.7182,
+        "recall@10": 0.7717,
+        "sec_per_query": 0.108
+      },
+      "widened": {
+        "ndcg@10": 0.7182,
+        "recall@10": 0.7717,
+        "sec_per_query": 0.109
+      },
+      "control": {
+        "ndcg@10": 0.7182,
+        "recall@10": 0.7717,
+        "sec_per_query": 0.107
+      },
+      "widened_vs_base": {
+        "wins": 0,
+        "losses": 0,
+        "ties": 300,
+        "mean_diff": 0.0,
+        "ci95": [
+          0.0,
+          0.0
+        ]
+      },
+      "widened_vs_control": {
+        "wins": 0,
+        "losses": 0,
+        "ties": 300,
+        "mean_diff": 0.0,
+        "ci95": [
+          0.0,
+          0.0
+        ]
+      },
+      "queries_with_an_answer_via_widening_in_top10": 0
+    },
+    "s1-v1.4@pool15@first300": {
+      "queries": 300,
+      "base": {
+        "ndcg@10": 0.7994,
+        "recall@10": 0.8033,
+        "sec_per_query": 0.36
+      },
+      "widened": {
+        "ndcg@10": 0.8998,
+        "recall@10": 0.9317,
+        "sec_per_query": 0.526
+      },
+      "control": {
+        "ndcg@10": 0.815,
+        "recall@10": 0.8183,
+        "sec_per_query": 0.531
+      },
+      "widened_vs_base": {
+        "wins": 97,
+        "losses": 22,
+        "ties": 181,
+        "mean_diff": 0.1003,
+        "ci95": [
+          0.0799,
+          0.1208
+        ]
+      },
+      "widened_vs_control": {
+        "wins": 86,
+        "losses": 26,
+        "ties": 188,
+        "mean_diff": 0.0848,
+        "ci95": [
+          0.0644,
+          0.1075
+        ]
+      },
+      "queries_with_an_answer_via_widening_in_top10": 82
+    }
+  }
+}

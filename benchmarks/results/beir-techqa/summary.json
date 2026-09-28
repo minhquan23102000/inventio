@@ -157,6 +157,45 @@
         ]
       },
       "queries_with_an_answer_via_widening_in_top10": 8
+    },
+    "s1-v1.4@pool15+neighbours@first200": {
+      "queries": 119,
+      "base": {
+        "ndcg@10": 0.4782,
+        "recall@10": 0.7143,
+        "sec_per_query": 0.635
+      },
+      "widened": {
+        "ndcg@10": 0.4671,
+        "recall@10": 0.7563,
+        "sec_per_query": 1.112
+      },
+      "control": {
+        "ndcg@10": 0.4759,
+        "recall@10": 0.7227,
+        "sec_per_query": 1.082
+      },
+      "widened_vs_base": {
+        "wins": 17,
+        "losses": 26,
+        "ties": 76,
+        "mean_diff": -0.0111,
+        "ci95": [
+          -0.0461,
+          0.0265
+        ]
+      },
+      "widened_vs_control": {
+        "wins": 17,
+        "losses": 25,
+        "ties": 77,
+        "mean_diff": -0.0088,
+        "ci95": [
+          -0.0434,
+          0.0226
+        ]
+      },
+      "queries_with_an_answer_via_widening_in_top10": 7
     }
   }
 }

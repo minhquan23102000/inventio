@@ -401,16 +401,28 @@ order: on MultiDoc2Dial its AUC is 0.805 as BM25 ranks the passages, 0.793 shuff
 ```
 
 The ranker reads BM25's best 15 chunks (`--pool`) in one pass, then up to 7 of the chunks the question
-names, the top hits link to and share distinctive words with, in a final beside the best 8 of the first
-pass. A state longer than the 6,656 tokens it was trained
-on drops passages from the tail. `--pool 30` reads 30 as two heats of 15 and a final over the best 8
+names and the top hits link to, in a final beside the best 8 of the first pass (`--neighbours` adds the
+chunks that share their most distinctive words). A pool longer than 26,000 characters, about the 6,656
+tokens the model was trained on, drops passages from the tail. `--pool 30` reads 30 as two heats of 15 and a final over the best 8
 and 7 (4 and 4 when widening takes 7 seats; a pass's probabilities share its pool, so two passes cannot be merged by score), about three
 times as long; it reaches the answers BM25 puts at ranks 16-30 (MultiDoc2Dial 0.606 -> 0.640,
 SWE-bench Lite code 0.599 -> 0.643, see [Benchmarks](#benchmarks)). On 40 questions over a private wiki, ticket tracker and two repositories, 15 found as many
 answers as 30 and 10 lost some.
 
+**v5 against v4** (v5 is v4 trained further on HotpotQA link-following states and Vietnamese law;
+paired per question, bootstrap 95%; the model card has the rest):
+
+| | v4 | **v5** |
+|---|---|---|
+| HotpotQA bridge questions (300), nDCG@10 with the linked pages read (BM25 alone 0.718) | 0.846 | **0.900** (+0.054 [+0.040, +0.069]) |
+| Zalo legal (200), nDCG@10, BM25's 15 | 0.818 | 0.832 (+0.014 [−0.005, +0.033]) |
+| MultiDoc2Dial: the passage that answers ranked first (453) | 0.638 | 0.664 (+0.027 [−0.004, +0.057]) |
+| TechQA, never trained on (87) | 0.322 | 0.345 (+0.023 [−0.058, +0.103]) |
+| examples/webshop, 13 on-call questions | 9/13 | **11/13** |
+| Category judge, held-out passages (380): accuracy / macro-F1 | 0.811 / 0.769 | 0.811 / 0.774 |
+
 **v4 against v3** (v3: the per-passage [Laya](https://github.com/NandhaKishorM/laya) model, 144M,
-still fetchable as revision `v3` of the model repository; `main` carries v3's files with v4's card). Same pools of 15, one pass per question:
+still fetchable as revision `v3` of the model repository; `main` carries v3's files). Same pools of 15, one pass per question:
 
 | | v3 | **v4** |
 |---|---|---|
@@ -518,17 +530,18 @@ extra passes, measured per set on the laptop.
 - Filtering by a connector's fields needs mirrors written by this version: the first `sync`
   after upgrading fetches every Confluence page and Jira ticket once more.
 - Text inside images, diagrams and attached files is not read.
-- dispositio v4 puts the right passage first for 9 of the 13 questions of examples/webshop (v4's
-  previous training run: 11): asked which date a backup taken the next morning gets, it points at
-  `from datetime import timedelta`. How well it carries to a team's own documents is measured on
-  those 13 and on 40 private questions only.
+- dispositio v5 puts the right passage first for 11 of the 13 questions of examples/webshop (v4: 9).
+  How well it carries to a team's own documents is measured on those 13 and on 40 private questions
+  only.
 - `about` links need a judge of "are these two passages about the same thing". dispositio was
   not trained for it and links almost nothing (2 pairs of 30,517 on SciFact); the earlier Laya model
   linked nearly every pair. They are not printed under results; `show` lists them as judged.
 - On SWE-bench Lite (300 issues, code and docs, pool 15) the files and definitions a question names
   add +0.074 nDCG@10 [+0.048, +0.102]; the links their top hits carry add +0.007 [−0.015, +0.030],
-  and the shared-word neighbours −0.011 [−0.029, +0.007] for 0.5 s more a query. What links add on a
-  real wiki, tracker and repository is not measured yet.
+  and the shared-word neighbours −0.011 [−0.029, +0.007] for 0.5 s more a query. On HotpotQA bridge
+  questions, where the answer page is one a first page links to, reading the linked pages adds
+  +0.100 [+0.080, +0.121] with v5. What links add on a real wiki, tracker and repository is not
+  measured yet.
 - The categories above are new. Whether `--facts` with them finds answers a same-size BM25 pool
   does not is not measured yet; the earlier measurement, with schema.org types, is in
   [benchmarks/README.md](benchmarks/README.md#categories-and-fact-links---arms).

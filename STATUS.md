@@ -6,7 +6,8 @@ Where the work stands, for picking it up on another machine. Last updated 2026-0
 
 - **Published:** `minhquan2310/dispositio@v4` (tag and branch `v4`; `main` there keeps v3's files so an older inventio still loads, with v4's card and a note on top; v3's own card and files at tag `v3`). Merged bf16
   weights of run `s1-v1.3` (Kev 0.8B + LoRA, 2 epochs, 1,838 steps, 6.2 h on the 5070), card = the
-  export's README.md. `DEFAULT_MODEL` points at it; a fresh download loads and scores (below).
+  export's README.md. v5 (run `s1-v1.4`, see Links 8) is tag `v5` since 2026-09-28 and `DEFAULT_MODEL`
+  points at it; v4 stays fetchable at `@v4`.
 - **One model for everything local:** ranker (`--ranker dispositio`, the default once `[dispositio]` is
   installed), `facts` judge, `--types` head. Laya code, the `laya` extra, `finetune_laya.py`,
   `probe_model.py`, `synth_data.py` and the Laya `publish.py` are gone (they live at `d4214f2`).
@@ -62,10 +63,47 @@ Where the work stands, for picking it up on another machine. Last updated 2026-0
   6. *Order inside the state (v1.3, md2d, 453 answerable):* passage@1 BM25 order 0.638, shuffled 0.627,
      reversed 0.607; `exists` AUC (answer-absent) 0.805 / 0.793 / 0.688. Where-passage reads content; the
      exists head leans on BM25's order, so "not in the map" is weaker than 0.805 says when order is off.
+  7. *Links on a map where the answer needs one (HotpotQA bridge, dev, 300 queries, pool 15, v4, no
+     training for it; `data.py hotpotqa`, `beir_bench.py hotpotqa-links --widen`).* The map is the 66,581
+     dev paragraphs, each a page whose first mention of another page's title is a Markdown link (a proxy
+     for Wikipedia's own links, drawn as `citation`: 75,124). nDCG@10: BM25 alone 0.718, v4 on BM25's 15
+     0.759, v4 with links read 0.846, control (BM25's next 7 in the same extra pass) 0.765. Widened vs
+     control +0.081 [+0.061, +0.103], 99 wins / 36 losses; recall@10 0.812 → 0.925; 79 queries got an
+     answer into the top 10 through a link; +0.10 s/query. Without a ranker the widened chunks sit below
+     BM25 and change nothing (0.718 = 0.718). The link path works where links exist; the lineage is Asai
+     et al., ICLR 2020 (arXiv:1911.10470): the second page "often has little lexical or semantic
+     relationship to the question".
+  8. *v1.4 (2026-09-28, Modal H100, 57 min, $3.80):* a delta from `s1-v1.3`, 1 epoch over 4,718 records
+     (`train_bal1600-0-v14delta+judge600.jsonl`: HotpotQA train bridge 1,603 incl. final-pass states with
+     link-added chunks, MultiDoc2Dial 1,188, Zalo train 1,327, 600 judge replay; only 28% of Zalo records
+     fit the 6,656 cap). Launcher `benchmarks/modal_train.py` (`--init-from`, `--batch 8`), flags shared
+     with the laptop in `benchmarks/recipe.py`. Paired against v4, same queries, nDCG@10: HotpotQA-links
+     base +0.040 [+0.028, +0.053], widened +0.054 [+0.040, +0.069] (0.846 → 0.900); Zalo base +0.014
+     [−0.005, +0.033], widened +0.032 [+0.011, +0.055]; SciFact, MD2D, TechQA inside ±0.02 with CIs across
+     0 (TechQA widened −0.017 [−0.041, +0.005]). Those four were run with neighbours on, to pair with v4's
+     rows written before neighbours went off. Judge 380 held-out: 0.811 / 0.774 (v4 0.811 / 0.769).
+     Card gates vs v1.3 (`systemone.py score`): md2d passage@1 0.664 vs 0.638 (+0.027 [−0.004, +0.057]),
+     techqa 0.345 vs 0.322, webshop 11/13 vs 9/13; exists answer-absent md2d 0.820 (0.805), techqa 0.875
+     (0.895). Export check: 5 argmax flips of 60 pools. **Published 2026-09-28 as `dispositio@v5`**
+     (tag and branch `v5`, export `kev/runs/s1-v1.4-full`, card = its README.md); `DEFAULT_MODEL` → v5.
+  9. *Zalo states run past the cap (2026-09-28, v4, 200 test queries):* BM25's 15 median 8,413 tokens
+     (MD2D 2,680), 157/200 over 6,656; at 26,000 chars the old pass dropped 504 tail passages and the answer
+     with them on 23 queries. Causes: sections cut only at blank lines (law writes `1.`, `a)` with none, so
+     pieces reached 2 x 1,500 chars) and Vietnamese at 3.65 chars/token (English 4.61). D1: prose also
+     cuts before a list item or clause (`ingest.LIST_ITEM`), Zalo 67,470 → 82,955 chunks, chunks over 2,000
+     chars 13,932 → 1,792. D2: an overlong pool is read in heats plus a final instead of dropping its tail.
+     Base arm vs the old code: D2 alone −0.003 [−0.020, +0.013] at 1.05 → 1.71 s/query; D1+D2 +0.011
+     [−0.010, +0.035] at 1.35 s; D1 alone 0.8307 vs 0.8185 at 1.12 s (rows lost, no CI); SciFact D2 +0.005
+     [−0.004, +0.018] at 0.52 → 0.80 s. No arm clears noise; D2 buys nothing for its time. Zero's call:
+     D2 dropped, D1 kept (maps need a re-index to get the clause cuts).
   Neighbours off by default since 2026-09-28 (Zero's call: SWE non-inferior, −0.47 s; BEIR not measured
-  without them; Zalo paid 1.7-2.4 s). Still open: the index-time `about` question (D3). A relation model waits on
-  labels: ~60 pairs he double-labels, then a labelled eval set; train only if a (kind R, kind T, link kind)
-  table covers < 70% of agreed relations. Modal: $10.25 of $30 as of 2026-09-27; nothing spent 2026-09-28.
+  without them; Zalo paid 1.7-2.4 s). D3 closed (Zero, 2026-09-28): the index-time `about` question stays.
+  D2 (Zero, 2026-09-28: model calls allowed): a relation model is measured against human-written link
+  types first — the Public Jira Dataset (Montgomery, Lüders, Maalej, MSR 2022; Zenodo 15719919,
+  CC-BY-4.0; 16 Jiras, ~1M issue links, 75 types grouped into 5 by Lüders et al. 2022,
+  arXiv:2204.12893) — and a judge's labels count only after agreeing with those. Train only if a
+  (kind R, kind T, link kind) table covers < 70% of agreed relations. Jev labels are measurement only
+  (MCA 2.3(b)), never training data. Modal: $10.25 of $30 as of 2026-09-27; nothing spent 2026-09-28.
   **Mac run sheet** (`~/demo`): `git pull`, `uv run inventio sync` (rebuilds links, URL citations
   included); per stratum (12 hand-written, 28 link-made) `uv run inventio bench <file> --ranker dispositio
   --rows rows-<arm>.jsonl` with arms default (names + links) / `--neighbours` / `--no-links`; the rows

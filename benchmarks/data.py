@@ -6,6 +6,7 @@
     python benchmarks/data.py multidoc2dial          # US public-service pages: rules and procedures
     python benchmarks/data.py techqa                 # IBM technotes: support questions, fixes and procedures
     python benchmarks/data.py swe-lite               # SWE-bench Lite + one clone per repo
+    python benchmarks/data.py hotpotqa [train]       # HotpotQA bridge questions over a linked mini-wiki
 
 Everything lands under the data directory (default `<user cache>/inventio/bench`, override with
 `--data` or INVENTIO_BENCH_DATA), never inside this repository: the SWE-bench clones alone are
@@ -17,6 +18,7 @@ Layouts:
   beir/zalo-legal/        the same format, from GreenNode/zalo-ai-legal-text-retrieval-vn
   beir/multidoc2dial/     the same format, one document per section of a MultiDoc2Dial page
   beir/techqa/            the same format, from illuin-conteb/tech-qa (test only)
+  beir/hotpotqa-links/    the same format, dev bridge questions; text carries Markdown links
   swe-lite/lite.jsonl     instance_id, repo, base_commit, patch, problem_statement
   swe-lite/<owner>__<repo>/  bare-enough clone of the github.com/swe-bench mirror
 """
@@ -238,6 +240,120 @@ def fetch_techqa(root: Path) -> Path:
     return dest
 
 
+HOTPOT_TRAIN_QUESTIONS = 4000   # bridge questions drawn from train (seed 0); their contexts are the train map
+
+
+def fetch_hotpotqa(root: Path, split: str = "dev") -> Path:
+    """HotpotQA (Yang et al. 2018, CC BY-SA 4.0), distractor dev set from hotpotqa/hotpot_qa: the one
+    public set where answering needs a link. A bridge question names page A; its answer is on page B,
+    which A mentions and the question does not (Asai et al. 2020: that page "often has little lexical or
+    semantic relationship to the question"). The corpus is every paragraph of the 7,405 dev questions'
+    contexts (66,581 pages, gold and distractors alike), one Markdown file per page, and the queries are
+    the 5,918 bridge questions, both supporting pages relevant as in BEIR's HotpotQA.
+
+    The Hugging Face copy has no hyperlinks, so the links are drawn back the way a wiki writes them: the
+    first mention of another page's title (without its parenthesis, "Ed Wood (film)" -> "Ed Wood") becomes
+    a Markdown link to that page. A title named by more than LINK_MAX_PAGES pages is vocabulary, not a
+    link, and a surface shared by several titles links only the page titled exactly that. It is a proxy
+    for Wikipedia's own links, drawn by code as inventio draws `citation`; `queries.jsonl` records for
+    each question which page links to which (`bridge`) and whether that link was drawn.
+
+    `split="train"` builds the same shape from HOTPOT_TRAIN_QUESTIONS bridge questions of the train set
+    (qrels/train.tsv, beir/hotpotqa-train-links), for training; no dev page or question is in it."""
+    from huggingface_hub import hf_hub_download
+    import pandas as pd
+    import random
+
+    train = split == "train"
+    dest = root / "beir" / ("hotpotqa-train-links" if train else "hotpotqa-links")
+    qrels_file = dest / "qrels" / ("train.tsv" if train else "test.tsv")
+    if qrels_file.exists():
+        return dest
+    (dest / "qrels").mkdir(parents=True, exist_ok=True)
+    files = ([f"distractor/train-0000{i}-of-00002.parquet" for i in (0, 1)] if train
+             else ["distractor/validation-00000-of-00001.parquet"])
+    rows = [r for f in files for r in pd.read_parquet(hf_hub_download("hotpotqa/hotpot_qa", f, repo_type="dataset")).to_dict("records")]
+    if train:
+        bridge = [r for r in rows if r["type"] == "bridge" and len(set(r["supporting_facts"]["title"])) == 2]
+        rows = random.Random(0).sample(bridge, HOTPOT_TRAIN_QUESTIONS)
+    text, pid = {}, {}
+    for r in rows:
+        for t, sents in zip(r["context"]["title"], r["context"]["sentences"]):
+            if t not in pid:
+                pid[t] = f"p{len(pid)}"
+                text[t] = "".join(sents).strip()
+    links = link_titles(text, pid)
+    with (dest / "corpus.jsonl").open("w", encoding="utf-8") as f:
+        for t, p in pid.items():
+            f.write(json.dumps({"_id": p, "title": t, "text": links[t][0]}, ensure_ascii=False) + "\n")
+    qrels = []
+    with (dest / "queries.jsonl").open("w", encoding="utf-8") as f:
+        for i, r in enumerate(rows):
+            gold = list(dict.fromkeys(r["supporting_facts"]["title"]))
+            if r["type"] != "bridge" or len(gold) != 2:
+                continue
+            a, b = gold
+            src, dst = (a, b) if b in links[a][1] else (b, a) if a in links[b][1] else (a, b)
+            f.write(json.dumps({"_id": r["id"], "text": r["question"], "answer": r["answer"],
+                                "bridge": {"from": pid[src], "to": pid[dst], "linked": dst in links[src][1]}},
+                               ensure_ascii=False) + "\n")
+            qrels += [(r["id"], pid[a], 1), (r["id"], pid[b], 1)]
+    write_qrels(qrels_file, qrels)
+    return dest
+
+
+LINK_MAX_PAGES = 50   # a title mentioned by more pages than this is vocabulary ("United States"), not a link
+
+
+def link_titles(text: dict[str, str], pid: dict[str, str]) -> dict[str, tuple[str, set[str]]]:
+    """Each page's text with its first mention of every other page's title made a Markdown link, and the
+    titles it links (see fetch_hotpotqa)."""
+    word = re.compile(r"\w+")
+    surface = lambda t: re.sub(r"\s*\([^)]*\)$", "", t).strip()  # noqa: E731
+    by_surface: dict[tuple, list[str]] = {}
+    for t in text:
+        key = tuple(word.findall(surface(t)))
+        if key and max(map(len, key)) >= 3:
+            by_surface.setdefault(key, []).append(t)
+    target = {}
+    for key, ts in by_surface.items():
+        exact = [t for t in ts if t == " ".join(key) or t == surface(t) and len(ts) == 1]
+        if len(ts) == 1 or exact:
+            target[key] = (exact or ts)[0]
+    longest = max(map(len, target))
+
+    def mentions(t):
+        toks = list(word.finditer(text[t]))
+        out, i = [], 0
+        while i < len(toks):
+            for n in range(min(longest, len(toks) - i), 0, -1):
+                key = tuple(m.group() for m in toks[i:i + n])
+                if key in target and target[key] != t:
+                    out.append((toks[i].start(), toks[i + n - 1].end(), target[key]))
+                    i += n
+                    break
+            else:
+                i += 1
+        return out
+
+    found = {t: mentions(t) for t in text}
+    pages = {}
+    for ms in found.values():
+        for dst in {m[2] for m in ms}:
+            pages[dst] = pages.get(dst, 0) + 1
+    out = {}
+    for t, ms in found.items():
+        s, seen, cut, parts = text[t], set(), 0, []
+        for a, b, dst in ms:
+            if dst in seen or pages[dst] > LINK_MAX_PAGES:
+                continue
+            seen.add(dst)
+            parts += [s[cut:a], f"[{s[a:b]}]({pid[dst]}.md)"]
+            cut = b
+        out[t] = ("".join(parts) + s[cut:], seen)
+    return out
+
+
 def fetch_swe_lite(root: Path) -> Path:
     dest = root / "swe-lite"
     dest.mkdir(parents=True, exist_ok=True)
@@ -261,7 +377,7 @@ def fetch_swe_lite(root: Path) -> Path:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("kind", choices=["beir", "coir", "zalo", "multidoc2dial", "techqa", "swe-lite"])
+    ap.add_argument("kind", choices=["beir", "coir", "zalo", "multidoc2dial", "techqa", "swe-lite", "hotpotqa"])
     ap.add_argument("name", nargs="?", help="dataset name for beir / coir")
     ap.add_argument("--data", help="data directory (default: user cache)")
     args = ap.parse_args()
@@ -270,7 +386,8 @@ def main() -> int:
         ap.error(f"{args.kind} needs a dataset name")
     out = {"beir": lambda: fetch_beir(args.name, root), "coir": lambda: fetch_coir(args.name, root),
            "zalo": lambda: fetch_zalo(root), "multidoc2dial": lambda: fetch_multidoc2dial(root),
-           "techqa": lambda: fetch_techqa(root), "swe-lite": lambda: fetch_swe_lite(root)}[args.kind]()
+           "techqa": lambda: fetch_techqa(root), "swe-lite": lambda: fetch_swe_lite(root),
+           "hotpotqa": lambda: fetch_hotpotqa(root, args.name or "dev")}[args.kind]()
     print(out)
     return 0
 

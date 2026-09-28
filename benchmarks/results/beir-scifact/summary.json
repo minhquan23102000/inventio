@@ -548,6 +548,45 @@
         ]
       },
       "queries_with_an_answer_via_widening_in_top10": 6
+    },
+    "s1-v1.4@pool15+neighbours@first200": {
+      "queries": 200,
+      "base": {
+        "ndcg@10": 0.7398,
+        "recall@10": 0.8409,
+        "sec_per_query": 0.52
+      },
+      "widened": {
+        "ndcg@10": 0.749,
+        "recall@10": 0.852,
+        "sec_per_query": 0.971
+      },
+      "control": {
+        "ndcg@10": 0.7411,
+        "recall@10": 0.8536,
+        "sec_per_query": 0.918
+      },
+      "widened_vs_base": {
+        "wins": 19,
+        "losses": 20,
+        "ties": 161,
+        "mean_diff": 0.0092,
+        "ci95": [
+          -0.0059,
+          0.0245
+        ]
+      },
+      "widened_vs_control": {
+        "wins": 22,
+        "losses": 18,
+        "ties": 160,
+        "mean_diff": 0.0079,
+        "ci95": [
+          -0.0102,
+          0.0255
+        ]
+      },
+      "queries_with_an_answer_via_widening_in_top10": 5
     }
   }
 }
