@@ -7,7 +7,8 @@ Where the work stands, for picking it up on another machine. Last updated 2026-0
 - **Published:** `minhquan2310/dispositio@v4` (tag and branch `v4`; `main` there keeps v3's files so an older inventio still loads, with v4's card and a note on top; v3's own card and files at tag `v3`). Merged bf16
   weights of run `s1-v1.3` (Kev 0.8B + LoRA, 2 epochs, 1,838 steps, 6.2 h on the 5070), card = the
   export's README.md. v5 (run `s1-v1.4`, see Links 8) is tag `v5` since 2026-09-28 and `DEFAULT_MODEL`
-  points at it; v4 stays fetchable at `@v4`.
+  points at it; v4 stays fetchable at `@v4`. PyPI `inventio 0.5.0` (tag `v0.5.0`) ships it; the Hub
+  `main` card describes v5 (its files stay v3).
 - **One model for everything local:** ranker (`--ranker dispositio`, the default once `[dispositio]` is
   installed), `facts` judge, `--types` head. Laya code, the `laya` extra, `finetune_laya.py`,
   `probe_model.py`, `synth_data.py` and the Laya `publish.py` are gone (they live at `d4214f2`).
