@@ -308,7 +308,7 @@ repository because they name internal documents.
 
   Kev-0.8B, time against questions on one 3.2k-token state: 1-4 questions ~150 ms, 16: 202 ms,
   64: 434 ms, 255: 1.33 s. Against state length (3 questions): 3.3k 168 ms, 9k 581 ms, 18k 1.31 s,
-  24k 1.98 s; ~36k fails on 8 GB. On Windows only with `%TEMP%/kev_serve_win.py`: torch's Windows
+  24k 1.98 s; ~36k fails on 8 GB. On Windows only through `benchmarks/kev_win.py`: torch's Windows
   wheels have no flash kernel, and SDPA's GQA path then takes the math kernel (O(L²) memory, OOM
   past ~8k tokens, twice the time at 3k). Zero-shot, `where` passage is BM25-level on MD2D and
   `exists` is weak; training on inventio's questions is the open step. Mac speed unmeasured.
@@ -437,7 +437,8 @@ repository because they name internal documents.
   dispositio's: each one reads the whole 15-passage state. "6%" is the share of the **loss weight**, not
   of the gradient, which was never measured. And the study re-spike reused the tag `s1-v1.1`, so
   `cmd_spike`'s `"w"` rewrote that tag's latency and token fields (the gated `top1`/`exists` fields are
-  untouched; the original summary is in `%TEMP%/s1-after.log`). Studies need their own tag.
+  untouched; the original summary was in `%TEMP%/s1-after.log`, deleted 2026-09-28 by a stray
+  `rm -f *` in %TEMP%, along with the leak probes `s1_*.py` and `fuse.py`). Studies need their own tag.
 - **The caveat line is off by default (2026-09-27).** `NOT_IN_MAP = 0.30` had no operating point behind
   it, and `exists` is calibrated per corpus (medians on answerable pools: md2d 0.447, techqa 0.232,
   webshop 0.377), so one number cannot hold a false-alarm rate across the three. The reading is kept in
