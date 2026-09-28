@@ -153,6 +153,11 @@ def md_refs(text: str, file_rel: str) -> list[tuple[str, str]]:
     for m in MD_LINK.finditer(text):
         target = m.group(1)
         if re.match(r"^[a-z][a-z0-9+.-]*:", target, re.I):  # http:, skill:, mailto: ...
+            # an absolute URL to something another source mirrors (a ticket linking a page, a page
+            # linking a ticket or a GitHub issue): kept whole, so links.py can resolve it against the
+            # URL the mirror recorded for that item. Other schemes (skill:, mailto:) name nothing.
+            if re.match(r"^https?:", target, re.I):
+                out.append((target, ""))
             continue
         path, _, anchor = target.partition("#")
         if not path:

@@ -17,7 +17,20 @@ from .search import bm25, rank_key, search, widen_by_facts
 
 
 def load(path: Path) -> list[dict]:
-    return [json.loads(l) for l in Path(path).read_text(encoding="utf-8").splitlines() if l.strip()]
+    """Rows as the bench file writes them. A row may already carry question/source/path/start_line/
+    end_line, or the shorter shape examples/webshop uses (`query`, and `answer` as
+    `source:path:line`); both become one mapping gold_rank can read."""
+    out = []
+    for line in Path(path).read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        r = json.loads(line)
+        if "answer" in r:
+            src, p, ln = r["answer"].split(":")
+            r = {**r, "question": r.get("question", r.get("query", "")), "source": src, "path": p,
+                 "start_line": int(ln), "end_line": int(ln)}
+        out.append(r)
+    return out
 
 
 def gold_rank(hits, g: dict) -> int | None:
@@ -29,11 +42,23 @@ def gold_rank(hits, g: dict) -> int | None:
 
 def run(con, rows: list[dict], ranker, *, pool: int = 30, expand_links: bool = False,
         by_type: bool = False, facts=None, symbols: bool = True, neighbours: bool = False, scope=None) -> dict:
-    ranks, t0 = [], time.time()
+    ranks, per_question, t0 = [], [], time.time()
     for g in rows:
+        q0 = time.time()
         hits = search(con, g["question"], k=10_000, pool=pool, ranker=ranker, expand_links=expand_links,
                       by_type=by_type, facts=facts, symbols=symbols, neighbours=neighbours, scope=scope)
-        ranks.append(gold_rank(hits, g))
+        rank = gold_rank(hits, g)
+        gold = hits[rank - 1] if rank else None
+        per_question.append({
+            "question": g["question"],
+            "gold": {k: g[k] for k in ("source", "path", "start_line", "end_line")},
+            "rank": rank,
+            "via": gold.via if gold else "",
+            "in_bm25": gold_rank(bm25(con, g["question"], pool, scope), g) is not None,
+            "seconds": round(time.time() - q0, 3),
+            "top10": [f"{h.source}:{h.coord}" for h in hits[:10]],
+        })
+        ranks.append(rank)
     n = len(rows)
     at = lambda k: sum(1 for r in ranks if r is not None and r <= k)
     return {
@@ -44,6 +69,7 @@ def run(con, rows: list[dict], ranker, *, pool: int = 30, expand_links: bool = F
         "top10": at(10),
         "sec_per_query": round((time.time() - t0) / max(n, 1), 3),
         "ranks": ranks,
+        "per_question": per_question,
     }
 
 

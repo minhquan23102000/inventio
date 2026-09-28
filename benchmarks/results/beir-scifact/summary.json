@@ -484,5 +484,70 @@
     "recall@30chunks": 0.8494,
     "sec_per_query": 0.583,
     "timed_queries": 300
+  },
+  "widen": {
+    "dispositio@v4@pool15@first20": {
+      "queries": 20,
+      "base": {
+        "ndcg@10": 0.7965,
+        "recall@10": 0.875,
+        "sec_per_query": 0.947
+      },
+      "widened": {
+        "ndcg@10": 0.8407,
+        "recall@10": 0.875,
+        "sec_per_query": 1.037
+      },
+      "widened_vs_base": {
+        "wins": 3,
+        "losses": 1,
+        "ties": 16,
+        "mean_diff": 0.0442,
+        "ci95": [
+          -0.0067,
+          0.1166
+        ]
+      },
+      "queries_with_an_answer_via_widening_in_top10": 0
+    },
+    "dispositio@v4@pool15@first200": {
+      "queries": 200,
+      "base": {
+        "ndcg@10": 0.7381,
+        "recall@10": 0.8409,
+        "sec_per_query": 0.536
+      },
+      "widened": {
+        "ndcg@10": 0.7429,
+        "recall@10": 0.8545,
+        "sec_per_query": 1.01
+      },
+      "control": {
+        "ndcg@10": 0.746,
+        "recall@10": 0.8501,
+        "sec_per_query": 0.965
+      },
+      "widened_vs_base": {
+        "wins": 22,
+        "losses": 20,
+        "ties": 158,
+        "mean_diff": 0.0048,
+        "ci95": [
+          -0.0116,
+          0.0211
+        ]
+      },
+      "widened_vs_control": {
+        "wins": 16,
+        "losses": 21,
+        "ties": 163,
+        "mean_diff": -0.0031,
+        "ci95": [
+          -0.0199,
+          0.0128
+        ]
+      },
+      "queries_with_an_answer_via_widening_in_top10": 6
+    }
   }
 }

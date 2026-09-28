@@ -5,6 +5,7 @@ import os
 import shutil
 import sys
 import time
+from collections import Counter
 from pathlib import Path
 
 from . import __version__
@@ -426,7 +427,7 @@ def cmd_query(args) -> int:
         return search(con, args.text, k=args.k, pool=args.pool, ranker=ranker,
                       expand_links=not args.no_links and ranker is not None,
                       by_type=args.types, facts=judge,
-                      symbols=not args.no_symbols, neighbours=not args.no_neighbours and ranker is not None,
+                      symbols=not args.no_symbols, neighbours=args.neighbours and ranker is not None,
                       scope=scope)
 
     try:
@@ -487,9 +488,9 @@ def cmd_query(args) -> int:
             url = web_url(h.root, h.path, h.heading_path)
             if url:
                 print(f"   {url}")
-            for l in h.links[:3]:
-                arrow = "->" if l["dir"] == "out" else "<-"
-                print(f"   {arrow} {l['rel']} {l['source']}:{l['coord']}  ({l['via']})")
+            for l in h.links[:3]:   # what the target is · what makes the link · where (search.name_link)
+                title = f"  {l['title']}" if l["title"] else ""
+                print(f"   -> {l['kind']} · {l['fact']} · {l['source']}:{l['coord']}{title}")
     return 0
 
 
@@ -510,14 +511,20 @@ def cmd_bench(args) -> int:
         else:
             res = bench.run(con, rows, ranker, pool=args.pool, expand_links=not args.no_links and ranker is not None,
                             by_type=args.types, facts=make_judge(args.judge) if args.facts else None,
-                            symbols=not args.no_symbols, neighbours=not args.no_neighbours and ranker is not None,
+                            symbols=not args.no_symbols, neighbours=args.neighbours and ranker is not None,
                             scope=scope)
     except (CloudRefused, Unreachable) as e:
         print(str(e), file=sys.stderr)
         return 3
     res["config"] = {"ranker": args.ranker, "links": not args.no_links and ranker is not None,
-                     "neighbours": not args.no_neighbours and ranker is not None, "types": args.types,
+                     "neighbours": args.neighbours and ranker is not None, "types": args.types,
                      "pool": args.pool, "arms": args.arms, "judge": args.judge if args.arms else None}
+    if args.rows and not args.arms:
+        # one row per question: what was asked, where the answer is, where it landed and how it got
+        # into the pool, decided by make_ranker's own runs
+        with open(args.rows, "w", encoding="utf-8") as f:
+            for r in res["per_question"]:
+                f.write(json.dumps(r) + "\n")
     if args.json:
         print(json.dumps(res))
     elif args.arms:
@@ -530,10 +537,13 @@ def cmd_bench(args) -> int:
         print(f"  facts vs control: {res['facts_vs_control']}")
     else:
         n = res["n"]
-        print(f"ranker={args.ranker} links={'on' if args.links else 'off'} types={'on' if args.types else 'off'} "
-              f"pool={args.pool}  n={n}")
+        print(f"ranker={args.ranker} links={'on' if res['config']['links'] else 'off'} "
+              f"types={'on' if args.types else 'off'} pool={args.pool}  n={n}")
         print(f"  in pool {res['in_pool']}/{n}  top-1 {res['top1']}/{n}  top-5 {res['top5']}/{n}  "
               f"top-10 {res['top10']}/{n}  {res['sec_per_query']}s/query")
+        counts = Counter(("bm25" if not r["via"] else r["via"].split(":", 1)[0])
+                         for r in res["per_question"] if r["rank"] and r["rank"] <= 10)
+        print("  top-10 gold came by: " + (", ".join(f"{k} {v}" for k, v in counts.most_common()) or "none"))
     return 0
 
 
@@ -689,9 +699,10 @@ there. Every command prints source:path:start-end coordinates that read and show
                        help="do not hand the ranker the chunks the top BM25 hits link to (on with a ranker)")
         s.add_argument("--no-symbols", action="store_true",
                        help="do not add the files and definitions the question names (on by default)")
-        s.add_argument("--no-neighbours", action="store_true",
-                       help="do not add the chunks of other files that share the most distinctive words of the "
-                            "top BM25 hits (on with a ranker: without one they would only sit below BM25's order)")
+        s.add_argument("--neighbours", action="store_true",
+                       help="also add the chunks of other files that share the most distinctive words of the top "
+                            "BM25 hits (needs a ranker; off by default: on SWE-bench Lite they did not help and "
+                            "cost ~0.5 s a query, 1.7-2.4 s on Vietnamese)")
         s.add_argument("--types", action="store_true",
                        help="ask the ranker which document types hold the answer and add BM25's best chunks "
                             "of those types to the pool (needs --ranker)")
@@ -731,6 +742,10 @@ there. Every command prints source:path:start-end coordinates that read and show
     s = sub.add_parser("bench", help="measure a configuration on questions with known answers")
     s.add_argument("file", help="JSON Lines: question, source, path, start_line, end_line")
     s.add_argument("--json", action="store_true")
+    s.add_argument("--rows", metavar="PATH",
+                   help="also write one JSON object per question: the question, its gold, the gold's rank "
+                        "and `via` (how it entered the pool), whether BM25's own pool held it, the seconds "
+                        "it took, and the top-10 coordinates")
     s.add_argument("--arms", action="store_true",
                    help="compare base BM25, BM25 + --facts, and BM25 with a pool as large as the facts one")
     ranking(s)

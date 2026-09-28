@@ -41,6 +41,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from data import data_dir  # noqa: E402
 from inventio.ingest import DOC_TYPES, ingest_source  # noqa: E402
 from inventio.rankers import make_ranker, ranker_tag  # noqa: E402
+from inventio.links import rebuild_links  # noqa: E402
 from inventio.scope import Scope  # noqa: E402
 from inventio.search import bm25, rank_key, scope_types, widen_by_symbols, widen_by_type  # noqa: E402
 from inventio.store import connect  # noqa: E402
@@ -48,6 +49,12 @@ from inventio.store import connect  # noqa: E402
 RESULTS = Path(__file__).resolve().parent / "results" / "swe-lite"
 TYPES_RESULTS = Path(__file__).resolve().parent / "results" / "swe-lite-types"
 STRAT_RESULTS = Path(__file__).resolve().parent / "results" / "swe-lite-strat"
+WIDEN_RESULTS = Path(__file__).resolve().parent / "results" / "swe-lite-widen"
+# --widen: inventio's own search(), as `inventio query` runs it at pool 15 with a ranker: what the question names,
+# the links the top hits carry and their shared-word neighbours, read in the extra pass beside the pool's best 8;
+# `control` gives those 7 seats to BM25's next 7 instead
+WIDEN_ARMS = {"base": {}, "symbols": {"symbols": True}, "symbols+links": {"symbols": True, "expand_links": True},
+              "widened": {"symbols": True, "expand_links": True, "neighbours": True}, "control": None}
 # --strat: widenings code decides, each against BM25 with as many candidates (ctl-*)
 STRAT_ARMS = ("base", "all", "ctl-all", "code", "ctl-code", "under", "ctl-under", "sym", "ctl-sym",
               "code+sym", "ctl-code+sym", "symfirst")
@@ -143,6 +150,30 @@ def ndcg10(ranked: list[str], gold: set[str]) -> float:
     return dcg / idcg if idcg else 0.0
 
 
+def widen_row(con, q, ranker, arm, gold, iid, variant, rname, st, t_index) -> dict:
+    """One WIDEN_ARMS arm through search() (never the score cache: a pass's probabilities depend on its pool)."""
+    from inventio.search import search
+    from inventio.systemone import MAX_PASSAGES
+
+    scope, t = Scope.only(["swe"]), time.time()
+    if WIDEN_ARMS[arm] is None:
+        hits = bm25(con, q, 15 + MAX_PASSAGES // 2, scope)
+        if ranker is not None:
+            for h, s in zip(hits, ranker.score(q, hits, 15)):
+                h.score = s
+            hits.sort(key=rank_key)
+    else:
+        kw = {"symbols": False, **WIDEN_ARMS[arm]}
+        hits = search(con, q, k=10_000, pool=15, ranker=ranker, scope=scope, **kw)
+    ranked = list(dict.fromkeys(h.path for h in hits))
+    via = sorted({h.via.split(":")[0] for h in hits[:10] if h.via and h.path in gold})
+    return {"iid": iid, "variant": variant, "ranker": rname, "arm": arm, "files": st["files"], "chunks": st["chunks"],
+            "gold": sorted(gold), "ranked": ranked[:10], "ndcg10": ndcg10(ranked, gold),
+            "top1": bool(ranked[:1] and ranked[0] in gold), "top5": bool(gold & set(ranked[:5])),
+            "in_pool": bool(gold & set(ranked)), "pool": len(hits), "gold_via": via,
+            "sec_index": round(t_index, 2), "sec_query": round(time.time() - t, 3)}
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--data", help="data directory (default: user cache)")
@@ -151,16 +182,18 @@ def main() -> int:
     ap.add_argument("--pool", type=int, default=30)
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--types", action="store_true", help="measure type widening: arms base, types, control")
+    ap.add_argument("--widen", action="store_true", help="measure the query path's widenings (WIDEN_ARMS), pool 15")
     ap.add_argument("--strat", action="store_true", help="measure widenings code decides (STRAT_ARMS)")
     ap.add_argument("--type-limit", type=int, default=None, help="chunks added per predicted type (default: --pool)")
     ap.add_argument("--type-predictor", default="typesafe",
                     help="the ranker whose type head predicts the types (--types): dispositio or typesafe")
     args = ap.parse_args()
     swe = data_dir(args.data) / "swe-lite"
-    out_dir = STRAT_RESULTS if args.strat else TYPES_RESULTS if args.types else RESULTS
+    out_dir = STRAT_RESULTS if args.strat else TYPES_RESULTS if args.types else WIDEN_RESULTS if args.widen else RESULTS
     out_dir.mkdir(parents=True, exist_ok=True)
-    arms = STRAT_ARMS if args.strat else ("base", "types", "control") if args.types else ("base",)
-    armed = args.types or args.strat
+    arms = (STRAT_ARMS if args.strat else ("base", "types", "control") if args.types
+            else tuple(WIDEN_ARMS) if args.widen else ("base",))
+    armed = args.types or args.strat or args.widen
     res_path, cache_path = out_dir / "results.jsonl", out_dir / "scores.jsonl"
     # an arm's rows belong to the type predictor that shaped its pool: types, and control (as large as types)
     pred = lambda r: r.get("predictor", "typesafe") if r.get("arm", "base") in ("types", "control") else "typesafe"  # noqa: E731
@@ -195,6 +228,16 @@ def main() -> int:
                 st = ingest_source(con, src, tree, True, [])
             t_index = time.time() - t
             q = inst["problem_statement"]
+            if args.widen:
+                with con:
+                    rebuild_links(con)
+                for rname, arm in todo:
+                    resf.write(json.dumps(widen_row(con, q, rankers[rname], arm, gold, iid, variant, rname, st, t_index))
+                               + "\n")
+                    resf.flush()
+                con.close()
+                print(f"{n}/{len(rows)} {iid}", flush=True)
+                continue
             t = time.time()
             pools = {"base": bm25(con, q, args.pool, Scope.only([src]))}
             t_bm25, added, probs = time.time() - t, [], {}

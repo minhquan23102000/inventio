@@ -133,7 +133,7 @@ class SystemOneRanker:
     """
 
     LOCAL = ("127.0.0.1", "localhost", "::1")
-    passes = True   # search hands it BM25's pool alone (search.search)
+    passes = True   # reads in passes of 15: search says how many leading hits are BM25's pool (search.search)
 
     def __init__(self, url: str | None = None, model: str = "jev-latest", timeout: float = 120,
                  run: str | None = None):
@@ -179,13 +179,16 @@ class SystemOneRanker:
         self._info = {"run": got, "temperature": info.get("temperature")}
         return self._info
 
-    def score(self, query: str, hits) -> list[float | None]:
-        """One pass for up to 15 hits. Past 15 (`query --pool 30`) the hits are read
-        in heats of 15, then a final over each heat's best (8 and 7 of two heats), because a pass's
-        probabilities share one pool and cannot be compared across passes; only the final's passages get a
-        score, the rest keep their place in BM25's order. Measured against the first 15 alone, same pools:
-        MultiDoc2Dial nDCG@10 0.596 -> 0.628, SWE-bench Lite code 0.599 -> 0.643, TechQA 0.467 -> 0.489,
-        SciFact and Zalo unchanged; each extra pass costs about what the first did."""
+    def score(self, query: str, hits, first: int | None = None) -> list[float | None]:
+        """One pass for up to 15 hits. Past 15, BM25's pool (the first `first` hits, default all) is read in
+        heats of 15, then a final over each heat's best, because a pass's probabilities share one pool and
+        cannot be compared across passes; only the final's passages get a score, the rest keep their place in
+        BM25's order. Pool 30 against the first 15 alone, same pools: MultiDoc2Dial nDCG@10 0.596 -> 0.628,
+        SWE-bench Lite code 0.599 -> 0.643, TechQA 0.467 -> 0.489, SciFact and Zalo unchanged.
+
+        Hits after the pool are what widening added (named files, links, neighbours): up to 7 of them take
+        seats in the final beside the heats' best 8, so a linked chunk is read against BM25's best at the
+        cost of one more pass. Each extra pass costs about what the first did."""
         from .systemone import MAX_PASSAGES
 
         if self.url and self.host not in self.LOCAL:
@@ -198,18 +201,21 @@ class SystemOneRanker:
                     f"{self.host}; restrict with --source, re-init them with --public, or serve it locally")
         if len(hits) <= MAX_PASSAGES:
             return self._pass(query, hits)
-        heats = [list(range(i, min(i + MAX_PASSAGES, len(hits)))) for i in range(0, len(hits), MAX_PASSAGES)]
+        first = min(first, len(hits)) if first else len(hits)
+        extra = list(range(first, len(hits)))[:MAX_PASSAGES // 2]
+        heats = [list(range(i, min(i + MAX_PASSAGES, first))) for i in range(0, first, MAX_PASSAGES)]
+        seats = MAX_PASSAGES - len(extra)
         best, dropped = [], 0
         for n, heat in enumerate(heats):
             ps = self._pass(query, [hits[i] for i in heat])
             dropped += self.last["dropped_passages"]
-            take = MAX_PASSAGES // len(heats) + (n < MAX_PASSAGES % len(heats))
+            take = seats // len(heats) + (n < seats % len(heats))
             best += sorted((i for i, p in zip(heat, ps) if p is not None), key=lambda i: -ps[i - heat[0]])[:take]
-        final = sorted(best)   # BM25's order, as each heat was
+        final = sorted(best) + extra   # BM25's order, as each heat was, then what widening added
         out: list[float | None] = [None] * len(hits)
         for i, p in zip(final, self._pass(query, [hits[i] for i in final])):
             out[i] = p
-        self.last.update(heats=len(heats), dropped_passages=dropped)
+        self.last.update(heats=len(heats), dropped_passages=dropped + self.last["dropped_passages"])
         return out
 
     def _pass(self, query: str, hits) -> list[float | None]:
@@ -265,6 +271,35 @@ class SystemOneRanker:
         else:
             res = self._model().ask({"query": query}, qs, self.model)
         return dict(res["answers"]["type"]["probabilities"])
+
+    def relations(self, query: str, passages, pairs: list[tuple[int, int]]) -> list[dict[str, float]]:
+        """What passage t is to passage r for this question (systemone.RELATIONS), for each (r, t) of `pairs`:
+        one state of at most 15 passages, every pair one choice question over it, one pass."""
+        from .systemone import MAX_PASSAGES, MAX_STATE_CHARS, Unreachable, ask, relation, render
+
+        passages = list(passages)[:MAX_PASSAGES]
+        if self.url and self.host not in self.LOCAL:
+            private = sorted({h.source for h in passages if not h.public})
+            if private:
+                raise CloudRefused(f"ranker 'dispositio' would send text from non-public source(s) "
+                                   f"{', '.join(private)} to {self.host}; serve it locally")
+        state, pids, _, _ = render(passages)
+        while len(state) > MAX_STATE_CHARS and len(passages) > 2:   # the tail goes first, as in a ranking pass
+            passages = passages[:-1]
+            state, pids, _, _ = render(passages)
+        asked = [(r, t) for r, t in pairs if r < len(pids) and t < len(pids)]
+        if not asked:
+            return [{} for _ in pairs]
+        qs = {f"{pids[r]}>{pids[t]}": relation(query, pids[r], pids[t]) for r, t in asked}
+        if self.url:
+            try:
+                res = ask(self.url, state, qs, self.model, self.timeout)
+            except (OSError, urllib.error.URLError) as e:
+                raise Unreachable(f"{self.url} did not answer ({e}).\n{self.readme}") from e
+        else:
+            res = self._model().ask(state, qs, self.model)
+        got = {k: dict(v["probabilities"]) for k, v in res["answers"].items()}
+        return [got.get(f"{pids[r]}>{pids[t]}", {}) if r < len(pids) and t < len(pids) else {} for r, t in pairs]
 
 
 def make_ranker(name: str):

@@ -119,6 +119,62 @@ def test_mirror_follows_edits_renames_and_deletions(monkeypatch, tmp_path, capsy
     assert capsys.readouterr().out.split("\n")[1] == "3  Rerun nightly_backup from the replica."
 
 
+def test_url_links_reach_the_mirrored_item_they_name(monkeypatch, tmp_path, capsys):
+    """A ticket that links a page by absolute URL, and a page that links the ticket back: each
+    becomes a `citation` link to the mirrored item, whatever form the URL takes (host case, a
+    trailing slash, `?focusedCommentId`), and it shows both ways round."""
+    from inventio.connectors import confluence, jira
+    from inventio.search import search
+    from inventio.store import connect
+
+    site = "https://acme.atlassian.net"
+    page_url = "https://ACME.atlassian.net/wiki/spaces/DOCS/pages/123/Restore/"
+    ticket_url = site + "/browse/SHOP-1?focusedCommentId=7"
+
+    def make_remote(name, items):
+        class Remote:
+            FORMAT = 1
+
+            def __init__(self, origin):
+                self.origin, self.name = origin, name
+
+            def listing(self):
+                return {i: Entry(v, p, u) for i, (v, p, u, _) in items.items()}
+
+            def fetch(self, ids):
+                for i in ids:
+                    yield i, Doc(items[i][3])
+
+        return Remote
+
+    ticket = ("# SHOP-1 Orders lost after the migration\n<!-- defines: SHOP-1 -->\n\n"
+              f"Restore from the replica; see [the runbook]({page_url}).\n")
+    page = ("# Restore\n\nRerun `nightly_backup` from the replica; the incident is "
+            f"[SHOP-1]({ticket_url}).\n")
+    fake_jira = SimpleNamespace(KIND="jira", origin=jira.origin, locate=jira.locate, heading_url=jira.heading_url,
+                                fetch_url=jira.fetch_url, Remote=make_remote(
+                                    "shop", {"SHOP-1": ("v1", "SHOP-1.md", site + "/browse/SHOP-1", ticket)}))
+    fake_conf = SimpleNamespace(KIND="confluence", origin=confluence.origin, locate=confluence.locate,
+                                heading_url=confluence.heading_url, fetch_url=confluence.fetch_url, Remote=make_remote(
+                                    "docs", {"123": ("v1", "Restore.md",
+                                                     site + "/wiki/spaces/DOCS/pages/123/Restore", page)}))
+    monkeypatch.setitem(connectors.KINDS, "jira", fake_jira)
+    monkeypatch.setitem(connectors.KINDS, "confluence", fake_conf)
+    db = tmp_path / "map.db"
+    assert cli.main(["--db", str(db), "init", site + "/projects/SHOP"]) == 0
+    assert cli.main(["--db", str(db), "init", site + "/wiki/spaces/DOCS"]) == 0
+
+    con = connect(db)
+    rows = con.execute("SELECT via FROM links WHERE rel = 'citation'").fetchall()
+    assert len(rows) == 2 and {r["via"] for r in rows} == {page_url, ticket_url}
+    # the link is reachable from either end, named by what the map knows
+    hits = search(con, "restore replica backup", k=10)
+    out = next(l for l in next(h for h in hits if h.path == "SHOP-1.md").links if l["rel"] == "citation")
+    assert (out["dir"], out["via"]) == ("out", page_url) and out["coord"].startswith("Restore.md:")
+    back = next(l for l in next(h for h in hits if h.path == "Restore.md").links if l["rel"] == "citation")
+    assert (back["dir"], back["via"]) == ("out", ticket_url) and back["coord"].startswith("SHOP-1.md:")
+
+
 def test_database_schema_becomes_linked_cards_without_rows_or_password(tmp_path, capsys):
     pytest.importorskip("sqlalchemy")
     from inventio.connectors import sql

@@ -24,7 +24,7 @@ from .mirror import Doc, Entry
 
 KIND = "confluence"
 SPACE_URL = re.compile(r"/wiki/spaces/([^/?#]+)")
-PAGE_URL = re.compile(r"/wiki/spaces/[^/?#]+/pages/(\d+)")
+PAGE_URL = re.compile(r"/pages/(\d+)")  # /wiki/spaces/<key>/pages/<id>/... and the shorter /pages/<id>/...
 MAX_PATH = 180  # characters of a mirror path; deeper trees lose their top folders first
 BATCH = 100     # pages fetched per request (the API takes up to 250 ids)
 

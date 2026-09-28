@@ -1,5 +1,6 @@
 import json
 import textwrap
+from pathlib import Path
 
 import pytest
 
@@ -75,7 +76,11 @@ def test_prose_links_to_the_code_that_defines_what_it_names(tmp_path, capsys):
     code, out = run(capsys, "--db", db, "query", "nightly job orders database", "--json", "--source", "wiki")
     assert code == 0
     top = json.loads(out.out)[0]
-    assert {"rel": "mentions", "dir": "out", "via": "nightly_backup", "source": "repo", "coord": "jobs/backup.py:1-2"} in top["links"]
+    assert {"rel": "mentions", "dir": "out", "via": "nightly_backup", "source": "repo", "coord": "jobs/backup.py:1-2",
+            "kind": "code", "fact": "defines nightly_backup", "title": "nightly_backup"} in top["links"]
+    code, out = run(capsys, "--db", db, "query", "nightly_backup snapshot", "--json", "--source", "repo")
+    back = json.loads(out.out)[0]["links"]   # the other way round: the page is what uses the name
+    assert [(l["kind"], l["fact"], l["coord"]) for l in back] == [("page", "uses nightly_backup", "runbook.md:1-2")]
 
 
 def test_markdown_link_resolves_to_the_heading(tmp_path, capsys):
@@ -94,7 +99,63 @@ def test_markdown_link_resolves_to_the_heading(tmp_path, capsys):
     run(capsys, "--db", db, "init", str(tmp_path / "d"), "--name", "d")
     code, out = run(capsys, "--db", db, "query", "tuning thresholds", "--json", "-k", "1")
     links = json.loads(out.out)[0]["links"]
-    assert {"rel": "citation", "dir": "out", "via": "sub/b.md#known-limits", "source": "d", "coord": "sub/b.md:4-5"} in links
+    assert {"rel": "citation", "dir": "out", "via": "sub/b.md#known-limits", "source": "d", "coord": "sub/b.md:4-5",
+            "kind": "page", "fact": "links to", "title": "B > Known limits"} in links
+
+
+def test_links_are_named_by_what_the_map_knows(tmp_path, capsys):
+    from inventio.search import search
+    from inventio.store import connect
+
+    db = tmp_path / "map.db"
+    write(tmp_path / "jira", "SHOP-1.md", """
+        # SHOP-1 Orders lost after the migration
+        <!-- defines: SHOP-1 -->
+
+        Incident · Done
+
+        Links:
+        - is caused by SHOP-2 Bucket full
+    """)
+    write(tmp_path / "jira", "SHOP-2.md", """
+        # SHOP-2 Bucket full
+        <!-- defines: SHOP-2 -->
+
+        Bug · Done
+    """)
+    write(tmp_path / "wiki", "restore.md", """
+        # Restore
+        - check SHOP-2 is closed before the restore
+    """)
+    write(tmp_path / "wiki", "notes.md", """
+        # Notes
+        - look at SHOP-2 when the bucket fills
+    """)
+    for d in ("jira", "wiki"):
+        run(capsys, "--db", str(db), "init", str(tmp_path / d), "--name", d)
+    con = connect(db)
+    ids = {r["path"]: r["id"] for r in con.execute("SELECT f.path, c.id FROM chunks c JOIN files f ON f.id = c.file_id")}
+    tickets = {r["path"]: r["id"] for r in con.execute("SELECT path, id FROM files WHERE path LIKE 'SHOP-%'")}
+    con.executemany("INSERT INTO file_meta (file_id, key, value) VALUES (?, 'issuetype', ?)",
+                    [(tickets["SHOP-1.md"], "Incident"), (tickets["SHOP-2.md"], "Bug")])
+    # a confident Procedure prints as steps; the same category below its threshold prints as page
+    con.executemany("INSERT INTO chunk_categories (chunk_id, category, p, kept, model) VALUES (?, 'Procedure', ?, 1, 'x')",
+                    [(ids["restore.md"], 0.9), (ids["notes.md"], 0.6)])
+    con.commit()
+
+    def named(q):
+        return [(l["kind"], l["fact"], l["coord"].split(":")[0]) for l in search(con, q, k=1)[0].links]
+
+    # between two tickets the link verb is the ticket's own line, both ways round
+    assert ("bug", "is caused by", "SHOP-2.md") in named("orders lost after the migration")
+    assert ("incident", "is caused by this", "SHOP-1.md") in named("bucket full bug")
+    # a runbook bullet naming the key is a step, not a link verb
+    got = named("bucket full bug")
+    assert ("steps", "uses shop-2", "restore.md") in got and ("page", "uses shop-2", "notes.md") in got
+    # what the step names, stated by one side, before pages that only name the same ticket too
+    assert named("check closed before the restore") == [("bug", "defines shop-2", "SHOP-2.md"),
+                                                        ("incident", "names shop-2 too", "SHOP-1.md"),
+                                                        ("page", "names shop-2 too", "notes.md")]
 
 
 def test_reindex_touches_only_what_changed(tmp_path, capsys):
@@ -244,6 +305,50 @@ def test_query_names_bring_their_file_and_definition(tmp_path, capsys):
     assert [(h.path, h.via) for h in wide] == named + [(h.path, h.via) for h in plain]
     ranked = search(con, q, k=100, pool=2, ranker=FakeRanker())  # a ranker sees all of them
     assert {(h.path, h.via) for h in ranked} == set(named) | {(h.path, h.via) for h in plain}
+
+
+class PassesRanker:
+    """Reads like dispositio: passes of 15, BM25's pool first (`first`), what widening added after. Favours
+    any passage that defines a name, so a named definition can only win if it is read."""
+
+    passes = True
+
+    def __init__(self):
+        self.read = []
+
+    def score(self, q, hits, first=None):
+        from inventio.rankers import SystemOneRanker
+
+        r = SystemOneRanker.__new__(SystemOneRanker)
+        r.url, r.host = "", ""
+
+        def one(query, hs):
+            self.read.append([h.path for h in hs])
+            r.last = {"dropped_passages": 0}
+            return [0.9 if "def " in h.text else 0.1 for h in hs]
+
+        r._pass = one
+        return SystemOneRanker.score(r, q, hits, first)
+
+
+def test_a_passes_ranker_reads_what_widening_added(tmp_path, capsys):
+    from inventio.search import search
+    from inventio.store import connect
+
+    db = tmp_path / "map.db"
+    repo = tmp_path / "repo"
+    for i in range(20):  # prose that fills BM25's whole pool of 15 and more
+        write(repo, f"docs/crash-{i}.md", f"# Crash {i}\nthe nightly job crash: rebuild index fails, run it again {i}\n")
+    write(repo, "jobs/nightly.py", "def rebuild_index(rows):\n    return sum(r.size for r in rows)\n")
+    run(capsys, "--db", str(db), "init", str(repo), "--name", "repo")
+    con = connect(db)
+
+    q = "the nightly job crash: rebuild_index fails"
+    assert "jobs/nightly.py" not in {h.path for h in search(con, q, k=100, pool=15, symbols=False)}
+    ranker = PassesRanker()
+    top = search(con, q, k=3, pool=15, ranker=ranker)
+    assert (top[0].path, top[0].via) == ("jobs/nightly.py", "defines:rebuild_index")
+    assert len(ranker.read) == 2 and len(ranker.read[1]) <= 15   # the pool, then one final with the named file
 
 
 def test_vietnamese_query_matches_words_not_scattered_syllables(tmp_path, capsys):
@@ -486,3 +591,23 @@ def test_honesty_speaks_only_when_asked_and_only_below():
     assert honesty({key: 0.35}, 0.30) is None                    # above it
     note = honesty({key: 0.20, "line": {"text": "the answer is here"}}, 0.30)
     assert "do not seem to answer" in note and "the answer is here" in note and "p=0.20" in note
+
+
+def test_bench_rows_say_how_each_answer_entered(tmp_path, capsys):
+    """The webshop example, one row per question: the gold's rank, the `via` that put it in the pool,
+    whether BM25's own pool held it, and the top-10 coordinates; the summary is followed by the count
+    of how the top-10 gold answers arrived."""
+    example = Path(__file__).resolve().parent.parent / "examples" / "webshop"
+    db = str(tmp_path / "map.db")
+    for sub in ("app", "wiki"):
+        assert run(capsys, "--db", db, "init", str(example / sub), "--name", sub)[0] == 0
+    rows_path = tmp_path / "rows.jsonl"
+    code, out = run(capsys, "--db", db, "bench", str(example / "questions.jsonl"),
+                    "--ranker", "none", "--rows", str(rows_path))
+    assert code == 0
+    rows = [json.loads(l) for l in rows_path.read_text(encoding="utf-8").splitlines()]
+    assert len(rows) == 13
+    assert set(rows[0]) == {"question", "gold", "rank", "via", "in_bm25", "seconds", "top10"}
+    assert rows[0]["gold"] == {"source": "wiki", "path": "runbook.md", "start_line": 8, "end_line": 8}
+    assert isinstance(rows[0]["in_bm25"], bool) and len(rows[0]["top10"]) <= 10
+    assert "top-10 gold came by:" in out.out

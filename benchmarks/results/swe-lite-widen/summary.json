@@ -1,0 +1,52 @@
+{
+  "mixed/dispositio@v4/base": {
+    "n": 300,
+    "ndcg@10": 0.4117,
+    "top1": 0.2633,
+    "top5": 0.5,
+    "in_pool": 0.5633,
+    "sec_query": 1.2098,
+    "sec_index": 5.9191,
+    "mean_pool": 15.0
+  },
+  "mixed/dispositio@v4/symbols": {
+    "n": 300,
+    "ndcg@10": 0.4862,
+    "top1": 0.3233,
+    "top5": 0.5667,
+    "in_pool": 0.6933,
+    "sec_query": 1.7543,
+    "sec_index": 5.9191,
+    "mean_pool": 18.2033
+  },
+  "mixed/dispositio@v4/symbols+links": {
+    "n": 300,
+    "ndcg@10": 0.4935,
+    "top1": 0.33,
+    "top5": 0.5867,
+    "in_pool": 0.7267,
+    "sec_query": 2.0291,
+    "sec_index": 5.9191,
+    "mean_pool": 28.05
+  },
+  "mixed/dispositio@v4/widened": {
+    "n": 300,
+    "ndcg@10": 0.483,
+    "top1": 0.3233,
+    "top5": 0.57,
+    "in_pool": 0.76,
+    "sec_query": 2.5023,
+    "sec_index": 5.9191,
+    "mean_pool": 37.9867
+  },
+  "mixed/dispositio@v4/control": {
+    "n": 300,
+    "ndcg@10": 0.4354,
+    "top1": 0.29,
+    "top5": 0.5167,
+    "in_pool": 0.6133,
+    "sec_query": 2.0207,
+    "sec_index": 5.9191,
+    "mean_pool": 22.0
+  }
+}

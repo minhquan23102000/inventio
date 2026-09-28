@@ -165,6 +165,66 @@ def run_arms(con, args, queries, qrels, safe, out_dir, summary) -> None:
         (out_dir / "summary.json").write_text(json.dumps(summary, indent=2))
 
 
+def run_widen(con, args, queries, qrels, safe, out_dir, summary) -> None:
+    """`base`: BM25's pool alone, what a query read before widened chunks were handed to the ranker (they sat
+    unread below the pool, so the top 10 came from the pool); `widened`: the query path's default; `control`:
+    the same two passes with BM25's next 7 in the seats widening would take, so what widening adds is told
+    apart from what a second read of the pool's best 8 does. Scored fresh, never from the per-chunk cache: a
+    pass's probabilities depend on the pool it read."""
+    from inventio.links import rebuild_links
+    from inventio.search import bm25, search
+    from inventio.systemone import MAX_PASSAGES
+
+    with con:
+        links = rebuild_links(con)
+    print(f"links {json.dumps(links)}", flush=True)
+    scope = Scope.only([args.dataset])
+    for rname in args.rankers.split(","):
+        ranker, rname = make_ranker(rname), tag(rname)
+        key = f"{rname}@pool{args.pool}" + (f"@first{args.limit}" if args.limit else "")
+        arms = ("base", "widened", "control")
+        nd, rec, secs, came = ({a: [] for a in arms}, {a: [] for a in arms}, {a: 0.0 for a in arms}, 0)
+        with (out_dir / f"widen-{key}.jsonl").open("w", encoding="utf-8") as rf:
+            for n, (qid, q) in enumerate(queries.items(), 1):
+                row = {"q": qid}
+                for arm in arms:
+                    on = arm == "widened"
+                    t = time.time()
+                    if arm == "control":
+                        hits = bm25(con, q, args.pool + MAX_PASSAGES // 2, scope)
+                        if ranker is not None:
+                            for h, s in zip(hits, ranker.score(q, hits, args.pool)):
+                                h.score = s
+                            hits.sort(key=rank_key)
+                    else:
+                        hits = search(con, q, k=10_000, pool=args.pool, ranker=ranker, symbols=on,
+                                      expand_links=on and ranker is not None, neighbours=on and ranker is not None,
+                                      scope=scope)
+                    secs[arm] += time.time() - t
+                    ranked = list(dict.fromkeys(safe[Path(h.path).stem] for h in hits))
+                    nd[arm].append(ndcg10(ranked, qrels[qid]))
+                    rec[arm].append(len(set(ranked[:10]) & set(qrels[qid])) / len(qrels[qid]))
+                    row[arm] = round(nd[arm][-1], 4)
+                    if on:
+                        top = [h.via.split(":")[0] for h in hits[:10] if h.via and safe[Path(h.path).stem] in qrels[qid]]
+                        row["answers_via"] = top
+                        came += bool(top)
+                rf.write(json.dumps(row) + "\n")
+                if n % 50 == 0:
+                    print(f"  {rname} {n}/{len(queries)} " + " ".join(f"{a} {sum(v) / len(v):.3f}" for a, v in nd.items()),
+                          flush=True)
+        summary.setdefault("widen", {})[key] = {
+            "queries": len(queries),
+            **{a: {"ndcg@10": round(sum(nd[a]) / len(nd[a]), 4), "recall@10": round(sum(rec[a]) / len(rec[a]), 4),
+                   "sec_per_query": round(secs[a] / len(queries), 3)} for a in nd},
+            "widened_vs_base": paired(nd["base"], nd["widened"]),
+            "widened_vs_control": paired(nd["control"], nd["widened"]),
+            "queries_with_an_answer_via_widening_in_top10": came,
+        }
+        print(rname, json.dumps(summary["widen"][key]), flush=True)
+        (out_dir / "summary.json").write_text(json.dumps(summary, indent=2))
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("dataset", help="name under <data>/beir, e.g. scifact or coir-stackoverflow-qa")
@@ -179,6 +239,9 @@ def main() -> int:
                     help="with --arms: the model that judges categories and links (dispositio or typesafe)")
     ap.add_argument("--mlt", action="store_true",
                     help="with --arms: also `about` (judged links only) and `mlt` (the same candidates unjudged)")
+    ap.add_argument("--widen", action="store_true",
+                    help="through inventio's own search(), as `inventio query` runs: `base` (BM25's pool alone) "
+                         "against `widened` (plus named files, links and neighbours, read by the ranker)")
     args = ap.parse_args()
     ds = data_dir(args.data) / "beir" / args.dataset
     out_dir = RESULTS / f"beir-{args.dataset}"
@@ -209,6 +272,9 @@ def main() -> int:
     if args.arms:
         (out_dir / ("arms.jsonl" if args.judge == "typesafe" else f"arms@{args.judge}.jsonl")).unlink(missing_ok=True)
         run_arms(con, args, queries, qrels, safe, out_dir, summary)
+        return 0
+    if args.widen:
+        run_widen(con, args, queries, qrels, safe, out_dir, summary)
         return 0
     for rname in args.rankers.split(","):
         ranker, rname = make_ranker(rname), tag(rname)

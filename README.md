@@ -30,53 +30,57 @@ inventio query "the nightly backup has not finished, what do I do?" -k 3
 
 ```
 == Article
-1. wiki:runbook.md:8-13  Nightly backup runbook > When the nightly backup has not finished  p=0.97
+1. wiki:runbook.md:8-13  Nightly backup runbook > When the nightly backup has not finished  p=0.99
    1. Check the scheduler at 07:00. If `nightly_backup` is still running or has failed, stop it. 2. Take a fresh backup from the replica, not the primary: `make ba…
-   -> mentions app:jobs/backup.py:4-9  (nightly_backup)
-3. wiki:runbook.md:3-6  Nightly backup runbook > Nightly backup  p=0.79
+   -> code · defines nightly_backup · app:jobs/backup.py:4-9  nightly_backup
+   -> page · names nightly_backup too · wiki:incidents/2026-03-14.md:3-8  Incident 2026-03-14: no backup to restore > What happened
+2. wiki:runbook.md:3-6  Nightly backup runbook > Nightly backup  p=0.01
    The job `nightly_backup` copies the orders database to off-site storage. It starts at 01:00 and must finish before the morning order peak at 08:00.
-   -> mentions app:jobs/backup.py:4-9  (nightly_backup)
-== SoftwareSourceCode
-2. app:jobs/backup.py:4-9  nightly_backup  p=0.93
-   def nightly_backup(db, storage, now): """Copy the orders database to off-site storage every night, before the morning order peak.""" snapshot = db.snapshot(as_o…
-   -> mentions wiki:policy.md:3-8  (backup_retention_days)
-   <- mentions wiki:incidents/2026-03-14.md:3-8  (nightly_backup)
-   <- mentions wiki:runbook.md:3-6  (nightly_backup)
+   -> code · defines nightly_backup · app:jobs/backup.py:4-9  nightly_backup
+   -> page · names nightly_backup too · wiki:incidents/2026-03-14.md:3-8  Incident 2026-03-14: no backup to restore > What happened
+3. wiki:incidents/2026-03-14.md:3-8  Incident 2026-03-14: no backup to restore > What happened  p=0.00
+   The `nightly_backup` run filled the storage bucket at 03:40 and stopped without an error, and nobody checked the scheduler. At 11:00 a bad migration corrupted t…
+   -> code · defines nightly_backup · app:jobs/backup.py:4-9  nightly_backup
+   -> page · names nightly_backup too · wiki:runbook.md:3-6  Nightly backup runbook > Nightly backup
+   -> page · names nightly_backup too · wiki:runbook.md:8-13  Nightly backup runbook > When the nightly backup has not finished
 ```
 
 The runbook's steps come first; `p` is dispositio's probability that the passage answers, and
-results are grouped by document type, numbered by rank. The line under each was drawn by code,
-not by a model: the runbook names `nightly_backup` and `jobs/backup.py` defines it, so the
-answer arrives with the code of the job it is about, from another source.
+results are grouped by document type, numbered by rank. Each line under a result is where it
+leads, and every word on it comes from the sources: what the target is (`code`, from its path),
+the fact that makes the link (the runbook names `nightly_backup`, `jobs/backup.py` defines it;
+the incident report names the same job), and the target's own title. No model draws or names
+these links, so a link on screen is never a guess. Between tickets the verb is the ticket's
+own (`is caused by SHOP-2`), and a Jira, Confluence or GitHub URL to a page or ticket the map
+mirrors links to it.
 
-A list of steps says what to do, not why. `inventio facts` has a model read every prose chunk
-once: what it does for its reader (its category), and which chunks of other kinds speak about
-the same thing (`about` links).
+A list of steps says what to do, not why. `inventio facts` has dispositio read every prose
+chunk once and say what it does for its reader (its category). Links then say what waits at
+the other end, `steps`, `record` or `finding`, where that judgment is confident enough (at least
+0.95 agreement with the reference labels on 380 held-out passages); below that they stay `page`.
 
 ```sh
-inventio facts --judge typesafe     # Jev: TYPESAFE_API_KEY, public sources only
-inventio query "why do we check the backup scheduler at 07:00?" -k 2 --facts
+inventio facts
+inventio query "why do we check the backup scheduler at 07:00?" -k 2
 ```
 
 ```
 == Article
-1. wiki:runbook.md:8-13  Nightly backup runbook > When the nightly backup has not finished  p=0.96
-   1. Check the scheduler at 07:00. If `nightly_backup` is still running or has failed, stop it. 2. Take a fresh backup from the replica, not the primary: `make ba…
-   -> mentions app:jobs/backup.py:4-9  (nightly_backup)
-   -> about wiki:incidents/2026-03-14.md:10-13  (Procedure~Record)
-   -> about wiki:policy.md:3-8  (Procedure~Rule)
-2. wiki:incidents/2026-03-14.md:10-13  Incident 2026-03-14: no backup to restore > What changed  p=0.93
+1. wiki:incidents/2026-03-14.md:10-13  Incident 2026-03-14: no backup to restore > What changed  p=0.86
    The 07:00 scheduler check was added to the runbook, and the job now pages the on-call engineer when it has not finished by 06:30 or when the bucket is more than…
-   <- about wiki:runbook.md:8-13  (Procedure~Record)
-   <- about wiki:runbook.md:3-6  (Record~Rule)
+2. wiki:incidents/2026-03-14.md:3-8  Incident 2026-03-14: no backup to restore > What happened  p=0.06
+   The `nightly_backup` run filled the storage bucket at 03:40 and stopped without an error, and nobody checked the scheduler. At 11:00 a bad migration corrupted t…
+   -> code · defines nightly_backup · app:jobs/backup.py:4-9  nightly_backup
+   -> page · names nightly_backup too · wiki:runbook.md:3-6  Nightly backup runbook > Nightly backup
+   -> steps · names nightly_backup too · wiki:runbook.md:8-13  Nightly backup runbook > When the nightly backup has not finished
 ```
 
 The why is in the incident report: the check was added after the night a backup filled its
-bucket at 03:40 and stopped without an error. From one step of a runbook the map reaches the
-code it runs, the rule it serves and the failure that put it there (the `p` values in this
-example are from dispositio v2; the facts path was not re-run for v3). Without `--judge`,
-dispositio v2 judges offline: here it gives five of the six chunks the category Jev gives, but it
-links every pair it is asked about (see [Limitations](#limitations)).
+bucket at 03:40 and stopped without an error. From there the map reaches the code of the job
+and the runbook step that now carries the check. `facts` also judges which chunks of different
+categories speak about the same thing (`about` links); `inventio show` lists them, marked as
+judged, but they are not printed under results, since a judged link can be wrong (see
+[Limitations](#limitations)).
 
 `uv tool install` puts `inventio` on your PATH for every terminal; `uvx --from "inventio[dispositio]"
 inventio ...` runs it once without installing. The unreleased `main` installs with
@@ -99,7 +103,7 @@ flowchart LR
     S["a source<br/>folder · Confluence space · Jira project<br/>database · Kafka · S3"] --> C["chunks, cut where the source<br/>already has a boundary:<br/>heading, function, class, table"]
     C --> M[("map.db<br/>BM25 over text, path, heading")]
     C --> T["document type from the path<br/>Article · SoftwareSourceCode<br/>Test · Configuration · Dataset"] --> M
-    C --> L["links drawn by code<br/>citation: a Markdown link<br/>mentions: a name another<br/>chunk defines or shares"] --> M
+    C --> L["links drawn by code<br/>citation: a Markdown link or a URL<br/>to a mirrored page or ticket<br/>mentions: a name another<br/>chunk defines or shares"] --> M
     M -. "inventio facts" .-> F["a model reads each prose chunk:<br/>its category (Rule, Procedure, Record, ...)<br/>and about links to chunks<br/>of other categories on the same thing"] -.-> M
 ```
 
@@ -123,6 +127,8 @@ flowchart LR
     I3 -- "nightly_backup" --> B4
     P3 -- "backup_retention_days" --- B1
     P3 -- "backup_retention_days" --- B4
+    R8 -- "nightly_backup" --- I3
+    R3 -- "nightly_backup" --- I3
     R8 -. "about" .- P3
     R8 -. "about" .- I3
     R8 -. "about" .- I10
@@ -131,7 +137,8 @@ flowchart LR
     R3 -. "about" .- I10
 ```
 
-Solid lines are names, found by code. Dotted lines are the `about` links Jev judged true, 6 of
+Solid lines are names, found by code: the page that defines a name, and pages in different files
+that name the same defined thing. Dotted lines are the `about` links Jev judged true, 6 of
 the 10 pairs it was asked about; "Who may delete a backup" is linked to nothing, since it is
 about a different act. The categories are Jev's too; it calls the runbook's opening section a
 Rule, with p=0.38.
@@ -150,11 +157,13 @@ flowchart LR
 The pool only grows and the ranker only orders it: a passage that neither BM25 nor the names
 brought in cannot come out. Looking up names needs no model and is on by default
 (`--no-symbols` turns it off); on whole SWE-bench repositories it puts a file to fix among the
-candidates for 73% of issues instead of 63%. With a ranker, two more ways in are on by default:
-the chunks the five best hits link to (`--no-links`) and chunks of other files sharing those hits'
-rarest words (`--no-neighbours`), up to ten each. On SciFact, StackOverflow QA and MultiDoc2Dial
-they bring the answer into a pool that had none for 1-3% of questions; the ranker reads up to
-20 more passages for it, which is where the time goes. Without a ranker they are skipped, since
+candidates for 73% of issues instead of 63%. With a ranker, the chunks the five best hits link to
+join too (`--no-links` turns it off), up to ten; `--neighbours` also adds chunks of other files
+sharing those hits' rarest words. The ranker reads up to 7 of what the names and links add, in one
+more pass beside BM25's best 8. On SWE-bench Lite the names are the gain, links add little and
+neighbours nothing, at 0.5 s a query (see [Limitations](#limitations)); on four public sets with
+almost no links that pass does no better than giving the same seats to BM25's next 7. On a real
+wiki, tracker and repository it is not yet measured. Without a ranker they are skipped, since
 they would only sit below BM25's order. The two dotted options are off by default;
 [benchmarks/README.md](benchmarks/README.md) measures what each adds. A Vietnamese question is
 also searched as pairs of adjacent syllables, since *hợp đồng* (contract) is two words to BM25.
@@ -382,7 +391,8 @@ that sends the map anywhere, so non-public sources are refused).
 
 The model also says when the passages it read do not seem to answer. That caveat is off by default:
 `exists` is calibrated per corpus (medians on answerable pools 0.447, 0.232 and 0.377 across three
-sets), so one threshold cannot hold a stated false-alarm rate across them.
+sets), so one threshold cannot hold a stated false-alarm rate across them. It also leans on BM25's
+order: on MultiDoc2Dial its AUC is 0.805 as BM25 ranks the passages, 0.793 shuffled, 0.688 reversed.
 `INVENTIO_DISPOSITIO_CAVEAT=0.15` turns it on at a threshold you choose:
 
 ```
@@ -390,10 +400,11 @@ sets), so one threshold cannot hold a stated false-alarm rate across them.
 # closest the map has; the model's best line was '    if len(crit) < 2:'
 ```
 
-The ranker reads BM25's best 15 chunks (`--pool`) in one pass; the chunks the top hits link to and
-share distinctive words with follow them, unread. A state longer than the 6,656 tokens it was trained
+The ranker reads BM25's best 15 chunks (`--pool`) in one pass, then up to 7 of the chunks the question
+names, the top hits link to and share distinctive words with, in a final beside the best 8 of the first
+pass. A state longer than the 6,656 tokens it was trained
 on drops passages from the tail. `--pool 30` reads 30 as two heats of 15 and a final over the best 8
-and 7 (a pass's probabilities share its pool, so two passes cannot be merged by score), about three
+and 7 (4 and 4 when widening takes 7 seats; a pass's probabilities share its pool, so two passes cannot be merged by score), about three
 times as long; it reaches the answers BM25 puts at ranks 16-30 (MultiDoc2Dial 0.606 -> 0.640,
 SWE-bench Lite code 0.599 -> 0.643, see [Benchmarks](#benchmarks)). On 40 questions over a private wiki, ticket tracker and two repositories, 15 found as many
 answers as 30 and 10 lost some.
@@ -513,7 +524,11 @@ extra passes, measured per set on the laptop.
   those 13 and on 40 private questions only.
 - `about` links need a judge of "are these two passages about the same thing". dispositio was
   not trained for it and links almost nothing (2 pairs of 30,517 on SciFact); the earlier Laya model
-  linked nearly every pair. Use Jev for links. Link training is the next piece of work (STATUS.md).
+  linked nearly every pair. They are not printed under results; `show` lists them as judged.
+- On SWE-bench Lite (300 issues, code and docs, pool 15) the files and definitions a question names
+  add +0.074 nDCG@10 [+0.048, +0.102]; the links their top hits carry add +0.007 [−0.015, +0.030],
+  and the shared-word neighbours −0.011 [−0.029, +0.007] for 0.5 s more a query. What links add on a
+  real wiki, tracker and repository is not measured yet.
 - The categories above are new. Whether `--facts` with them finds answers a same-size BM25 pool
   does not is not measured yet; the earlier measurement, with schema.org types, is in
   [benchmarks/README.md](benchmarks/README.md#categories-and-fact-links---arms).

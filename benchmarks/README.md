@@ -31,6 +31,9 @@ python benchmarks/systemone.py judge <tag> --run <run dir>              # catego
 python benchmarks/swe_bench.py --types --variants mixed --rankers none --type-predictor dispositio
 python benchmarks/beir_bench.py scifact --arms --judge dispositio --rankers none
 uvx modal run benchmarks/modal_bench.py --run <name>                    # the last three on Modal
+python benchmarks/swe_bench.py --widen --variants mixed --rankers dispositio   # named files, links, neighbours, control
+python benchmarks/beir_bench.py scifact --widen --rankers dispositio --pool 15
+python benchmarks/relations_probe.py                                   # zero-shot relation naming, the baseline
 python benchmarks/beir_bench.py scifact --rankers none,typesafe
 python benchmarks/example_bench.py none dispositio typesafe          # examples/webshop, 13 on-call questions
 python benchmarks/pack_check.py                    # packed neighbour call vs one call per pair
@@ -145,7 +148,7 @@ The pool of each query is built three ways: `base` (BM25 30), `facts` (base plus
 chunks of the query's predicted categories and the chunks linked to the top hits by judged
 `about` links) and `control` (BM25 with as many candidates as `facts`). With `--mlt`, two more:
 `about` (base plus the judged links only) and `mlt` (base plus the same link candidates,
-unjudged: `search.widen_by_neighbours`, on by default with a ranker, `--no-neighbours`). Each distinct chunk
+unjudged: `search.widen_by_neighbours`, `--neighbours`). Each distinct chunk
 is scored once per query, so the arms differ only in their pools. `facts_vs_control` and
 `about_vs_mlt` are paired per-query comparisons with a bootstrap 95% interval. Per-query rows
 are in `results/beir-<name>/arms.jsonl`, totals in its `summary.json` under `arms`.

@@ -46,7 +46,8 @@ class Hit:
             "source": self.source, "path": self.path, "root": self.root,
             "start_line": self.start_line, "end_line": self.end_line,
             "heading_path": self.heading_path, "type": self.type, "score": self.score,
-            "bm25_rank": self.bm25_rank, "via": self.via, "text": self.text, "links": self.links,
+            "bm25_rank": self.bm25_rank, "via": self.via, "text": self.text,
+            "links": [{k: v for k, v in l.items() if k != "id"} for l in self.links],   # a chunk id is the map's own
         }
 
 
@@ -312,29 +313,122 @@ def expand(con, pool: list[Hit], seeds: int, limit: int, scope: Scope | None = N
 
 
 LINK_SQL = """
-SELECT l.rel, l.via, s.name source, f.path, c.start_line, c.end_line, '{dir}' dir
+SELECT l.rel, l.via, c.id other_id, s.name source, f.path, c.start_line, c.end_line, '{dir}' dir
 FROM links l JOIN chunks c ON c.id = l.{other} JOIN files f ON f.id = c.file_id JOIN sources s ON s.id = f.source_id
 WHERE l.{me} = ?
 """
 
 
 def attach_links(con, hits: list[Hit], per_hit: int = 5) -> None:
-    """Where each hit leads: outgoing links first, then incoming; one entry per target."""
+    """Where each hit leads, named by what the map knows for certain (`name_link`): links the sources draw
+    (citation, mentions) only, since a model-judged `about` link can be wrong where a shown link must not be;
+    links to another kind of thing first (a runbook's code before another runbook), one of each kind before
+    a second; one entry per target."""
     for h in hits:
         rows = con.execute(
             LINK_SQL.format(dir="out", other="dst", me="src") + " UNION ALL "
             + LINK_SQL.format(dir="in", other="src", me="dst"),
             (h.id, h.id),
         ).fetchall()
-        seen, h.links = set(), []
+        seen, links = set(), []
         for r in rows:
+            if r["rel"] == "about":
+                continue
             coord = f"{r['path']}:{r['start_line']}-{r['end_line']}"
             if (r["source"], coord) in seen:
                 continue
             seen.add((r["source"], coord))
-            h.links.append({"rel": r["rel"], "dir": r["dir"], "via": r["via"], "source": r["source"], "coord": coord})
-            if len(h.links) >= per_hit:
-                break
+            links.append({"rel": r["rel"], "dir": r["dir"], "via": r["via"], "source": r["source"], "coord": coord,
+                          "id": r["other_id"]})
+        kinds = chunk_kinds(con, [h.id] + [l["id"] for l in links])
+        for l in links:
+            l.update(name_link(con, h, l, kinds))
+        mine, taken = kinds[h.id]["kind"], set()
+        order = []
+        # another kind of thing first; within that, a link one side states (defines, uses, a ticket's verb, a
+        # Markdown link) before two pages that only name the same thing; then the sources' order
+        for l in sorted(links, key=lambda l: (l["kind"] == mine, l["fact"].endswith(" too"))):
+            order.append((l["kind"] in taken, len(order), l))
+            taken.add(l["kind"])
+        h.links = [l for *_, l in sorted(order, key=lambda x: x[:2])][:per_hit]
+
+
+# The lowest probability at which a judged category is printed as a link's noun: precision >= 0.95 at >= 40%
+# coverage of its predictions, overall and out of domain, on the 380 held-out passages (`systemone.py judge
+# v4-calib`, calibration). Rule, Reference, Explanation and Other never reach it (Rule: 1.0 at 0.85 but 6 of
+# 18 out-of-domain predictions kept), so they print as `page`. Finding clears at every threshold with one
+# out-of-domain example; 0.8 keeps 30 of its 34 at precision 1.0.
+KIND_TAU = {"Procedure": 0.8, "Record": 0.7, "Finding": 0.8}
+CATEGORY_NOUN = {"Procedure": "steps", "Record": "record", "Finding": "finding"}
+TYPE_NOUN = {"SoftwareSourceCode": "code", "Test": "test", "Configuration": "config", "Dataset": "table"}
+
+
+def chunk_kinds(con, ids: list[int]) -> dict[int, dict]:
+    """What each chunk is, from facts the map holds: `kind` (a noun: code, test, a ticket's type, a pull
+    request, a confidently judged category, else page), and `title` (its heading path)."""
+    ids = list(dict.fromkeys(ids))
+    ph = ",".join("?" * len(ids))
+    out = {r["id"]: {"type": r["type"], "title": r["heading_path"], "file_id": r["file_id"], "category": r["category"],
+                     "p": r["p"]}
+           for r in con.execute(
+               f"""SELECT c.id, c.heading_path, c.file_id, f.type, cc.category, cc.p FROM chunks c
+                   JOIN files f ON f.id = c.file_id
+                   LEFT JOIN chunk_categories cc ON cc.chunk_id = c.id AND cc.kept = 1
+                   WHERE c.id IN ({ph})""", ids)}
+    meta: dict[int, dict] = {}
+    fids = list({v["file_id"] for v in out.values()})
+    for r in con.execute(f"SELECT file_id, key, value FROM file_meta WHERE key IN ('issuetype', 'item', 'state') "
+                         f"AND file_id IN ({','.join('?' * len(fids))})", fids):
+        meta.setdefault(r["file_id"], {})[r["key"]] = r["value"]
+    for v in out.values():
+        m = meta.get(v["file_id"], {})
+        v["ticket"] = bool(m.get("issuetype"))
+        if v["type"] in TYPE_NOUN:
+            v["kind"] = TYPE_NOUN[v["type"]]
+        elif m.get("issuetype"):
+            v["kind"] = m["issuetype"].lower()
+        elif m.get("item"):
+            v["kind"] = ("pull request" if m["item"] == "pull" else "issue") + (f" ({m['state']})" if m.get("state") else "")
+        elif v["category"] in KIND_TAU and (v["p"] or 0.0) >= KIND_TAU[v["category"]]:
+            v["kind"] = CATEGORY_NOUN[v["category"]]
+        else:
+            v["kind"] = "page"
+    return out
+
+
+CLOSES = re.compile(r"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+(?:[\w.-]+/[\w.-]+)?#(\d+)", re.I)
+
+
+def name_link(con, h: Hit, l: dict, kinds: dict) -> dict:
+    """The link's `kind` (what the target is), `fact` (what makes the link, in the sources' own words where
+    they have them) and `title`. Nothing here is guessed: a Jira link verb is the line the ticket carries,
+    `defines`/`uses` is which side defines the name, `closes` is a closing keyword naming the item."""
+    t, tickets = kinds[l["id"]], kinds[h.id]["ticket"] and kinds[l["id"]]["ticket"]
+    fact = ""
+    if l["rel"] == "mentions":
+        name = l["via"]
+        # a ticket's `Links:` lines (`- is caused by SHOP-9 ...`, connectors/jira.py): only between two tickets,
+        # where a bullet naming the other's key is that line and not a step of a runbook
+        link_line = rf"^\s*-\s+(.+?)\s+{re.escape(name)}\b"
+        if l["dir"] == "out":   # this chunk names it: the ticket's own link line, else who defines it
+            verb = re.search(link_line, h.text, re.I | re.M) if tickets else None
+            defines = con.execute("SELECT 1 FROM idents WHERE chunk_id = ? AND ident = ? AND role = 'defines'",
+                                  (l["id"], name)).fetchone()
+            fact = verb.group(1) if verb else f"defines {name}" if defines else f"names {name} too"
+        else:                   # the target names it
+            other = con.execute("SELECT text FROM chunks WHERE id = ?", (l["id"],)).fetchone()["text"]
+            verb = re.search(link_line, other, re.I | re.M) if tickets else None
+            mine = con.execute("SELECT 1 FROM idents WHERE chunk_id = ? AND ident = ? AND role = 'defines'",
+                               (h.id, name)).fetchone()
+            fact = f"{verb.group(1)} this" if verb else f"uses {name}" if mine else f"names {name} too"
+    elif l["rel"] == "citation":
+        fact = "links to" if l["dir"] == "out" else "links here"
+        m = CLOSES.search(h.text) if l["dir"] == "out" else None
+        if m and re.search(rf"#{m.group(1)}\b", t["title"] or ""):
+            fact = "closes"
+    else:
+        fact = l["rel"]
+    return {"kind": t["kind"], "fact": fact, "title": t["title"]}
 
 
 def rank_key(h: Hit) -> tuple[bool, float]:
@@ -352,42 +446,58 @@ def widen_by_facts(con, q: str, pool: list[Hit], judge, *, limit: int = 10, seed
     return added + expand(con, pool + added, seeds, limit, scope, rels=("about",))
 
 
+def _flat(groups: list[list[Hit]]) -> list[Hit]:
+    return [h for g in groups for h in g]
+
+
+def _interleave(groups: list[list[Hit]]) -> list[Hit]:
+    """One from each group in turn, each chunk once: a ranker reading only the first few still sees
+    every kind of widening."""
+    out, seen = [], set()
+    for i in range(max((len(g) for g in groups), default=0)):
+        for g in groups:
+            if i < len(g) and g[i].id not in seen:
+                seen.add(g[i].id)
+                out.append(g[i])
+    return out
+
+
 def search(con, q: str, *, k: int = 5, pool: int = 15, ranker=None, expand_links: bool = False,
            by_type: bool = False, type_limit: int | None = None, facts=None, facts_limit: int = 10,
            symbols: bool = True, neighbours: bool = False, seeds: int = 5, expand_limit: int = 10,
            scope: Scope | None = None) -> list[Hit]:
     """`facts` is a judge (facts.make_judge) that predicts the query's content categories."""
     hits = bm25(con, q, pool, scope)
-    named = []
+    first, added = len(hits), []   # what each widening step adds, kept apart so none crowds the others out
     if symbols:
         # files and definitions the question names. SWE-bench Lite `mixed`: the answer file in the
         # pool 63% -> 73% for 3 more candidates; nDCG@10 against a BM25 pool of the same size
         # 0.430 -> 0.495 ranked by an earlier dispositio, 0.401 -> 0.456 unranked with these hits first
-        named = widen_by_symbols(con, q, hits, pool, scope)
-        hits += named
+        added.append(widen_by_symbols(con, q, hits, pool, scope))
     if by_type and ranker is not None:
         # as deep inside each predicted type as the pool goes overall: at depth 10, BM25's best
         # chunks of the predicted type were nearly always in the pool already (SWE-bench smoke)
-        hits += widen_by_type(con, q, hits, ranker, type_limit or pool, scope)
+        added.append(widen_by_type(con, q, hits + _flat(added), ranker, type_limit or pool, scope))
     if facts is not None:
-        hits += widen_by_facts(con, q, hits, facts, limit=facts_limit, seeds=seeds, scope=scope)
-    if neighbours:
-        hits += widen_by_neighbours(con, hits, seeds, expand_limit, scope)
+        added.append(widen_by_facts(con, q, hits + _flat(added), facts, limit=facts_limit, seeds=seeds, scope=scope))
     if expand_links:
-        hits += expand(con, hits, seeds, expand_limit, scope)
+        added.append(expand(con, hits + _flat(added), seeds, expand_limit, scope))
+    if neighbours:
+        added.append(widen_by_neighbours(con, hits + _flat(added), seeds, expand_limit, scope))
+    named = added[0] if symbols else []
+    hits += _interleave(added)
     if ranker is not None and hits:
-        # dispositio reads BM25's pool in passes of 15 (past 15, heats and a final: three passes); what
-        # widening added stays unread and keeps its place after the pool, so the default pool of 15 costs
-        # one pass and only `--pool 30` pays for three
-        read = hits[:pool] if getattr(ranker, "passes", False) else hits
-        scores = ranker.score(q, read) + [None] * (len(hits) - len(read))
+        # dispositio reads BM25's pool in passes of 15, and what widening added takes up to 7 seats in one
+        # more pass beside the pool's best 8 (rankers.SystemOneRanker.score); interleaved, so the named
+        # files, the links and the neighbours each get seats
+        scores = ranker.score(q, hits, first) if getattr(ranker, "passes", False) else ranker.score(q, hits)
         for h, s in zip(hits, scores):
             h.score = s
         # stable sort: ties keep BM25 order, linked chunks after BM25 hits, unscored chunks last
         hits.sort(key=rank_key)
     elif named:  # no ranker to reorder: what the question names goes ahead of BM25's guesses
-        first = {h.id for h in named}
-        hits = named + [h for h in hits if h.id not in first]
+        first_ids = {h.id for h in named}
+        hits = named + [h for h in hits if h.id not in first_ids]
     top = hits[:k]
     attach_links(con, top)
     return top

@@ -532,6 +532,1914 @@
     "macro_f1": 0.474,
     "n": 40
    }
+  },
+  "v4-calib/category": {
+   "all": {
+    "accuracy": 0.811,
+    "macro_f1": 0.769,
+    "n": 380
+   },
+   "calibration": {
+    "Explanation": {
+     "curve": [
+      {
+       "all": {
+        "kept": 30,
+        "n": 30,
+        "precision": 0.733
+       },
+       "ood": {
+        "kept": 24,
+        "n": 24,
+        "precision": 0.708
+       },
+       "tau": 0.0
+      },
+      {
+       "all": {
+        "kept": 30,
+        "n": 30,
+        "precision": 0.733
+       },
+       "ood": {
+        "kept": 24,
+        "n": 24,
+        "precision": 0.708
+       },
+       "tau": 0.05
+      },
+      {
+       "all": {
+        "kept": 30,
+        "n": 30,
+        "precision": 0.733
+       },
+       "ood": {
+        "kept": 24,
+        "n": 24,
+        "precision": 0.708
+       },
+       "tau": 0.1
+      },
+      {
+       "all": {
+        "kept": 30,
+        "n": 30,
+        "precision": 0.733
+       },
+       "ood": {
+        "kept": 24,
+        "n": 24,
+        "precision": 0.708
+       },
+       "tau": 0.15
+      },
+      {
+       "all": {
+        "kept": 30,
+        "n": 30,
+        "precision": 0.733
+       },
+       "ood": {
+        "kept": 24,
+        "n": 24,
+        "precision": 0.708
+       },
+       "tau": 0.2
+      },
+      {
+       "all": {
+        "kept": 29,
+        "n": 30,
+        "precision": 0.724
+       },
+       "ood": {
+        "kept": 23,
+        "n": 24,
+        "precision": 0.696
+       },
+       "tau": 0.25
+      },
+      {
+       "all": {
+        "kept": 29,
+        "n": 30,
+        "precision": 0.724
+       },
+       "ood": {
+        "kept": 23,
+        "n": 24,
+        "precision": 0.696
+       },
+       "tau": 0.3
+      },
+      {
+       "all": {
+        "kept": 28,
+        "n": 30,
+        "precision": 0.75
+       },
+       "ood": {
+        "kept": 22,
+        "n": 24,
+        "precision": 0.727
+       },
+       "tau": 0.35
+      },
+      {
+       "all": {
+        "kept": 27,
+        "n": 30,
+        "precision": 0.778
+       },
+       "ood": {
+        "kept": 21,
+        "n": 24,
+        "precision": 0.762
+       },
+       "tau": 0.4
+      },
+      {
+       "all": {
+        "kept": 23,
+        "n": 30,
+        "precision": 0.87
+       },
+       "ood": {
+        "kept": 17,
+        "n": 24,
+        "precision": 0.882
+       },
+       "tau": 0.45
+      },
+      {
+       "all": {
+        "kept": 23,
+        "n": 30,
+        "precision": 0.87
+       },
+       "ood": {
+        "kept": 17,
+        "n": 24,
+        "precision": 0.882
+       },
+       "tau": 0.5
+      },
+      {
+       "all": {
+        "kept": 21,
+        "n": 30,
+        "precision": 0.905
+       },
+       "ood": {
+        "kept": 16,
+        "n": 24,
+        "precision": 0.875
+       },
+       "tau": 0.55
+      },
+      {
+       "all": {
+        "kept": 21,
+        "n": 30,
+        "precision": 0.905
+       },
+       "ood": {
+        "kept": 16,
+        "n": 24,
+        "precision": 0.875
+       },
+       "tau": 0.6
+      },
+      {
+       "all": {
+        "kept": 20,
+        "n": 30,
+        "precision": 0.9
+       },
+       "ood": {
+        "kept": 15,
+        "n": 24,
+        "precision": 0.867
+       },
+       "tau": 0.65
+      },
+      {
+       "all": {
+        "kept": 18,
+        "n": 30,
+        "precision": 0.889
+       },
+       "ood": {
+        "kept": 13,
+        "n": 24,
+        "precision": 0.846
+       },
+       "tau": 0.7
+      },
+      {
+       "all": {
+        "kept": 17,
+        "n": 30,
+        "precision": 0.882
+       },
+       "ood": {
+        "kept": 13,
+        "n": 24,
+        "precision": 0.846
+       },
+       "tau": 0.75
+      },
+      {
+       "all": {
+        "kept": 15,
+        "n": 30,
+        "precision": 0.933
+       },
+       "ood": {
+        "kept": 11,
+        "n": 24,
+        "precision": 0.909
+       },
+       "tau": 0.8
+      },
+      {
+       "all": {
+        "kept": 12,
+        "n": 30,
+        "precision": 0.917
+       },
+       "ood": {
+        "kept": 9,
+        "n": 24,
+        "precision": 0.889
+       },
+       "tau": 0.85
+      },
+      {
+       "all": {
+        "kept": 9,
+        "n": 30,
+        "precision": 0.889
+       },
+       "ood": {
+        "kept": 6,
+        "n": 24,
+        "precision": 0.833
+       },
+       "tau": 0.9
+      },
+      {
+       "all": {
+        "kept": 3,
+        "n": 30,
+        "precision": 1.0
+       },
+       "ood": {
+        "kept": 3,
+        "n": 24,
+        "precision": 1.0
+       },
+       "tau": 0.95
+      }
+     ],
+     "predicted": 30,
+     "tau": null
+    },
+    "Finding": {
+     "curve": [
+      {
+       "all": {
+        "kept": 34,
+        "n": 34,
+        "precision": 1.0
+       },
+       "ood": {
+        "kept": 1,
+        "n": 1,
+        "precision": 1.0
+       },
+       "tau": 0.0
+      },
+      {
+       "all": {
+        "kept": 34,
+        "n": 34,
+        "precision": 1.0
+       },
+       "ood": {
+        "kept": 1,
+        "n": 1,
+        "precision": 1.0
+       },
+       "tau": 0.05
+      },
+      {
+       "all": {
+        "kept": 34,
+        "n": 34,
+        "precision": 1.0
+       },
+       "ood": {
+        "kept": 1,
+        "n": 1,
+        "precision": 1.0
+       },
+       "tau": 0.1
+      },
+      {
+       "all": {
+        "kept": 34,
+        "n": 34,
+        "precision": 1.0
+       },
+       "ood": {
+        "kept": 1,
+        "n": 1,
+        "precision": 1.0
+       },
+       "tau": 0.15
+      },
+      {
+       "all": {
+        "kept": 34,
+        "n": 34,
+        "precision": 1.0
+       },
+       "ood": {
+        "kept": 1,
+        "n": 1,
+        "precision": 1.0
+       },
+       "tau": 0.2
+      },
+      {
+       "all": {
+        "kept": 34,
+        "n": 34,
+        "precision": 1.0
+       },
+       "ood": {
+        "kept": 1,
+        "n": 1,
+        "precision": 1.0
+       },
+       "tau": 0.25
+      },
+      {
+       "all": {
+        "kept": 34,
+        "n": 34,
+        "precision": 1.0
+       },
+       "ood": {
+        "kept": 1,
+        "n": 1,
+        "precision": 1.0
+       },
+       "tau": 0.3
+      },
+      {
+       "all": {
+        "kept": 34,
+        "n": 34,
+        "precision": 1.0
+       },
+       "ood": {
+        "kept": 1,
+        "n": 1,
+        "precision": 1.0
+       },
+       "tau": 0.35
+      },
+      {
+       "all": {
+        "kept": 34,
+        "n": 34,
+        "precision": 1.0
+       },
+       "ood": {
+        "kept": 1,
+        "n": 1,
+        "precision": 1.0
+       },
+       "tau": 0.4
+      },
+      {
+       "all": {
+        "kept": 33,
+        "n": 34,
+        "precision": 1.0
+       },
+       "ood": {
+        "kept": 1,
+        "n": 1,
+        "precision": 1.0
+       },
+       "tau": 0.45
+      },
+      {
+       "all": {
+        "kept": 33,
+        "n": 34,
+        "precision": 1.0
+       },
+       "ood": {
+        "kept": 1,
+        "n": 1,
+        "precision": 1.0
+       },
+       "tau": 0.5
+      },
+      {
+       "all": {
+        "kept": 33,
+        "n": 34,
+        "precision": 1.0
+       },
+       "ood": {
+        "kept": 1,
+        "n": 1,
+        "precision": 1.0
+       },
+       "tau": 0.55
+      },
+      {
+       "all": {
+        "kept": 32,
+        "n": 34,
+        "precision": 1.0
+       },
+       "ood": {
+        "kept": 1,
+        "n": 1,
+        "precision": 1.0
+       },
+       "tau": 0.6
+      },
+      {
+       "all": {
+        "kept": 32,
+        "n": 34,
+        "precision": 1.0
+       },
+       "ood": {
+        "kept": 1,
+        "n": 1,
+        "precision": 1.0
+       },
+       "tau": 0.65
+      },
+      {
+       "all": {
+        "kept": 31,
+        "n": 34,
+        "precision": 1.0
+       },
+       "ood": {
+        "kept": 1,
+        "n": 1,
+        "precision": 1.0
+       },
+       "tau": 0.7
+      },
+      {
+       "all": {
+        "kept": 31,
+        "n": 34,
+        "precision": 1.0
+       },
+       "ood": {
+        "kept": 1,
+        "n": 1,
+        "precision": 1.0
+       },
+       "tau": 0.75
+      },
+      {
+       "all": {
+        "kept": 30,
+        "n": 34,
+        "precision": 1.0
+       },
+       "ood": {
+        "kept": 1,
+        "n": 1,
+        "precision": 1.0
+       },
+       "tau": 0.8
+      },
+      {
+       "all": {
+        "kept": 30,
+        "n": 34,
+        "precision": 1.0
+       },
+       "ood": {
+        "kept": 1,
+        "n": 1,
+        "precision": 1.0
+       },
+       "tau": 0.85
+      },
+      {
+       "all": {
+        "kept": 28,
+        "n": 34,
+        "precision": 1.0
+       },
+       "ood": {
+        "kept": 1,
+        "n": 1,
+        "precision": 1.0
+       },
+       "tau": 0.9
+      },
+      {
+       "all": {
+        "kept": 11,
+        "n": 34,
+        "precision": 1.0
+       },
+       "ood": {
+        "kept": 1,
+        "n": 1,
+        "precision": 1.0
+       },
+       "tau": 0.95
+      }
+     ],
+     "predicted": 34,
+     "tau": 0.0
+    },
+    "Other": {
+     "curve": [
+      {
+       "all": {
+        "kept": 18,
+        "n": 18,
+        "precision": 0.611
+       },
+       "ood": {
+        "kept": 18,
+        "n": 18,
+        "precision": 0.611
+       },
+       "tau": 0.0
+      },
+      {
+       "all": {
+        "kept": 18,
+        "n": 18,
+        "precision": 0.611
+       },
+       "ood": {
+        "kept": 18,
+        "n": 18,
+        "precision": 0.611
+       },
+       "tau": 0.05
+      },
+      {
+       "all": {
+        "kept": 18,
+        "n": 18,
+        "precision": 0.611
+       },
+       "ood": {
+        "kept": 18,
+        "n": 18,
+        "precision": 0.611
+       },
+       "tau": 0.1
+      },
+      {
+       "all": {
+        "kept": 18,
+        "n": 18,
+        "precision": 0.611
+       },
+       "ood": {
+        "kept": 18,
+        "n": 18,
+        "precision": 0.611
+       },
+       "tau": 0.15
+      },
+      {
+       "all": {
+        "kept": 18,
+        "n": 18,
+        "precision": 0.611
+       },
+       "ood": {
+        "kept": 18,
+        "n": 18,
+        "precision": 0.611
+       },
+       "tau": 0.2
+      },
+      {
+       "all": {
+        "kept": 18,
+        "n": 18,
+        "precision": 0.611
+       },
+       "ood": {
+        "kept": 18,
+        "n": 18,
+        "precision": 0.611
+       },
+       "tau": 0.25
+      },
+      {
+       "all": {
+        "kept": 18,
+        "n": 18,
+        "precision": 0.611
+       },
+       "ood": {
+        "kept": 18,
+        "n": 18,
+        "precision": 0.611
+       },
+       "tau": 0.3
+      },
+      {
+       "all": {
+        "kept": 18,
+        "n": 18,
+        "precision": 0.611
+       },
+       "ood": {
+        "kept": 18,
+        "n": 18,
+        "precision": 0.611
+       },
+       "tau": 0.35
+      },
+      {
+       "all": {
+        "kept": 17,
+        "n": 18,
+        "precision": 0.647
+       },
+       "ood": {
+        "kept": 17,
+        "n": 18,
+        "precision": 0.647
+       },
+       "tau": 0.4
+      },
+      {
+       "all": {
+        "kept": 17,
+        "n": 18,
+        "precision": 0.647
+       },
+       "ood": {
+        "kept": 17,
+        "n": 18,
+        "precision": 0.647
+       },
+       "tau": 0.45
+      },
+      {
+       "all": {
+        "kept": 17,
+        "n": 18,
+        "precision": 0.647
+       },
+       "ood": {
+        "kept": 17,
+        "n": 18,
+        "precision": 0.647
+       },
+       "tau": 0.5
+      },
+      {
+       "all": {
+        "kept": 16,
+        "n": 18,
+        "precision": 0.688
+       },
+       "ood": {
+        "kept": 16,
+        "n": 18,
+        "precision": 0.688
+       },
+       "tau": 0.55
+      },
+      {
+       "all": {
+        "kept": 15,
+        "n": 18,
+        "precision": 0.667
+       },
+       "ood": {
+        "kept": 15,
+        "n": 18,
+        "precision": 0.667
+       },
+       "tau": 0.6
+      },
+      {
+       "all": {
+        "kept": 15,
+        "n": 18,
+        "precision": 0.667
+       },
+       "ood": {
+        "kept": 15,
+        "n": 18,
+        "precision": 0.667
+       },
+       "tau": 0.65
+      },
+      {
+       "all": {
+        "kept": 12,
+        "n": 18,
+        "precision": 0.75
+       },
+       "ood": {
+        "kept": 12,
+        "n": 18,
+        "precision": 0.75
+       },
+       "tau": 0.7
+      },
+      {
+       "all": {
+        "kept": 12,
+        "n": 18,
+        "precision": 0.75
+       },
+       "ood": {
+        "kept": 12,
+        "n": 18,
+        "precision": 0.75
+       },
+       "tau": 0.75
+      },
+      {
+       "all": {
+        "kept": 11,
+        "n": 18,
+        "precision": 0.727
+       },
+       "ood": {
+        "kept": 11,
+        "n": 18,
+        "precision": 0.727
+       },
+       "tau": 0.8
+      },
+      {
+       "all": {
+        "kept": 8,
+        "n": 18,
+        "precision": 0.75
+       },
+       "ood": {
+        "kept": 8,
+        "n": 18,
+        "precision": 0.75
+       },
+       "tau": 0.85
+      },
+      {
+       "all": {
+        "kept": 6,
+        "n": 18,
+        "precision": 0.667
+       },
+       "ood": {
+        "kept": 6,
+        "n": 18,
+        "precision": 0.667
+       },
+       "tau": 0.9
+      },
+      {
+       "all": {
+        "kept": 3,
+        "n": 18,
+        "precision": 0.667
+       },
+       "ood": {
+        "kept": 3,
+        "n": 18,
+        "precision": 0.667
+       },
+       "tau": 0.95
+      }
+     ],
+     "predicted": 18,
+     "tau": null
+    },
+    "Procedure": {
+     "curve": [
+      {
+       "all": {
+        "kept": 68,
+        "n": 68,
+        "precision": 0.882
+       },
+       "ood": {
+        "kept": 68,
+        "n": 68,
+        "precision": 0.882
+       },
+       "tau": 0.0
+      },
+      {
+       "all": {
+        "kept": 68,
+        "n": 68,
+        "precision": 0.882
+       },
+       "ood": {
+        "kept": 68,
+        "n": 68,
+        "precision": 0.882
+       },
+       "tau": 0.05
+      },
+      {
+       "all": {
+        "kept": 68,
+        "n": 68,
+        "precision": 0.882
+       },
+       "ood": {
+        "kept": 68,
+        "n": 68,
+        "precision": 0.882
+       },
+       "tau": 0.1
+      },
+      {
+       "all": {
+        "kept": 68,
+        "n": 68,
+        "precision": 0.882
+       },
+       "ood": {
+        "kept": 68,
+        "n": 68,
+        "precision": 0.882
+       },
+       "tau": 0.15
+      },
+      {
+       "all": {
+        "kept": 68,
+        "n": 68,
+        "precision": 0.882
+       },
+       "ood": {
+        "kept": 68,
+        "n": 68,
+        "precision": 0.882
+       },
+       "tau": 0.2
+      },
+      {
+       "all": {
+        "kept": 68,
+        "n": 68,
+        "precision": 0.882
+       },
+       "ood": {
+        "kept": 68,
+        "n": 68,
+        "precision": 0.882
+       },
+       "tau": 0.25
+      },
+      {
+       "all": {
+        "kept": 68,
+        "n": 68,
+        "precision": 0.882
+       },
+       "ood": {
+        "kept": 68,
+        "n": 68,
+        "precision": 0.882
+       },
+       "tau": 0.3
+      },
+      {
+       "all": {
+        "kept": 65,
+        "n": 68,
+        "precision": 0.908
+       },
+       "ood": {
+        "kept": 65,
+        "n": 68,
+        "precision": 0.908
+       },
+       "tau": 0.35
+      },
+      {
+       "all": {
+        "kept": 65,
+        "n": 68,
+        "precision": 0.908
+       },
+       "ood": {
+        "kept": 65,
+        "n": 68,
+        "precision": 0.908
+       },
+       "tau": 0.4
+      },
+      {
+       "all": {
+        "kept": 65,
+        "n": 68,
+        "precision": 0.908
+       },
+       "ood": {
+        "kept": 65,
+        "n": 68,
+        "precision": 0.908
+       },
+       "tau": 0.45
+      },
+      {
+       "all": {
+        "kept": 61,
+        "n": 68,
+        "precision": 0.918
+       },
+       "ood": {
+        "kept": 61,
+        "n": 68,
+        "precision": 0.918
+       },
+       "tau": 0.5
+      },
+      {
+       "all": {
+        "kept": 60,
+        "n": 68,
+        "precision": 0.917
+       },
+       "ood": {
+        "kept": 60,
+        "n": 68,
+        "precision": 0.917
+       },
+       "tau": 0.55
+      },
+      {
+       "all": {
+        "kept": 58,
+        "n": 68,
+        "precision": 0.931
+       },
+       "ood": {
+        "kept": 58,
+        "n": 68,
+        "precision": 0.931
+       },
+       "tau": 0.6
+      },
+      {
+       "all": {
+        "kept": 56,
+        "n": 68,
+        "precision": 0.946
+       },
+       "ood": {
+        "kept": 56,
+        "n": 68,
+        "precision": 0.946
+       },
+       "tau": 0.65
+      },
+      {
+       "all": {
+        "kept": 55,
+        "n": 68,
+        "precision": 0.945
+       },
+       "ood": {
+        "kept": 55,
+        "n": 68,
+        "precision": 0.945
+       },
+       "tau": 0.7
+      },
+      {
+       "all": {
+        "kept": 54,
+        "n": 68,
+        "precision": 0.944
+       },
+       "ood": {
+        "kept": 54,
+        "n": 68,
+        "precision": 0.944
+       },
+       "tau": 0.75
+      },
+      {
+       "all": {
+        "kept": 53,
+        "n": 68,
+        "precision": 0.962
+       },
+       "ood": {
+        "kept": 53,
+        "n": 68,
+        "precision": 0.962
+       },
+       "tau": 0.8
+      },
+      {
+       "all": {
+        "kept": 51,
+        "n": 68,
+        "precision": 0.961
+       },
+       "ood": {
+        "kept": 51,
+        "n": 68,
+        "precision": 0.961
+       },
+       "tau": 0.85
+      },
+      {
+       "all": {
+        "kept": 40,
+        "n": 68,
+        "precision": 1.0
+       },
+       "ood": {
+        "kept": 40,
+        "n": 68,
+        "precision": 1.0
+       },
+       "tau": 0.9
+      },
+      {
+       "all": {
+        "kept": 12,
+        "n": 68,
+        "precision": 1.0
+       },
+       "ood": {
+        "kept": 12,
+        "n": 68,
+        "precision": 1.0
+       },
+       "tau": 0.95
+      }
+     ],
+     "predicted": 68,
+     "tau": 0.8
+    },
+    "Record": {
+     "curve": [
+      {
+       "all": {
+        "kept": 96,
+        "n": 96,
+        "precision": 0.969
+       },
+       "ood": {
+        "kept": 55,
+        "n": 55,
+        "precision": 0.945
+       },
+       "tau": 0.0
+      },
+      {
+       "all": {
+        "kept": 96,
+        "n": 96,
+        "precision": 0.969
+       },
+       "ood": {
+        "kept": 55,
+        "n": 55,
+        "precision": 0.945
+       },
+       "tau": 0.05
+      },
+      {
+       "all": {
+        "kept": 96,
+        "n": 96,
+        "precision": 0.969
+       },
+       "ood": {
+        "kept": 55,
+        "n": 55,
+        "precision": 0.945
+       },
+       "tau": 0.1
+      },
+      {
+       "all": {
+        "kept": 96,
+        "n": 96,
+        "precision": 0.969
+       },
+       "ood": {
+        "kept": 55,
+        "n": 55,
+        "precision": 0.945
+       },
+       "tau": 0.15
+      },
+      {
+       "all": {
+        "kept": 96,
+        "n": 96,
+        "precision": 0.969
+       },
+       "ood": {
+        "kept": 55,
+        "n": 55,
+        "precision": 0.945
+       },
+       "tau": 0.2
+      },
+      {
+       "all": {
+        "kept": 96,
+        "n": 96,
+        "precision": 0.969
+       },
+       "ood": {
+        "kept": 55,
+        "n": 55,
+        "precision": 0.945
+       },
+       "tau": 0.25
+      },
+      {
+       "all": {
+        "kept": 96,
+        "n": 96,
+        "precision": 0.969
+       },
+       "ood": {
+        "kept": 55,
+        "n": 55,
+        "precision": 0.945
+       },
+       "tau": 0.3
+      },
+      {
+       "all": {
+        "kept": 95,
+        "n": 96,
+        "precision": 0.968
+       },
+       "ood": {
+        "kept": 54,
+        "n": 55,
+        "precision": 0.944
+       },
+       "tau": 0.35
+      },
+      {
+       "all": {
+        "kept": 95,
+        "n": 96,
+        "precision": 0.968
+       },
+       "ood": {
+        "kept": 54,
+        "n": 55,
+        "precision": 0.944
+       },
+       "tau": 0.4
+      },
+      {
+       "all": {
+        "kept": 95,
+        "n": 96,
+        "precision": 0.968
+       },
+       "ood": {
+        "kept": 54,
+        "n": 55,
+        "precision": 0.944
+       },
+       "tau": 0.45
+      },
+      {
+       "all": {
+        "kept": 91,
+        "n": 96,
+        "precision": 0.967
+       },
+       "ood": {
+        "kept": 50,
+        "n": 55,
+        "precision": 0.94
+       },
+       "tau": 0.5
+      },
+      {
+       "all": {
+        "kept": 91,
+        "n": 96,
+        "precision": 0.967
+       },
+       "ood": {
+        "kept": 50,
+        "n": 55,
+        "precision": 0.94
+       },
+       "tau": 0.55
+      },
+      {
+       "all": {
+        "kept": 90,
+        "n": 96,
+        "precision": 0.967
+       },
+       "ood": {
+        "kept": 49,
+        "n": 55,
+        "precision": 0.939
+       },
+       "tau": 0.6
+      },
+      {
+       "all": {
+        "kept": 90,
+        "n": 96,
+        "precision": 0.967
+       },
+       "ood": {
+        "kept": 49,
+        "n": 55,
+        "precision": 0.939
+       },
+       "tau": 0.65
+      },
+      {
+       "all": {
+        "kept": 87,
+        "n": 96,
+        "precision": 0.977
+       },
+       "ood": {
+        "kept": 47,
+        "n": 55,
+        "precision": 0.957
+       },
+       "tau": 0.7
+      },
+      {
+       "all": {
+        "kept": 86,
+        "n": 96,
+        "precision": 0.977
+       },
+       "ood": {
+        "kept": 47,
+        "n": 55,
+        "precision": 0.957
+       },
+       "tau": 0.75
+      },
+      {
+       "all": {
+        "kept": 86,
+        "n": 96,
+        "precision": 0.977
+       },
+       "ood": {
+        "kept": 47,
+        "n": 55,
+        "precision": 0.957
+       },
+       "tau": 0.8
+      },
+      {
+       "all": {
+        "kept": 85,
+        "n": 96,
+        "precision": 0.976
+       },
+       "ood": {
+        "kept": 46,
+        "n": 55,
+        "precision": 0.957
+       },
+       "tau": 0.85
+      },
+      {
+       "all": {
+        "kept": 81,
+        "n": 96,
+        "precision": 0.988
+       },
+       "ood": {
+        "kept": 44,
+        "n": 55,
+        "precision": 0.977
+       },
+       "tau": 0.9
+      },
+      {
+       "all": {
+        "kept": 32,
+        "n": 96,
+        "precision": 0.969
+       },
+       "ood": {
+        "kept": 5,
+        "n": 55,
+        "precision": 0.8
+       },
+       "tau": 0.95
+      }
+     ],
+     "predicted": 96,
+     "tau": 0.7
+    },
+    "Reference": {
+     "curve": [
+      {
+       "all": {
+        "kept": 76,
+        "n": 76,
+        "precision": 0.566
+       },
+       "ood": {
+        "kept": 76,
+        "n": 76,
+        "precision": 0.566
+       },
+       "tau": 0.0
+      },
+      {
+       "all": {
+        "kept": 76,
+        "n": 76,
+        "precision": 0.566
+       },
+       "ood": {
+        "kept": 76,
+        "n": 76,
+        "precision": 0.566
+       },
+       "tau": 0.05
+      },
+      {
+       "all": {
+        "kept": 76,
+        "n": 76,
+        "precision": 0.566
+       },
+       "ood": {
+        "kept": 76,
+        "n": 76,
+        "precision": 0.566
+       },
+       "tau": 0.1
+      },
+      {
+       "all": {
+        "kept": 76,
+        "n": 76,
+        "precision": 0.566
+       },
+       "ood": {
+        "kept": 76,
+        "n": 76,
+        "precision": 0.566
+       },
+       "tau": 0.15
+      },
+      {
+       "all": {
+        "kept": 76,
+        "n": 76,
+        "precision": 0.566
+       },
+       "ood": {
+        "kept": 76,
+        "n": 76,
+        "precision": 0.566
+       },
+       "tau": 0.2
+      },
+      {
+       "all": {
+        "kept": 76,
+        "n": 76,
+        "precision": 0.566
+       },
+       "ood": {
+        "kept": 76,
+        "n": 76,
+        "precision": 0.566
+       },
+       "tau": 0.25
+      },
+      {
+       "all": {
+        "kept": 75,
+        "n": 76,
+        "precision": 0.573
+       },
+       "ood": {
+        "kept": 75,
+        "n": 76,
+        "precision": 0.573
+       },
+       "tau": 0.3
+      },
+      {
+       "all": {
+        "kept": 74,
+        "n": 76,
+        "precision": 0.581
+       },
+       "ood": {
+        "kept": 74,
+        "n": 76,
+        "precision": 0.581
+       },
+       "tau": 0.35
+      },
+      {
+       "all": {
+        "kept": 71,
+        "n": 76,
+        "precision": 0.592
+       },
+       "ood": {
+        "kept": 71,
+        "n": 76,
+        "precision": 0.592
+       },
+       "tau": 0.4
+      },
+      {
+       "all": {
+        "kept": 67,
+        "n": 76,
+        "precision": 0.597
+       },
+       "ood": {
+        "kept": 67,
+        "n": 76,
+        "precision": 0.597
+       },
+       "tau": 0.45
+      },
+      {
+       "all": {
+        "kept": 65,
+        "n": 76,
+        "precision": 0.615
+       },
+       "ood": {
+        "kept": 65,
+        "n": 76,
+        "precision": 0.615
+       },
+       "tau": 0.5
+      },
+      {
+       "all": {
+        "kept": 64,
+        "n": 76,
+        "precision": 0.609
+       },
+       "ood": {
+        "kept": 64,
+        "n": 76,
+        "precision": 0.609
+       },
+       "tau": 0.55
+      },
+      {
+       "all": {
+        "kept": 60,
+        "n": 76,
+        "precision": 0.617
+       },
+       "ood": {
+        "kept": 60,
+        "n": 76,
+        "precision": 0.617
+       },
+       "tau": 0.6
+      },
+      {
+       "all": {
+        "kept": 58,
+        "n": 76,
+        "precision": 0.621
+       },
+       "ood": {
+        "kept": 58,
+        "n": 76,
+        "precision": 0.621
+       },
+       "tau": 0.65
+      },
+      {
+       "all": {
+        "kept": 44,
+        "n": 76,
+        "precision": 0.773
+       },
+       "ood": {
+        "kept": 44,
+        "n": 76,
+        "precision": 0.773
+       },
+       "tau": 0.7
+      },
+      {
+       "all": {
+        "kept": 37,
+        "n": 76,
+        "precision": 0.892
+       },
+       "ood": {
+        "kept": 37,
+        "n": 76,
+        "precision": 0.892
+       },
+       "tau": 0.75
+      },
+      {
+       "all": {
+        "kept": 33,
+        "n": 76,
+        "precision": 0.909
+       },
+       "ood": {
+        "kept": 33,
+        "n": 76,
+        "precision": 0.909
+       },
+       "tau": 0.8
+      },
+      {
+       "all": {
+        "kept": 26,
+        "n": 76,
+        "precision": 0.962
+       },
+       "ood": {
+        "kept": 26,
+        "n": 76,
+        "precision": 0.962
+       },
+       "tau": 0.85
+      },
+      {
+       "all": {
+        "kept": 17,
+        "n": 76,
+        "precision": 1.0
+       },
+       "ood": {
+        "kept": 17,
+        "n": 76,
+        "precision": 1.0
+       },
+       "tau": 0.9
+      },
+      {
+       "all": {
+        "kept": 7,
+        "n": 76,
+        "precision": 1.0
+       },
+       "ood": {
+        "kept": 7,
+        "n": 76,
+        "precision": 1.0
+       },
+       "tau": 0.95
+      }
+     ],
+     "predicted": 76,
+     "tau": null
+    },
+    "Rule": {
+     "curve": [
+      {
+       "all": {
+        "kept": 58,
+        "n": 58,
+        "precision": 0.776
+       },
+       "ood": {
+        "kept": 18,
+        "n": 18,
+        "precision": 0.5
+       },
+       "tau": 0.0
+      },
+      {
+       "all": {
+        "kept": 58,
+        "n": 58,
+        "precision": 0.776
+       },
+       "ood": {
+        "kept": 18,
+        "n": 18,
+        "precision": 0.5
+       },
+       "tau": 0.05
+      },
+      {
+       "all": {
+        "kept": 58,
+        "n": 58,
+        "precision": 0.776
+       },
+       "ood": {
+        "kept": 18,
+        "n": 18,
+        "precision": 0.5
+       },
+       "tau": 0.1
+      },
+      {
+       "all": {
+        "kept": 58,
+        "n": 58,
+        "precision": 0.776
+       },
+       "ood": {
+        "kept": 18,
+        "n": 18,
+        "precision": 0.5
+       },
+       "tau": 0.15
+      },
+      {
+       "all": {
+        "kept": 58,
+        "n": 58,
+        "precision": 0.776
+       },
+       "ood": {
+        "kept": 18,
+        "n": 18,
+        "precision": 0.5
+       },
+       "tau": 0.2
+      },
+      {
+       "all": {
+        "kept": 58,
+        "n": 58,
+        "precision": 0.776
+       },
+       "ood": {
+        "kept": 18,
+        "n": 18,
+        "precision": 0.5
+       },
+       "tau": 0.25
+      },
+      {
+       "all": {
+        "kept": 58,
+        "n": 58,
+        "precision": 0.776
+       },
+       "ood": {
+        "kept": 18,
+        "n": 18,
+        "precision": 0.5
+       },
+       "tau": 0.3
+      },
+      {
+       "all": {
+        "kept": 58,
+        "n": 58,
+        "precision": 0.776
+       },
+       "ood": {
+        "kept": 18,
+        "n": 18,
+        "precision": 0.5
+       },
+       "tau": 0.35
+      },
+      {
+       "all": {
+        "kept": 57,
+        "n": 58,
+        "precision": 0.789
+       },
+       "ood": {
+        "kept": 17,
+        "n": 18,
+        "precision": 0.529
+       },
+       "tau": 0.4
+      },
+      {
+       "all": {
+        "kept": 56,
+        "n": 58,
+        "precision": 0.804
+       },
+       "ood": {
+        "kept": 16,
+        "n": 18,
+        "precision": 0.562
+       },
+       "tau": 0.45
+      },
+      {
+       "all": {
+        "kept": 55,
+        "n": 58,
+        "precision": 0.818
+       },
+       "ood": {
+        "kept": 15,
+        "n": 18,
+        "precision": 0.6
+       },
+       "tau": 0.5
+      },
+      {
+       "all": {
+        "kept": 55,
+        "n": 58,
+        "precision": 0.818
+       },
+       "ood": {
+        "kept": 15,
+        "n": 18,
+        "precision": 0.6
+       },
+       "tau": 0.55
+      },
+      {
+       "all": {
+        "kept": 54,
+        "n": 58,
+        "precision": 0.833
+       },
+       "ood": {
+        "kept": 14,
+        "n": 18,
+        "precision": 0.643
+       },
+       "tau": 0.6
+      },
+      {
+       "all": {
+        "kept": 49,
+        "n": 58,
+        "precision": 0.918
+       },
+       "ood": {
+        "kept": 12,
+        "n": 18,
+        "precision": 0.75
+       },
+       "tau": 0.65
+      },
+      {
+       "all": {
+        "kept": 48,
+        "n": 58,
+        "precision": 0.938
+       },
+       "ood": {
+        "kept": 11,
+        "n": 18,
+        "precision": 0.818
+       },
+       "tau": 0.7
+      },
+      {
+       "all": {
+        "kept": 45,
+        "n": 58,
+        "precision": 0.978
+       },
+       "ood": {
+        "kept": 9,
+        "n": 18,
+        "precision": 0.889
+       },
+       "tau": 0.75
+      },
+      {
+       "all": {
+        "kept": 43,
+        "n": 58,
+        "precision": 0.977
+       },
+       "ood": {
+        "kept": 8,
+        "n": 18,
+        "precision": 0.875
+       },
+       "tau": 0.8
+      },
+      {
+       "all": {
+        "kept": 41,
+        "n": 58,
+        "precision": 1.0
+       },
+       "ood": {
+        "kept": 6,
+        "n": 18,
+        "precision": 1.0
+       },
+       "tau": 0.85
+      },
+      {
+       "all": {
+        "kept": 36,
+        "n": 58,
+        "precision": 1.0
+       },
+       "ood": {
+        "kept": 4,
+        "n": 18,
+        "precision": 1.0
+       },
+       "tau": 0.9
+      },
+      {
+       "all": {
+        "kept": 1,
+        "n": 58,
+        "precision": 1.0
+       },
+       "ood": {
+        "kept": 0,
+        "n": 18,
+        "precision": null
+       },
+       "tau": 0.95
+      }
+     ],
+     "predicted": 58,
+     "tau": null
+    }
+   },
+   "coir-stackoverflow-qa": {
+    "accuracy": 0.617,
+    "macro_f1": 0.47,
+    "n": 60
+   },
+   "held-repo": {
+    "accuracy": 0.78,
+    "macro_f1": 0.765,
+    "n": 200
+   },
+   "in_domain": {
+    "accuracy": 0.958,
+    "macro_f1": 0.768,
+    "n": 120
+   },
+   "judge": "dispositio:C:/Users/LEGION/kev/runs/s1-v1.3",
+   "ms_per_passage": 88.5,
+   "out_of_domain": {
+    "accuracy": 0.742,
+    "macro_f1": 0.678,
+    "n": 260
+   },
+   "scifact": {
+    "accuracy": 0.975,
+    "macro_f1": 0.965,
+    "n": 40
+   },
+   "swe-issue": {
+    "accuracy": 1.0,
+    "macro_f1": 1.0,
+    "n": 40
+   },
+   "zalo-legal": {
+    "accuracy": 0.9,
+    "macro_f1": 0.474,
+    "n": 40
+   }
   }
  },
  "leak": {
@@ -768,6 +2676,48 @@
    "tokens_max": 5652,
    "tokens_median": 3270,
    "top_line_owner_passage@1": "286/453"
+  },
+  "s1-v1.3/md2d-reverse": {
+   "answer_absent_queries": 160,
+   "bm25@1": 0.009,
+   "exists_auc": 0.651,
+   "exists_auc_answer_absent": 0.688,
+   "exists_auc_answer_absent_pmax": null,
+   "exists_auc_pmax": null,
+   "exists_neg_median": 0.0729,
+   "exists_pos_median": 0.1312,
+   "gold_in_pool": 453,
+   "latency_ms_median": 159.6,
+   "latency_ms_p90": 213.9,
+   "passage@1": 0.607,
+   "passage@1_pmax": null,
+   "queries": 613,
+   "set": "md2d",
+   "tag": "s1-v1.3",
+   "tokens_max": 5652,
+   "tokens_median": 3270,
+   "top_line_owner_passage@1": "292/453"
+  },
+  "s1-v1.3/md2d-shuffle": {
+   "answer_absent_queries": 160,
+   "bm25@1": 0.201,
+   "exists_auc": 0.696,
+   "exists_auc_answer_absent": 0.793,
+   "exists_auc_answer_absent_pmax": null,
+   "exists_auc_pmax": null,
+   "exists_neg_median": 0.1316,
+   "exists_pos_median": 0.3166,
+   "gold_in_pool": 453,
+   "latency_ms_median": 157.1,
+   "latency_ms_p90": 211.8,
+   "passage@1": 0.627,
+   "passage@1_pmax": null,
+   "queries": 613,
+   "set": "md2d",
+   "tag": "s1-v1.3",
+   "tokens_max": 5652,
+   "tokens_median": 3270,
+   "top_line_owner_passage@1": "291/453"
   },
   "s1-v1.3/techqa": {
    "answer_absent_queries": 32,

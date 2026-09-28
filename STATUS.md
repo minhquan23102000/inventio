@@ -23,13 +23,54 @@ Where the work stands, for picking it up on another machine. Last updated 2026-0
   Rows in `results/swe-lite-types/results.jsonl` (`predictor: systemone`, `machine` field).
 - **Facts on SciFact (v1.3, Modal L4):** recall in pool facts 0.849 vs control 0.854 vs base 0.849;
   2 links of 30,517 pairs. Categories on SciFact: Finding 4,183, Explanation 955 of 5,183 (abstracts).
-- **Links are the next piece of work** (Zero, 2026-09-27: after v4). What is known: Jev's own `about`
-  links lost to unjudged shared-word neighbours on SciFact (0.769 vs 0.785, CI below 0); link questions
-  in training were memorised (held-out 11/23 = BM25); v1.2 linked 1 pair of 21,328. Proposed order:
-  ask the link question at query time, against the user's question, with the model already reading
-  the whole pool (no training); measure on the 28 Jira-linked private questions on the Mac; train
-  (v1.4, public pairs only: SWE-bench issue→fix code, MultiDoc2Dial cross-page grounding) only if the
-  question change helps. Modal credit: $5.09 spent of $30 on 2026-09-27 (v1.2 rehearsal).
+- **Links, 2026-09-28 (Zero: links are the selling point; people are drawn to the beautiful before the
+  correct).**
+  1. *Fixed:* since the heats change, `search` handed dispositio BM25's pool alone, so everything widening
+     added (named files, links, neighbours) sat unread below the pool and never reached the top 5 (probe:
+     20 added per query, 0 read, 0 in the top 5). Now `SystemOneRanker.score(q, hits, first)` gives up to 7
+     of them seats in a final beside the pool's best 8, interleaved across the kinds of widening
+     (`search._interleave`). Test: `test_a_passes_ranker_reads_what_widening_added` fails on the old code.
+  2. *On BEIR the widening adds nothing a second pass over BM25's next 7 does not* (`beir_bench.py
+     --widen`, pool 15, first 200 queries; `widen-*.jsonl`, `summary.json["widen"]`): widened vs control
+     SciFact −0.003 [−0.020, +0.013], MD2D −0.004 [−0.026, +0.018], TechQA (119) −0.006 [−0.042, +0.026],
+     Zalo −0.016 [−0.037, +0.001]. Answers that entered through widening into the top 10: 6 / 4 / 8 / 2.
+     s/query base → widened: 0.54 → 1.01, 0.31 → 0.59, 0.61 → 1.09, 1.05 → 3.45 (Zalo's neighbour
+     queries). BEIR maps have almost no real links (mentions only, from shared tokens); a real map's
+     Confluence→Jira→code links are measured only by the Mac's 28 Jira-linked questions — not yet run.
+  3. *Links are named by what the map knows, never by a model (oracle review, 2026-09-28).* A zero-shot
+     relation question (`systemone.RELATIONS`) agreed with a reader on 2-3 of 10 webshop pairs
+     (`benchmarks/relations_probe.py`, kept as the baseline any relation model must beat); the CLI flag is
+     gone. Each link now prints `kind · fact · target title` (`search.name_link`): the kind from the
+     document type (`code`, `test`, `config`, `table`), the ticket type or PR state, or a judged category
+     only above its τ (`search.KIND_TAU`: Procedure 0.8, Record 0.7, Finding 0.8 — precision ≥ 0.95 at
+     ≥ 40% coverage on the 380 held-out passages, overall and out of domain, `systemone.py judge v4-calib`;
+     Rule, Reference, Explanation, Other never reach it and print `page`). The fact is the sources' own:
+     `defines X` / `uses X`, the ticket's link line verbatim (`is caused by`), `closes #N`, `links to`,
+     `names X too`. Model-judged `about` links and neighbours are never shown. Other kinds first, a stated
+     link before a shared name. New code-drawn link: two prose chunks naming the same defined identifier
+     (the runbook step and the incident about `nightly_backup`). Tests: `test_links_are_named_by_what_the_map_knows`.
+  4. *Links written as URLs now link* (`links._url_citations`): a Jira/Confluence/GitHub URL in any
+     source becomes a `citation` to the mirrored item (`/browse/KEY`, `/pages/<id>`, `?pageId=`,
+     `?focusedCommentId=`, `#issuecomment-`, host case, trailing slash); before, every `http:` target was
+     dropped, so ticket→page links on a real map had nothing to follow. Unmeasured on a real map.
+  5. *SWE-bench Lite, 300 issues, `mixed`, pool 15, v4, through `search()`* (`swe_bench.py --widen`,
+     `results/swe-lite-widen/`), nDCG@10: base 0.412, + named files/definitions 0.486, + links 0.494,
+     + neighbours (the default) 0.483, control (BM25's next 7 read in the same extra pass) 0.435.
+     Named files vs base +0.074 [+0.048, +0.102]; links on top +0.007 [−0.015, +0.030] (answer in pool
+     0.693 → 0.727, top 5 0.567 → 0.587); neighbours on top −0.011 [−0.029, +0.007] for +0.47 s/query
+     (2.03 → 2.50). The default beats control +0.048 [+0.020, +0.074], all of it from named files.
+  6. *Order inside the state (v1.3, md2d, 453 answerable):* passage@1 BM25 order 0.638, shuffled 0.627,
+     reversed 0.607; `exists` AUC (answer-absent) 0.805 / 0.793 / 0.688. Where-passage reads content; the
+     exists head leans on BM25's order, so "not in the map" is weaker than 0.805 says when order is off.
+  Neighbours off by default since 2026-09-28 (Zero's call: SWE non-inferior, −0.47 s; BEIR not measured
+  without them; Zalo paid 1.7-2.4 s). Still open: the index-time `about` question (D3). A relation model waits on
+  labels: ~60 pairs he double-labels, then a labelled eval set; train only if a (kind R, kind T, link kind)
+  table covers < 70% of agreed relations. Modal: $10.25 of $30 as of 2026-09-27; nothing spent 2026-09-28.
+  **Mac run sheet** (`~/demo`): `git pull`, `uv run inventio sync` (rebuilds links, URL citations
+  included); per stratum (12 hand-written, 28 link-made) `uv run inventio bench <file> --ranker dispositio
+  --rows rows-<arm>.jsonl` with arms default (names + links) / `--neighbours` / `--no-links`; the rows
+  say each gold's rank and how it entered (`via`). First, one SQL per link-made question: is the gold
+  file reachable from its ticket through `links`? If not, links cannot help there whatever the model does.
 - **Why v4 trails v3 at pool 30, and the fix measured (2026-09-27).** v4 reads BM25's first 15 only; the loss
   is the answers at ranks 16-30 (46/613 md2d queries, 29+4 of 300 SWE code issues), not the model: on the
   passages it reads v4 ties v3/v2, except Zalo (-0.026 [-0.041, -0.011]; its ranker saw no Vietnamese).
@@ -38,9 +79,9 @@ Where the work stands, for picking it up on another machine. Last updated 2026-0
   SciFact 0.718 -> 0.716 (v3 0.733), Zalo 0.805 -> 0.805 (v3 0.838), SWE code 0.599 -> 0.643 (v2 0.661,
   diff -0.017 [-0.051, +0.015]). Cost +0.55 to +1.7 s/query on the 5070. Rows: `results/modal/v4-heats/`
   (SWE, `dispositio@v4-heats`); BEIR from a throwaway probe over the cached first pass. **Shipped:**
-  `SystemOneRanker.score` reads past 15 as these heats; `search` hands it BM25's pool alone, so the default
-  pool of 15 stays one pass (TechQA, warm: 0.46 s) and `--pool 30` pays three (1.34 s). The shipped ranker
-  gives the probe's top 10 on 20/20 TechQA queries; the README row is marked as not re-run through the
+  `SystemOneRanker.score` reads past 15 as these heats; the default pool of 15 was one pass (TechQA, warm:
+  0.46 s) and `--pool 30` three (1.34 s) — since 2026-09-28 one pass more for what widening adds (see Links).
+  The shipped ranker gives the probe's top 10 on 20/20 TechQA queries; the README row is marked as not re-run through the
   bench scripts.
   RRF of v3+v4 measured too: +0.01 on average, not worth a second model.
 - **Links, where the code stands (for the linking session).** At index time `facts.link_facts` asks each
@@ -196,16 +237,13 @@ repository because they name internal documents.
 - Smaller: printed ranks can appear out of order (results are grouped by document type); the
   first query is slow without warning; `--db` after the subcommand gives a generic argparse error.
 - Untested: the server on Windows, and two first queries starting it at once.
-- **Links and neighbours are on by default with a ranker** (`--no-links`, `--no-neighbours`; skipped
-  with `--ranker none`, where they would only sit below BM25). Answer brought into a pool that had
-  none (BM25 30 + up to 10 each, `%TEMP%/probe_widen.py`): SciFact 9 (neighbours) / 4 (links) of
-  300, StackOverflow QA 14 / 31 of 1,994, MultiDoc2Dial 6 / 0 of 613 (BEIR maps have only judged
-  `about` links; a real map's cites/mentions links are unmeasured here). Cost per query, CPU,
-  before the ranker: links about 0 ms; neighbours 23 ms (TechQA, 2k chunks), 65 ms (SciFact, 5k),
-  201 ms (StackOverflow QA, 27k), **1.7 s (Zalo, 67k)** — five 24-word BM25 queries. On Vietnamese
-  maps that bag of words is also searched as adjacent pairs (`đ` survives the diacritic fold, so
-  the phrase rule fires on a list with no adjacency): off, 1.45 s and 27% different neighbours;
-  not changed until measured. The ranker reads up to 20 more passages.
+- **Links are on by default with a ranker, neighbours off since 2026-09-28** (`--no-links`,
+  `--neighbours`; both skipped with `--ranker none`, where they would only sit below BM25). Zero's call on
+  the SWE-bench Lite widen arms (Links, item 5): neighbours −0.011 [−0.029, +0.007] for +0.47 s/query;
+  BEIR without them is not measured. Cost per query before the ranker, CPU: links about 0 ms; neighbours
+  23 ms (TechQA, 2k chunks), 65 ms (SciFact, 5k), 201 ms (StackOverflow QA, 27k), **1.7 s (Zalo, 67k)**.
+  On Vietnamese maps their bag of words is also searched as adjacent pairs (`đ` survives the diacritic
+  fold, so the phrase rule fires on a list with no adjacency); not changed, since they are off by default.
 
 ## Next
 

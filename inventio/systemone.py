@@ -106,6 +106,29 @@ def questions(q, pids, lids, with_line=True, with_passage_asks=False):
     return qs
 
 
+# A model-named relation between a result and what it leads to, asked with the question in view: kept only as
+# the zero-shot baseline arm of benchmarks/relations_probe.py. Links are shown with names code knows for
+# certain (search.name_link): v4 agreed with a reader on 2-3 of 10 webshop pairs here, and a model's wrong
+# name is a false statement on screen. No record in training asks it.
+RELATIONS = {
+    "carries it out": "code, a job, a command or steps that do what passage {r} describes or requires",
+    "rule it follows": "a requirement, policy, limit or threshold that what passage {r} describes must obey",
+    "where it failed": "an incident, bug or failure in which what passage {r} describes went wrong",
+    "why it is so": "the decision, change or reason that made what passage {r} describes the way it is",
+    "defines a name in it": "the definition or value of a name that passage {r} uses",
+    "nothing to follow": "shares only a word, a name or a topic with passage {r}: nothing someone asking the "
+                         "question would open it for",
+}
+NO_RELATION = "nothing to follow"
+
+
+def relation(q, r, t):
+    """The choice question: what passage `t` is to passage `r`, for someone asking `q`."""
+    q = q[:MAX_QUERY_CHARS]
+    return {"type": "choice", "instructions": f'For someone asking "{q}": what is passage {t} to passage {r}?',
+            "criteria": {k: v.format(r=r) for k, v in RELATIONS.items()}}
+
+
 def ask(url, state, qs, model="jev-latest", timeout=600):
     body = json.dumps({"state": state, "model": model, "questions": qs}).encode()
     req = urllib.request.Request(url.rstrip("/") + "/v1/systemone", body, {"content-type": "application/json"})

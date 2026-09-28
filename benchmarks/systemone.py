@@ -440,11 +440,15 @@ def cmd_judge(a):
     judge = SystemOneJudge(a.run)
     rows = category_rows("test")[: a.limit or None]
     jobs = ((category_state(r), {"category": category_question()}) for r in rows)
-    pred, t0 = [None] * len(rows), time.time()
+    pred, probs_of, t0 = [None] * len(rows), [None] * len(rows), time.time()
     for i, ans in judge.batch(jobs):
         probs = ans["category"]
-        pred[i] = max(probs, key=probs.get)
+        pred[i], probs_of[i] = max(probs, key=probs.get), probs
     secs = time.time() - t0
+    ROWS.mkdir(parents=True, exist_ok=True)
+    with (ROWS / f"judge-{a.tag}.jsonl").open("w", encoding="utf-8") as f:   # per passage, for the calibration below
+        for r, p in zip(rows, probs_of):
+            f.write(json.dumps({"src": r["src"], "label": r["label"], "probs": {c: round(v, 4) for c, v in p.items()}}) + "\n")
 
     def score(sel):
         if not sel:
@@ -467,8 +471,38 @@ def cmd_judge(a):
            "out_of_domain": score([x for x in both if x[1]["src"].startswith(ood)]),
            **{src: score([x for x in both if x[1]["src"].split(":")[0] == src])
               for src in sorted({r["src"].split(":")[0] for r in rows})}}
+    out["calibration"] = calibration(list(zip(probs_of, rows)), ood)
     record("judge", a.tag, "category", out)
     print(json.dumps(out), flush=True)
+
+
+NOUN_PRECISION, NOUN_COVERAGE = 0.95, 0.40   # a category is printed as a link's noun only at this bar (search.KIND_TAU)
+
+
+def calibration(pairs, ood):
+    """Per predicted category: at each threshold on the top probability, how many predictions of that class
+    clear it (coverage, of all predictions of the class) and how many of those agree with the label
+    (precision), overall and out of domain; `tau` is the lowest threshold whose precision reaches
+    NOUN_PRECISION at coverage >= NOUN_COVERAGE on both, else None (the class is never printed as a noun)."""
+    from inventio.facts import CATEGORIES
+
+    out = {}
+    for c in CATEGORIES:
+        mine = [(p[c], r) for p, r in pairs if max(p, key=p.get) == c]
+        curve, tau = [], None
+        for t in [x / 20 for x in range(0, 20)]:
+            row = {"tau": t}
+            for name, sel in (("all", mine), ("ood", [x for x in mine if x[1]["src"].startswith(ood)])):
+                kept = [r for p, r in sel if p >= t]
+                row[name] = {"n": len(sel), "kept": len(kept),
+                             "precision": round(sum(r["label"] == c for r in kept) / len(kept), 3) if kept else None}
+            curve.append(row)
+            ok = all(row[k]["kept"] and row[k]["precision"] >= NOUN_PRECISION
+                     and row[k]["kept"] >= NOUN_COVERAGE * row[k]["n"] for k in ("all", "ood"))
+            if tau is None and ok:
+                tau = t
+        out[c] = {"predicted": len(mine), "tau": tau, "curve": curve}
+    return out
 
 
 def call(cmd, **kw) -> int:
