@@ -1,5 +1,6 @@
 """JSON over HTTPS for connectors: standard library only, retries where the server asks for it."""
 
+import http.client
 import json
 import time
 import urllib.error
@@ -33,9 +34,11 @@ class Client:
                     time.sleep(float(e.headers.get("Retry-After") or 2 ** attempt))
                     continue
                 raise RemoteError(f"{e.code} {e.reason} from {url.split('?')[0]}") from None
-            except urllib.error.URLError as e:
+            except (urllib.error.URLError, TimeoutError, ConnectionError, http.client.IncompleteRead) as e:
+                # a read that times out or a body cut short mid-transfer is as passing as a refused connection:
+                # a 3,352-PR fetch died on each at ~3,000 without them
                 if attempt < ATTEMPTS - 1:
                     time.sleep(2 ** attempt)
                     continue
-                raise RemoteError(f"cannot reach {url.split('?')[0]}: {e.reason}") from None
+                raise RemoteError(f"cannot reach {url.split('?')[0]}: {getattr(e, 'reason', e)}") from None
         raise AssertionError("unreachable")

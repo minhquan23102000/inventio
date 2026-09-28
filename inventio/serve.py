@@ -17,6 +17,7 @@ import secrets
 import socket
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -169,46 +170,61 @@ def serve(idle: float) -> int:
     os.replace(tmp, path)
     print(f"serving on 127.0.0.1:{srv.getsockname()[1]}, pid {os.getpid()}, exits after {idle:.0f}s idle",
           flush=True)
+    # A query runs on a worker thread, one at a time (stdout, cwd and the environment are the process's), so
+    # the accept loop keeps answering pings: a busy server that missed the client's 5 s ping looked dead, and
+    # the next query started a second server with a second copy of the model.
+    busy = threading.Lock()
+
+    def run(conn, msg):
+        with conn, busy:
+            out, err = io.StringIO(), io.StringIO()
+            with _as_client(msg["cwd"], msg["env"]), contextlib.redirect_stdout(out), \
+                    contextlib.redirect_stderr(err):
+                try:
+                    code = cli.main([*msg["argv"], "--here"])
+                except SystemExit as e:  # argparse errors and -h
+                    code = e.code if isinstance(e.code, int) else 2
+                except Exception as e:  # a failing query must not take the server down
+                    print(f"{type(e).__name__}: {e}", file=sys.stderr)
+                    code = 1
+                finally:
+                    while opened:
+                        opened.pop().close()
+            with contextlib.suppress(OSError):
+                conn.sendall(json.dumps({"code": code, "out": out.getvalue(), "err": err.getvalue()}).encode()
+                             + b"\n")
+
     try:
         while True:
             try:
                 conn, _ = srv.accept()
             except TimeoutError:
+                if busy.locked():   # a long query is not idleness
+                    continue
                 return 0
-            with conn:
-                conn.settimeout(30)
-                try:
-                    buf = b""
-                    while not buf.endswith(b"\n"):
-                        chunk = conn.recv(1 << 16)
-                        if not chunk:
-                            break
-                        buf += chunk
-                    msg = json.loads(buf)
-                except (OSError, ValueError):
-                    continue
-                if not secrets.compare_digest(str(msg.get("token", "")), token):
-                    continue
-                if msg["op"] in ("stop", "ping"):
+            conn.settimeout(30)
+            try:
+                buf = b""
+                while not buf.endswith(b"\n"):
+                    chunk = conn.recv(1 << 16)
+                    if not chunk:
+                        break
+                    buf += chunk
+                msg = json.loads(buf)
+            except (OSError, ValueError):
+                conn.close()
+                continue
+            if not secrets.compare_digest(str(msg.get("token", "")), token):
+                conn.close()
+                continue
+            if msg["op"] in ("stop", "ping"):
+                with conn:
                     conn.sendall(b'{"ok": true}\n')
-                    if msg["op"] == "stop":
-                        return 0
-                    continue
-                out, err = io.StringIO(), io.StringIO()
-                with _as_client(msg["cwd"], msg["env"]), contextlib.redirect_stdout(out), \
-                        contextlib.redirect_stderr(err):
-                    try:
-                        code = cli.main([*msg["argv"], "--here"])
-                    except SystemExit as e:  # argparse errors and -h
-                        code = e.code if isinstance(e.code, int) else 2
-                    except Exception as e:  # a failing query must not take the server down
-                        print(f"{type(e).__name__}: {e}", file=sys.stderr)
-                        code = 1
-                    finally:
-                        while opened:
-                            opened.pop().close()
-                conn.sendall(json.dumps({"code": code, "out": out.getvalue(), "err": err.getvalue()}).encode()
-                             + b"\n")
+                if msg["op"] == "stop":
+                    return 0
+                continue
+            conn.settimeout(None)
+            threading.Thread(target=run, args=(conn, msg), daemon=True).start()
     finally:
         srv.close()
         with contextlib.suppress(OSError, ValueError):

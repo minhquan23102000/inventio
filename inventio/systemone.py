@@ -301,6 +301,7 @@ class Model:
         Kev's opt-in date-facts preprocessing is not vendored: it is off in the served path too (no
         number in this repository was measured with it), and a state is rendered here, not prepared."""
         from ._systemone.api import SystemOneRequest, output_tokens, to_answers, to_record
+        from ._systemone.device import empty_cache
         from ._systemone.model import SERVE_MAX_BRANCH, SERVE_MAX_STATE
 
         t = time.time()
@@ -311,6 +312,9 @@ class Model:
             # answered (kev.serve passes exactly these two numbers)
             enc = self.model.encode(self.tok, rec, max_state=SERVE_MAX_STATE, max_branch=SERVE_MAX_BRANCH)
             answers = to_answers(self.model.probs(enc), meta)
+            # the allocator keeps every pass's activations cached; on a 16 GB Mac that grew 6 -> 17 GB over five
+            # queries and pushed the machine into swap, so give them back once the answers are on the CPU
+            empty_cache(self.device.split(":")[0])
         return {"model": model, "answers": answers,
                 "usage": {"input_tokens": len(enc["ids"]), "output_tokens": output_tokens(self.tok, answers)},
                 "latency_ms": round((time.time() - t) * 1000, 1), "wall_ms": round((time.time() - t) * 1000, 1)}
