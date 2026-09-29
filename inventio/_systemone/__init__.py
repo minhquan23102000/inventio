@@ -111,6 +111,13 @@ def load(run, device=None, *, dtype=None, merge: bool = True, attn: str | None =
 
     patch_attention()
     device = dev
+    if device == "mps":
+        # No compiled DeltaNet kernel exists for Apple GPUs; this rule and SDPA took a real query with links
+        # from 28.6 s to 15.6 s on an M3, same top three (see delta.py).
+        from .delta import install
+
+        install()
+        attn = attn or "sdpa"
     if dtype is None and device != "cpu" and os.environ.get("INVENTIO_DTYPE", "").lower() != "fp32":
         dtype = torch.bfloat16
     opts = LoadOptions(dtype=dtype, merge=merge, attn=attn, lora_scale=lora_scale, temperature=temperature)

@@ -258,6 +258,24 @@ repository because they name internal documents.
 - Of 322M parameters, 197M are the embedding table; the rest runs at about 1.5 TFLOPS on the M3
   GPU. Core ML on the Neural Engine is the remaining hardware path; not tried.
 
+### v5 on the M3 (2026-09-29)
+
+The table above is v3. v5 reads the state in about 9,000 tokens, twice per query when links add chunks,
+and 18 of its 24 layers are DeltaNet, which has no compiled kernel on Apple GPUs.
+
+- mlx-lm is slower, not faster: 30.1 s against torch 21.2 s for a 9,000-token pass. Its Metal kernel
+  walks the tokens one at a time (`benchmarks/systemone.py backend --mlx`, commit b25df9f). Not ported.
+- `_systemone/delta.py` replaces transformers' reference chunked rule on MPS: 0.043 s against 0.144 s
+  per layer at 3,000 tokens, 0.123 s against 0.428 s at 9,000, outputs within 5e-4. SDPA replaces eager
+  attention on MPS as well. Four real questions with links on, one process per arm: 28.6 s as before,
+  25.5 s with SDPA only, 17.5 s with the rule only, 15.6 s with both. The top 3 was identical in every
+  arm; only near-tied ranks 4-5 swapped. One run per arm in sequence, with 6-7 GB of swap from other
+  apps; the same pass has varied up to threefold between runs here, so read these as direction (every
+  pass of every question was faster), not as a precise ratio.
+- Warm server, links on: 15-17 s per query (was about 35 s). The floor on this GPU (2.8 TFLOP/s bf16)
+  is about 5 s per 9,000-token pass, so a two-pass query cannot go under about 10 s here.
+- The 40 questions are not rerun under v5.
+
 ## Open
 
 - **Public benchmarks not rerun with pool 15.** The README numbers are at `--pool 30`. Risk is

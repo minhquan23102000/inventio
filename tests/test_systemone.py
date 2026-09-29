@@ -97,6 +97,31 @@ def test_use_refuses_a_directory_without_a_checkpoint(tmp_path):
     assert systemone.run_id() == "minhquan2310/dispositio@v4"
 
 
+def test_the_apple_gpu_delta_rule_matches_the_reference_and_stays_finite():
+    """The rule installed on MPS replaces transformers' reference in 18 of v5's 24 layers, so a numerical
+    slip there moves every Mac ranking without an error. Its first version built the chunk inverse from
+    powers of the matrix, which overflowed to NaN on a real state; the check runs where that happened:
+    a long sequence (several chunks, a ragged tail) with strong write strengths and slow decay."""
+    torch = pytest.importorskip("torch")
+    qwen = pytest.importorskip("transformers.models.qwen3_5.modeling_qwen3_5")
+    from inventio._systemone.delta import chunk_gated_delta_rule
+
+    reference = qwen.torch_chunk_gated_delta_rule
+    gen = torch.Generator().manual_seed(0)
+    b, t, h, dk, dv = 1, 1000, 4, 32, 48
+    q = torch.randn(b, t, h, dk, generator=gen)
+    k = torch.randn(1, 1, h, dk, generator=gen) + 0.3 * torch.randn(b, t, h, dk, generator=gen)   # keys point one way, as trained ones do
+    v = torch.randn(b, t, h, dv, generator=gen)
+    g = -torch.rand(b, t, h, generator=gen) * 0.05
+    beta = 0.9 + 0.1 * torch.rand(b, t, h, generator=gen)
+    kw = dict(output_final_state=True, use_qk_l2norm_in_kernel=True)
+    want, want_state = reference(q, k, v, g, beta, **kw)
+    got, got_state = chunk_gated_delta_rule(q, k, v, g, beta, **kw)
+    assert torch.isfinite(got).all() and torch.isfinite(got_state).all()
+    assert (got - want).abs().max() < 1e-3 * want.abs().max()
+    assert (got_state - want_state).abs().max() < 1e-3 * want_state.abs().max()
+
+
 def test_a_state_the_server_answered_is_not_refused_here(tmp_path):
     """The reader must encode with the *serving* limits, not the training ones. A line question offers one
     option per line, so a state of a few hundred lines makes a branch far past the training row budget
