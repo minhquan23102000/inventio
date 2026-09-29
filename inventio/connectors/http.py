@@ -22,13 +22,25 @@ class Client:
 
     def get(self, path: str, params: dict | None = None) -> dict:
         """`path` is relative to the base (or a full URL, as paging links sometimes are)."""
+        return json.loads(self._send(path, params))
+
+    def post(self, path: str, body: dict) -> dict:
+        """A JSON body sent, a JSON answer read (Notion's search, GraphQL APIs)."""
+        return json.loads(self._send(path, None, json.dumps(body).encode()))
+
+    def raw(self, path: str, params: dict | None = None) -> bytes:
+        """The answer's bytes as sent: a file download or an export that is not JSON."""
+        return self._send(path, params)
+
+    def _send(self, path: str, params: dict | None, body: bytes | None = None) -> bytes:
         url = path if path.startswith("http") else self.base + path
         if params:
             url += ("&" if "?" in url else "?") + urllib.parse.urlencode(params, doseq=True)
+        headers = {**self.headers, "Content-Type": "application/json"} if body is not None else self.headers
         for attempt in range(ATTEMPTS):
             try:
-                with urllib.request.urlopen(urllib.request.Request(url, headers=self.headers), timeout=60) as r:
-                    return json.load(r)
+                with urllib.request.urlopen(urllib.request.Request(url, data=body, headers=headers), timeout=60) as r:
+                    return r.read()
             except urllib.error.HTTPError as e:
                 if e.code in RETRY and attempt < ATTEMPTS - 1:
                     time.sleep(float(e.headers.get("Retry-After") or 2 ** attempt))

@@ -657,3 +657,42 @@ def test_bench_rows_say_how_each_answer_entered(tmp_path, capsys):
     assert rows[0]["gold"] == {"source": "wiki", "path": "runbook.md", "start_line": 8, "end_line": 8}
     assert isinstance(rows[0]["in_bm25"], bool) and len(rows[0]["top10"]) <= 10
     assert "top-10 gold came by:" in out.out
+
+
+def _pdf(pages: list[str | None]) -> bytes:
+    """A minimal PDF, a page per entry: its text drawn in Helvetica, or no text at all (a scan)."""
+    objs = ["<< /Type /Catalog /Pages 2 0 R >>", None, "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"]
+    kids = []
+    for text in pages:
+        stream = f"BT /F1 12 Tf 72 720 Td ({text}) Tj ET" if text else ""
+        objs.append(f"<< /Length {len(stream)} >>\nstream\n{stream}\nendstream")
+        kids.append(len(objs) + 1)
+        objs.append(f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents {len(objs)} 0 R "
+                    "/Resources << /Font << /F1 3 0 R >> >> >>")
+    objs[1] = f"<< /Type /Pages /Kids [{' '.join(f'{k} 0 R' for k in kids)}] /Count {len(kids)} >>"
+    out, offsets = b"%PDF-1.4\n", []
+    for i, o in enumerate(objs, 1):
+        offsets.append(len(out))
+        out += f"{i} 0 obj\n{o}\nendobj\n".encode()
+    xref = len(out)
+    out += f"xref\n0 {len(objs) + 1}\n0000000000 65535 f \n".encode()
+    out += b"".join(f"{o:010d} 00000 n \n".encode() for o in offsets)
+    return out + f"trailer\n<< /Size {len(objs) + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode()
+
+
+def test_a_pdf_is_searched_by_the_text_of_its_pages_and_a_scan_is_reported(tmp_path, capsys):
+    pytest.importorskip("pypdf")
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "handbook.pdf").write_bytes(_pdf(["Welcome to the team", "Restore the nightly backup from the replica"]))
+    (docs / "scan.pdf").write_bytes(_pdf([None]))
+    db = str(tmp_path / "map.db")
+    code, out = run(capsys, "--db", db, "init", str(docs))
+    assert code == 0 and "scan.pdf left out: it has no text layer" in out.err
+    code, out = run(capsys, "--db", db, "query", "restore backup replica", "--json")
+    top = json.loads(out.out)[0]
+    assert (top["path"], top["heading_path"]) == ("handbook.pdf", "handbook > Page 2")
+    code, out = run(capsys, "--db", db, "read", f"docs:handbook.pdf:{top['start_line']}-{top['end_line']}")
+    assert "Restore the nightly backup from the replica" in out.out
+    code, out = run(capsys, "--db", db, "grep", "nightly")
+    assert out.out.startswith("docs:handbook.pdf:")

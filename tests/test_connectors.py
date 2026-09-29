@@ -394,7 +394,8 @@ def test_a_connector_from_another_package_is_found_and_a_broken_one_does_not_sto
         "[inventio.connectors]\nplug = inv_plug\nbroken = inv_no_such_module\nfake_jira = inv_fake_jira\n")
     monkeypatch.syspath_prepend(str(tmp_path))
     found = _plugins()
-    assert [m.KIND for m in found] == ["plug"]
+    kinds = [kind for kind, _ in found]  # plugins installed in this environment may be listed too
+    assert "plug" in kinds and "jira" not in kinds
     err = capsys.readouterr().err
     assert "plugin broken not loaded: ModuleNotFoundError" in err
     assert "plugin fake_jira not loaded: kind 'jira' is taken" in err

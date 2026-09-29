@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "inventio-notion"
+version = "0.1.0"
+description = "Notion pages as an inventio source"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+dependencies = ["inventio>=0.5.5"]  # Client.post and `inventio login` for plugins
+
+[project.entry-points."inventio.connectors"]
+notion = "inventio_notion"
+
+[tool.setuptools]
+py-modules = ["inventio_notion"]

@@ -28,8 +28,11 @@ LANGS = {
     ".sql": "sql", ".sh": "bash", ".ps1": "powershell",
     # data: indexed as a card of its schema (schema.py), never its rows
     ".parquet": "data", ".csv": "data", ".tsv": "data", ".jsonl": "data", ".ndjson": "data",
+    # held as the text of each page (pdf.py), a heading per page
+    ".pdf": "pdf",
 }
-PROSE_LANGS = {"markdown", "text"}
+PROSE_LANGS = {"markdown", "text", "pdf"}
+MARKDOWN_LANGS = {"markdown", "data", "pdf"}  # what the map holds for these is Markdown
 CONFIG_LANGS = {"yaml", "toml", "ini", "json"}
 # languages cut at their definitions by tree-sitter (optional dependency); without the grammar
 # pack they fall back to blank-line blocks and are stored as "code", so installing it later
@@ -41,6 +44,7 @@ TREE_LANGS = {
 SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv", "dist", "build", ".mypy_cache", ".pytest_cache",
              ".inventio"}
 MAX_FILE_BYTES = 1_000_000
+MAX_PDF_BYTES = 50_000_000  # a PDF's text is a small part of its bytes (fonts, images)
 
 
 @dataclass
@@ -84,7 +88,8 @@ def list_files(root: Path, excludes: list[str]) -> list[str]:
             continue
         p = root / rel
         try:
-            if not p.is_file() or (p.stat().st_size > MAX_FILE_BYTES and LANGS[p.suffix.lower()] != "data"):
+            if not p.is_file() or p.stat().st_size > {"data": float("inf"), "pdf": MAX_PDF_BYTES}.get(
+                    LANGS[p.suffix.lower()], MAX_FILE_BYTES):
                 continue
         except OSError:
             continue
@@ -104,12 +109,17 @@ def shown_text(data: bytes) -> str:
 
 
 def file_text(path: Path) -> str:
-    """What the map holds for a file, as `read` and `grep` show it: its text, or for a data file
-    the card of its schema."""
-    if LANGS.get(path.suffix.lower()) == "data":
+    """What the map holds for a file, as `read` and `grep` show it: its text, for a data file the
+    card of its schema, for a PDF the text of its pages."""
+    lang = LANGS.get(path.suffix.lower())
+    if lang == "data":
         from .schema import file_card
 
         return file_card(path, path.name) or ""
+    if lang == "pdf":
+        from .pdf import pdf_text
+
+        return pdf_text(path.read_bytes(), path.stem) or ""
     return shown_text(path.read_bytes())
 
 
@@ -554,7 +564,7 @@ def doc_type(rel: str, lang: str) -> str:
 
 def chunk_file(text: str, lang: str, rel: str) -> list[Chunk]:
     chunks = None
-    if lang in ("markdown", "data"):  # a data file is held as the Markdown card of its schema
+    if lang in MARKDOWN_LANGS:  # a data file is held as the Markdown card of its schema, a PDF as its pages
         chunks = chunk_markdown(text)
     elif lang == "python":
         chunks = chunk_python(text)
@@ -564,7 +574,7 @@ def chunk_file(text: str, lang: str, rel: str) -> list[Chunk]:
         chunks = chunk_generic(text)
     for c in chunks:
         c.mentions |= mentions_in(c.text)
-        if lang in ("markdown", "data"):
+        if lang in MARKDOWN_LANGS:
             c.refs = md_refs(c.text, rel)
     if lang in ("markdown", "data") and chunks:  # `<!-- defines: SHOP-812 -->`: a ticket, a table card
         from .schema import defined_names
@@ -631,17 +641,26 @@ def ingest_source(con, name: str, root: Path, public: bool, excludes: list[str],
         else:
             data = path.read_bytes()
             digest = hashlib.sha1(data).hexdigest()
-            shown = shown_text(data)
+            if lang == "pdf":
+                from .pdf import pdf_text
+
+                shown = text = None
+            else:
+                shown = shown_text(data)
             if same and old["sha1"] == digest:
                 con.execute(
                     "UPDATE files SET size = ?, mtime_ns = ?, type = ? WHERE id = ?",
                     (st.st_size, st.st_mtime_ns, dtype_, old["id"]),
                 )
                 if not old["has_text"]:
-                    keep_text(con, old["id"], shown)
+                    keep_text(con, old["id"], shown if shown is not None else file_text(path))
                 counts["unchanged"] += 1
                 continue
-            text = decode_text(data)
+            if lang == "pdf":
+                text = pdf_text(data, Path(rel).stem)
+                shown = text or ""
+            else:
+                text = decode_text(data)
         if old is not None:
             drop_file(con, old["id"])
         if text is None or not text.strip():  # binary, empty, or a data file no reader could open: not in the map

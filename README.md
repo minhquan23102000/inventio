@@ -265,6 +265,12 @@ match". `--source NAME` is `-w source:NAME`.
 (tree-sitter), Markdown and text at their headings. `sync` or another `init` re-reads only the
 files whose size, time or content changed.
 
+PDF files are read with the `[pdf]` extra (`uv tool install "inventio[dispositio,pdf]"`): the
+text of each page is kept under a `Page N` heading, so a result says which page it came from and
+`read` and `grep` show the page's words. The text is the PDF's own text layer: a scan has none,
+and a PDF that needs a password cannot be opened; both are left out, and `init`/`sync` name them.
+Two-column layouts and tables come out in the order the PDF stores its text.
+
 ### Signing in once
 
 ```sh

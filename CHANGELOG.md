@@ -3,6 +3,24 @@
 Notable changes to inventio, newest first. Versions are on [PyPI](https://pypi.org/project/inventio/);
 the ranker models are on [Hugging Face](https://huggingface.co/minhquan2310/dispositio).
 
+## Unreleased
+
+### Added
+- PDF files, with the `pdf` extra (pypdf): the text of each page under a `Page N` heading, so a
+  result says which page it came from and `read`/`grep` show its words. A scan (no text layer),
+  a password-protected PDF or a damaged one is left out, and `init`/`sync` say which and why.
+- Plugins can sign in: `inventio login`/`logout <url>` and `sources` hand a plugin's URL to its
+  own `login`, `logout` and `credential`; `connectors.http.Client` gains `post` (a JSON body)
+  and `raw` (a download or an export).
+- Two connectors outside the package, in `examples/connectors/`: `inventio-notion` (every page
+  an integration can see, or one page tree) and `inventio-gdrive` (a Drive folder or My Drive:
+  Docs as Markdown, Sheets as a table, Slides as text, PDFs by page). Both are tested against
+  local servers shaped like the documented APIs, not yet against real accounts.
+
+### Fixed
+- A plugin imported before inventio (a test, a script) no longer fails to register: it is
+  registered by its entry point's name, which the interface now says must be its `KIND`.
+
 ## 0.5.4 (2026-09-29)
 
 ### Added

@@ -10,7 +10,7 @@ group `inventio.connectors` (pyproject: [project.entry-points."inventio.connecto
 notion = "inventio_notion"), so `pip install` it and `inventio init <its URL>` works. This list
 is the plugin interface (CONNECTOR_API below counts its changes):
 
-    KIND                        the value kept in sources.kind
+    KIND                        the value kept in sources.kind (and the entry point's name)
     DOC_TYPE                    optional: the document type of every file (Dataset for schema
                                 cards); otherwise decided from the path, as for a directory
     origin(url, query)          the canonical URL a source of this kind syncs from, or None when
@@ -23,6 +23,16 @@ is the plugin interface (CONNECTOR_API below counts its changes):
                                 .listing() -> {item id: mirror.Entry}, every item without its body,
                                 .fetch(ids) -> yields (item id, mirror.Doc) for the ids asked for;
                                 Doc.meta holds the fields a query filters on (status, labels, updated)
+
+  optional, for a kind from another package that signs in (`inventio login <url>` asks it):
+    login(url, ask, ask_secret) ask for the credential, try it once, keep it; returns what to say
+    logout(url)                 forget it; returns what to say
+    credential(origin)          where the credential comes from: "env", "keyring" or "missing"
+
+  helpers a plugin may import, kept as stable as the list above: mirror.Doc and mirror.Entry;
+  http.Client (get, post, raw, retrying where the server asks) and RemoteError; markdown's
+  segment, safe, fence, table and tidy; ingest.slug (a heading's anchor key, for Doc.anchors);
+  credentials.get, put, delete and Missing (the keychain, one JSON secret per key).
 """
 
 from importlib.metadata import entry_points
@@ -37,28 +47,36 @@ CONNECTOR_API = 1  # raised when a name above changes meaning; a plugin may chec
 _BUILTIN = (confluence, jira, sql, kafka, s3, github)  # github last: it may ask `gh` about a host
 
 
-def _plugins() -> list:
-    """Connector modules other packages registered. One that fails to import is reported, not
-    fatal; one naming a built-in kind is refused, so installing a package never reroutes Jira."""
+def _plugins() -> list[tuple[str, object]]:
+    """(kind, module) of every connector other packages registered. One that fails to import is
+    reported, not fatal; one naming a built-in kind is refused, so installing a package never
+    reroutes Jira."""
     import sys
 
     taken, out = {m.KIND for m in _BUILTIN}, []
     for ep in entry_points(group="inventio.connectors"):
-        try:
-            m = ep.load()
-            kind = m.KIND
-        except Exception as e:  # a plugin must not take the CLI down
-            print(f"inventio: connector plugin {ep.name} not loaded: {type(e).__name__}: {e}", file=sys.stderr)
-            continue
+        early = sys.modules.get(ep.module)
+        if early is not None and not hasattr(early, "KIND"):
+            # the plugin was imported first (a test, a script) and its own `from inventio...` led
+            # here: the module is half-built, so it is registered by the entry point's name, which
+            # must be its KIND, and it finishes building once this import returns
+            kind, m = ep.name, early
+        else:
+            try:
+                m = ep.load()
+                kind = m.KIND
+            except Exception as e:  # a plugin must not take the CLI down
+                print(f"inventio: connector plugin {ep.name} not loaded: {type(e).__name__}: {e}", file=sys.stderr)
+                continue
         if kind in taken:
             print(f"inventio: connector plugin {ep.name} not loaded: kind {kind!r} is taken", file=sys.stderr)
             continue
         taken.add(kind)
-        out.append(m)
+        out.append((kind, m))
     return out
 
 
-KINDS = {m.KIND: m for m in (*_BUILTIN[:-1], *_plugins(), _BUILTIN[-1])}
+KINDS = {m.KIND: m for m in _BUILTIN[:-1]} | dict(_plugins()) | {_BUILTIN[-1].KIND: _BUILTIN[-1]}
 
 __all__ = ["KINDS", "RemoteError", "for_url", "sync", "web_url"]
 

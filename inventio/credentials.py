@@ -107,7 +107,26 @@ def status(kind: str, origin: str) -> str:
         from .connectors import github
 
         return "gh" if github.token(github.host_of(origin), quiet=True) else "missing"
-    return "-"
+    plugin = _plugin(kind=kind)
+    return plugin.credential(origin) if plugin and hasattr(plugin, "credential") else "-"
+
+
+def _plugin(url: str | None = None, kind: str | None = None):
+    """The connector module from another package that owns this URL or kind, or None."""
+    from .connectors import _BUILTIN, KINDS
+
+    for k, m in KINDS.items():
+        if m in _BUILTIN:
+            continue
+        if kind is not None and k == kind:
+            return m
+        if url is not None:
+            try:
+                if m.origin(url):
+                    return m
+            except ValueError:
+                continue
+    return None
 
 
 # ------------------------------------------------------------------------ login and logout
@@ -140,6 +159,11 @@ def login(url: str, ask=input, ask_secret=None) -> str:
 
 
 def _login(url: str, ask, ask_secret) -> str:
+    plugin = _plugin(url)
+    if plugin is not None:
+        if not hasattr(plugin, "login"):
+            raise RemoteError(f"the {plugin.KIND} connector keeps no login of its own; see its README")
+        return plugin.login(url, ask, ask_secret)
     kind, where = _place(url)
     if kind == "github":
         from .connectors import github
@@ -170,6 +194,11 @@ def _login(url: str, ask, ask_secret) -> str:
 
 
 def logout(url: str) -> str:
+    plugin = _plugin(url)
+    if plugin is not None:
+        if not hasattr(plugin, "logout"):
+            return f"the {plugin.KIND} connector keeps no login of its own"
+        return plugin.logout(url)
     kind, where = _place(url)
     if kind == "github":
         return f"Inventio keeps no GitHub token; `gh auth logout --hostname {where}` signs the CLI out"
