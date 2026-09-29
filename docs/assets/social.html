@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>inventio social preview</title>
+<!-- 1280x640 GitHub social preview. Render: open in a browser at 1280x640, screenshot to social.png. -->
+<style>
+:root {
+  --paper: #f5f4ed;
+  --ivory: #faf9f5;
+  --ink: #141413;
+  --ink-2: #3d3d3a;
+  --olive: #504e49;
+  --stone: #6b6a64;
+  --border: #e8e6dc;
+  --accent: #1b365d;
+  --tag: #e4ecf5;
+  --font-display: Charter, Georgia, Palatino, "Times New Roman", serif;
+  --font-mono: Menlo, "SF Mono", Consolas, monospace;
+}
+* { box-sizing: border-box; margin: 0; }
+html, body { width: 1280px; height: 640px; background: var(--paper); color: var(--ink); }
+body { font-family: var(--font-display); font-weight: 500; overflow: hidden; }
+.page { display: grid; grid-template-columns: 560px 1fr; height: 100%; padding: 72px 72px 64px 88px; gap: 56px; }
+.left { display: flex; flex-direction: column; }
+h1 { font-family: var(--font-display); font-weight: 500; font-size: 104px; line-height: 1; letter-spacing: -0.02em; }
+.claim { margin-top: 30px; font-size: 42px; line-height: 1.22; color: var(--ink); }
+.where { margin-top: 16px; font-size: 24px; line-height: 1.4; color: var(--olive); }
+.facts { margin-top: auto; display: flex; gap: 18px; white-space: nowrap; font-size: 21px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.facts span + span::before { content: "·"; margin-right: 18px; color: var(--stone); }
+.right { display: flex; flex-direction: column; justify-content: center; }
+.ask { font-family: var(--font-mono); font-size: 17px; color: var(--stone); margin-bottom: 18px; line-height: 1.5; }
+.ask b { color: var(--accent); font-weight: 400; }
+.slip { background: var(--ivory); border: 1px solid var(--border); padding: 26px 30px 28px; transform: rotate(-1.2deg); box-shadow: 0 0 0 1px var(--border), 0 18px 40px -28px rgba(20,20,19,.35); }
+.coord { display: inline-block; font-family: var(--font-mono); font-size: 20px; color: var(--accent); background: var(--tag); padding: 4px 10px; }
+.heading { margin-top: 16px; font-size: 22px; color: var(--ink); }
+ol { margin-top: 12px; padding: 0; list-style: none; font-family: var(--font-mono); font-size: 15.5px; line-height: 1.75; color: var(--ink-2); }
+ol li { display: grid; grid-template-columns: 30px 1fr; }
+ol li i { font-style: normal; color: var(--stone); }
+</style>
+</head>
+<body>
+<main class="page" data-od-id="page">
+  <section class="left" data-od-id="left">
+    <h1>inventio</h1>
+    <p class="claim">Finds the exact lines<br>that answer a question.</p>
+    <p class="where">In your code, docs, Confluence, Jira and GitHub issues. Every answer comes back as <code style="font-family:var(--font-mono);font-size:21px">path:start-end</code>.</p>
+    <p class="facts"><span>No embeddings</span><span>One SQLite file</span><span>Runs on your laptop</span></p>
+  </section>
+  <section class="right" data-od-id="right">
+    <p class="ask"><b>$</b> inventio query "the nightly backup has not finished, what do I do?"</p>
+    <div class="slip">
+      <span class="coord">wiki:runbook.md:8-13</span>
+      <p class="heading">When the nightly backup has not finished</p>
+      <ol>
+        <li><i>10</i><span>1. Check the scheduler at 07:00. If `nightly_backup` is still running or has failed, stop it.</span></li>
+        <li><i>11</i><span>2. Take a fresh backup from the replica, not the primary: `make backup SOURCE=replica`.</span></li>
+        <li><i>12</i><span>3. Tell the support desk that order exports may be slow until it finishes.</span></li>
+      </ol>
+    </div>
+  </section>
+</main>
+</body>
+</html>
