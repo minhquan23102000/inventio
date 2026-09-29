@@ -358,6 +358,27 @@ finds a card by its name and its column comments; a card without comments is bes
 through `inventio show` from the code or runbook that names it. S3 folders like `dt=2026-09-24/`
 are partitions of one dataset, not datasets of their own.
 
+### Your own source
+
+A system inventio has no connector for (Notion, a ticket tool, an internal wiki) can be added
+from a package of your own, without changing inventio. The package holds one module with the
+names listed at the top of
+[`inventio/connectors/__init__.py`](inventio/connectors/__init__.py): `KIND`, `origin(url)` to
+claim the URLs it syncs, `locate(url)`, `heading_url`, `fetch_url`, and a `Remote` whose
+`listing()` says which items exist and their version, and whose `fetch(ids)` turns each one into
+Markdown with the fields `-w` filters on. Register the module in the package's `pyproject.toml`:
+
+```toml
+[project.entry-points."inventio.connectors"]
+notion = "inventio_notion"
+```
+
+Install it next to inventio (`uv tool install inventio --with inventio-notion`), and
+`inventio init https://notion.so/...` mirrors it like any built-in source: only changed items
+are fetched, `-w status:Open` filters, and each result links to its page on the web. A plugin
+cannot replace a built-in kind, and one that fails to import is reported without stopping the
+command. `connectors.CONNECTOR_API` (now 1) goes up when a name in that list changes meaning.
+
 ## dispositio
 
 [dispositio](https://huggingface.co/minhquan2310/dispositio), the second canon of rhetoric

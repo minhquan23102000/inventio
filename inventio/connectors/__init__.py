@@ -4,7 +4,11 @@ repository's issues and pull requests, a database's schema; later mail or chat.
 Each is mirrored into a directory of Markdown files (mirror.py), one per page, ticket, thread or
 table, and that directory is indexed like any other source. Chunking, BM25, links, judgments
 and the incremental re-index are therefore shared; a connector only says what exists and turns
-one item into Markdown. A new kind is one module, registered in KINDS, that provides:
+one item into Markdown. A new kind is one module that provides the names below. Built-in kinds
+are listed in KINDS here; a kind from another package registers its module under the entry-point
+group `inventio.connectors` (pyproject: [project.entry-points."inventio.connectors"]
+notion = "inventio_notion"), so `pip install` it and `inventio init <its URL>` works. This list
+is the plugin interface (CONNECTOR_API below counts its changes):
 
     KIND                        the value kept in sources.kind
     DOC_TYPE                    optional: the document type of every file (Dataset for schema
@@ -14,18 +18,47 @@ one item into Markdown. A new kind is one module, registered in KINDS, that prov
     locate(url)                 (item id, fragment) of the item a URL points at, or None
     heading_url(item, heads)    where a chunk under these headings lives on the web, or None
     fetch_url(url)              (web URL, Doc) of one item read live, for items not mirrored
-    Remote(origin)              .origin, .name (a default source name),
+    Remote(origin)              .origin, .name (a default source name), .FORMAT (an int raised
+                                when the Markdown written changes, so every item is written again),
                                 .listing() -> {item id: mirror.Entry}, every item without its body,
                                 .fetch(ids) -> yields (item id, mirror.Doc) for the ids asked for;
                                 Doc.meta holds the fields a query filters on (status, labels, updated)
 """
 
+from importlib.metadata import entry_points
 from pathlib import Path
 
 from . import confluence, github, jira, kafka, mirror, s3, sql
 from .http import RemoteError
 
-KINDS = {m.KIND: m for m in (confluence, jira, sql, kafka, s3, github)}  # github last: it may ask `gh` about a host
+CONNECTOR_API = 1  # raised when a name above changes meaning; a plugin may check it
+
+
+_BUILTIN = (confluence, jira, sql, kafka, s3, github)  # github last: it may ask `gh` about a host
+
+
+def _plugins() -> list:
+    """Connector modules other packages registered. One that fails to import is reported, not
+    fatal; one naming a built-in kind is refused, so installing a package never reroutes Jira."""
+    import sys
+
+    taken, out = {m.KIND for m in _BUILTIN}, []
+    for ep in entry_points(group="inventio.connectors"):
+        try:
+            m = ep.load()
+            kind = m.KIND
+        except Exception as e:  # a plugin must not take the CLI down
+            print(f"inventio: connector plugin {ep.name} not loaded: {type(e).__name__}: {e}", file=sys.stderr)
+            continue
+        if kind in taken:
+            print(f"inventio: connector plugin {ep.name} not loaded: kind {kind!r} is taken", file=sys.stderr)
+            continue
+        taken.add(kind)
+        out.append(m)
+    return out
+
+
+KINDS = {m.KIND: m for m in (*_BUILTIN[:-1], *_plugins(), _BUILTIN[-1])}
 
 __all__ = ["KINDS", "RemoteError", "for_url", "sync", "web_url"]
 

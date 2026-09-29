@@ -376,3 +376,27 @@ def test_one_failing_source_does_not_stop_the_others_from_syncing(monkeypatch, t
     assert "notes: 404 Not Found" in err and "not synced: notes" in err
     kept = [t for (t,) in sqlite3.connect(db).execute("SELECT text FROM file_texts")]
     assert any("second" in t for t in kept)   # the directory after the failing source was still synced
+
+
+def test_a_connector_from_another_package_is_found_and_a_broken_one_does_not_stop_inventio(tmp_path, monkeypatch, capsys):
+    """A package registers its connector under the `inventio.connectors` entry point; one whose
+    module fails to import is reported and skipped, and none may take a built-in kind's name."""
+    import sys
+
+    from inventio.connectors import _plugins
+
+    (tmp_path / "inv_plug.py").write_text('KIND = "plug"\n')
+    (tmp_path / "inv_fake_jira.py").write_text('KIND = "jira"\n')
+    info = tmp_path / "inv_plug-0.1.dist-info"
+    info.mkdir()
+    (info / "METADATA").write_text("Metadata-Version: 2.1\nName: inv-plug\nVersion: 0.1\n")
+    (info / "entry_points.txt").write_text(
+        "[inventio.connectors]\nplug = inv_plug\nbroken = inv_no_such_module\nfake_jira = inv_fake_jira\n")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    found = _plugins()
+    assert [m.KIND for m in found] == ["plug"]
+    err = capsys.readouterr().err
+    assert "plugin broken not loaded: ModuleNotFoundError" in err
+    assert "plugin fake_jira not loaded: kind 'jira' is taken" in err
+    for m in ("inv_plug", "inv_fake_jira"):
+        sys.modules.pop(m, None)

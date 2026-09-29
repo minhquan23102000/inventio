@@ -3,6 +3,16 @@
 Notable changes to inventio, newest first. Versions are on [PyPI](https://pypi.org/project/inventio/);
 the ranker models are on [Hugging Face](https://huggingface.co/minhquan2310/dispositio).
 
+## 0.5.4 (2026-09-29)
+
+### Added
+- Connectors from other packages: a package registers a connector module under the entry-point
+  group `inventio.connectors`, and once installed beside inventio its URLs work with `init`,
+  `sync`, `-w` filters and web links like a built-in source. A plugin that fails to import is
+  reported and skipped; one that names a built-in kind is refused. The interface is the list at
+  the top of `inventio/connectors/__init__.py` (now also naming `Remote.FORMAT`), versioned by
+  `connectors.CONNECTOR_API = 1`. README: "Your own source".
+
 ## 0.5.3 (2026-09-29)
 
 ### Faster
