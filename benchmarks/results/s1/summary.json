@@ -1,4 +1,125 @@
 {
+ "backend": {
+  "minhquan2310/dispositio@v5/speed": {
+   "lens": [
+    3000,
+    9000
+   ],
+   "machine": "arm macOS-14.6.1-arm64-arm-64bit",
+   "mlx": {
+    "3000": 7.87,
+    "9000": 30.06
+   },
+   "mlx_layers": {
+    "0": {
+     "linear": true,
+     "sec": 0.395
+    },
+    "1": {
+     "linear": true,
+     "sec": 0.444
+    },
+    "10": {
+     "linear": true,
+     "sec": 0.386
+    },
+    "11": {
+     "linear": false,
+     "sec": 0.059
+    },
+    "12": {
+     "linear": true,
+     "sec": 0.396
+    },
+    "13": {
+     "linear": true,
+     "sec": 0.387
+    },
+    "14": {
+     "linear": true,
+     "sec": 0.47
+    },
+    "15": {
+     "linear": false,
+     "sec": 0.061
+    },
+    "16": {
+     "linear": true,
+     "sec": 0.394
+    },
+    "17": {
+     "linear": true,
+     "sec": 0.402
+    },
+    "18": {
+     "linear": true,
+     "sec": 0.406
+    },
+    "19": {
+     "linear": false,
+     "sec": 0.06
+    },
+    "2": {
+     "linear": true,
+     "sec": 0.39
+    },
+    "20": {
+     "linear": true,
+     "sec": 0.395
+    },
+    "21": {
+     "linear": true,
+     "sec": 0.396
+    },
+    "22": {
+     "linear": true,
+     "sec": 0.385
+    },
+    "23": {
+     "linear": false,
+     "sec": 0.058
+    },
+    "3": {
+     "linear": false,
+     "sec": 0.06
+    },
+    "4": {
+     "linear": true,
+     "sec": 0.39
+    },
+    "5": {
+     "linear": true,
+     "sec": 0.387
+    },
+    "6": {
+     "linear": true,
+     "sec": 0.39
+    },
+    "7": {
+     "linear": false,
+     "sec": 0.059
+    },
+    "8": {
+     "linear": true,
+     "sec": 0.385
+    },
+    "9": {
+     "linear": true,
+     "sec": 0.386
+    }
+   },
+   "mlx_layers_summary": {
+    "attention_total": 0.36,
+    "linear_total": 7.18
+   },
+   "peak_rss_gb": 2.57,
+   "run": "minhquan2310/dispositio@v5",
+   "torch": {
+    "mps:3000": 4.47,
+    "mps:9000": 21.17
+   }
+  }
+ },
  "domains": {
   "s1-v1.1/md2d": {
    "all": 0.758,
