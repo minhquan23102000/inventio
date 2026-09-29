@@ -231,6 +231,7 @@ the released MIX. nDCG@10, pool 30, on the sets step 3 moved:
 
 | Commit | Change |
 |---|---|
+| `fa846b4` | `grep` searches each file's text kept in the map (`file_texts`) and opens only files whose size or mtime changed since sync. On the Mac map (7,169 files) 0.24-0.45 s, identical output to 0.5.2 on 3 patterns; 0.5.2 took 26-94 s with a cold file cache (24.3 s of 25.9 s spent in `open()`, 3.4 ms a file; `stat` of all files 0.05 s), about 1 s warm. Map 80 -> 96 MB; the first sync after upgrading reads every file once to fill the text |
 | `b55f28c` | Confluence connector: `_Page.list` shadowed the builtin `list` and crashed on Python below 3.14; renamed `list_items` |
 | `06f00fc` | `rankers.py`: load the Hugging Face snapshot with `local_files_only` (skips about 0.44 s of network per query); `MPS_BATCH = 4` on Apple GPUs (3.5 s against 4.9 s for 16 on an M3); results unchanged |
 | `cc7662d` | `serve.py`: background server that keeps dispositio loaded, started by the first query, 127.0.0.1 only, token in `serve.json`, exits after `INVENTIO_SERVE_IDLE` (900 s); `INVENTIO_SERVE=0` turns it off; `inventio serve --stop` |
