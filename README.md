@@ -1,17 +1,11 @@
 # Inventio
 
-> *Inventio*, from *invenire*: to come upon. In classical rhetoric the orator did not make his
-> material up; he went looking through the *loci*, the places where it already lay.
+Inventio finds the passage that answers a question in your code, documents, Confluence pages, Jira
+tickets and GitHub issues, and returns where it lives as `path:start-end`, so a person or an agent
+can open the exact lines. No embeddings, no vector database; it runs on your laptop. It is the R of
+RAG; the G is whoever calls it.
 
-Inventio finds the passage that answers a question in your code, documents, Confluence pages
-and Jira tickets, and tells you where it lives (`path:start-end`), so a person or an agent can
-open the exact lines. It is the "R" of RAG; the "G" is whoever calls it.
-
-It uses no embeddings. The structure comes from the sources themselves (headings, functions,
-tables, the names files share), BM25 finds candidates, and a small decision model reorders them:
-[dispositio](https://huggingface.co/minhquan2310/dispositio) on your own machine, or
-[TypeSafe Jev](https://docs.typesafe.ai) in the cloud for sources you mark public. Everything
-lives in one SQLite file.
+![inventio indexing a small example, answering an on-call question with wiki:runbook.md:8-13, and opening those lines](docs/assets/demo.gif)
 
 ## Quick start
 
@@ -28,13 +22,46 @@ inventio init examples/webshop/wiki --name wiki --public
 inventio query "the nightly backup has not finished, what do I do?" -k 3
 ```
 
+## Why no embeddings
+
+- **Coordinates, not similar text.** Every answer is a `path:start-end` coordinate. The links
+  under a result (the code a runbook names, the incident report about the same job) come from what
+  the sources literally say: a name one chunk defines and another mentions, a Markdown link, a URL
+  to a mirrored page. Code draws them, not a model, so a link on screen is never a guess.
+- **Measured on code search.** On SWE-bench Lite (find the files a GitHub issue's fix touches,
+  300 issues, nDCG@10), inventio with no model, on a CPU at 35-140 ms per query, reaches 0.540
+  against BGE-base (0.449) and Voyage-Code-2 (0.291). With dispositio, its own 0.8B ranker on a
+  laptop GPU, reading BM25's top 30: 0.643 against the 7B SFR-Embedding-Mistral (0.627). Embedders
+  still lead on StackOverflow QA: E5-Mistral 7B 0.915 against 0.711.
+- **Nothing to host.** Everything lives in one SQLite file, with no vector database and no index
+  server. `inventio sync` re-reads only the files that changed. With the local model, no query or
+  document leaves the machine.
+
+The published embedder figures are single-stage over the whole corpus; inventio with a ranker is
+two-stage. See [the full table](#benchmarks).
+
+## Use it from your coding agent
+
+```sh
+uv tool install "inventio[dispositio]"
+inventio skill                   # into ~/.agents/skills; --project for this repository's .agents/skills
+```
+
+Agents that read `.agents/skills` then know how to install inventio, add sources (`init`, `sync`,
+`login`), find with `query`, open with `read`, follow links with `show`, and cite coordinates
+instead of paraphrasing. Run `inventio skill` again after an upgrade to refresh it.
+
+## Reading a result
+
+The query in [Quick start](#quick-start) prints:
+
 ```
 == Article
-1. wiki:runbook.md:8-13  Nightly backup runbook > When the nightly backup has not finished  p=0.99
+1. wiki:runbook.md:8-13  Nightly backup runbook > When the nightly backup has not finished  p=0.96
    1. Check the scheduler at 07:00. If `nightly_backup` is still running or has failed, stop it. 2. Take a fresh backup from the replica, not the primary: `make ba…
    -> code · defines nightly_backup · app:jobs/backup.py:4-9  nightly_backup
    -> page · names nightly_backup too · wiki:incidents/2026-03-14.md:3-8  Incident 2026-03-14: no backup to restore > What happened
-2. wiki:runbook.md:3-6  Nightly backup runbook > Nightly backup  p=0.01
+2. wiki:runbook.md:3-6  Nightly backup runbook > Nightly backup  p=0.03
    The job `nightly_backup` copies the orders database to off-site storage. It starts at 01:00 and must finish before the morning order peak at 08:00.
    -> code · defines nightly_backup · app:jobs/backup.py:4-9  nightly_backup
    -> page · names nightly_backup too · wiki:incidents/2026-03-14.md:3-8  Incident 2026-03-14: no backup to restore > What happened
@@ -66,9 +93,9 @@ inventio query "why do we check the backup scheduler at 07:00?" -k 2
 
 ```
 == Article
-1. wiki:incidents/2026-03-14.md:10-13  Incident 2026-03-14: no backup to restore > What changed  p=0.86
+1. wiki:incidents/2026-03-14.md:10-13  Incident 2026-03-14: no backup to restore > What changed  p=0.92
    The 07:00 scheduler check was added to the runbook, and the job now pages the on-call engineer when it has not finished by 06:30 or when the bucket is more than…
-2. wiki:incidents/2026-03-14.md:3-8  Incident 2026-03-14: no backup to restore > What happened  p=0.06
+2. wiki:incidents/2026-03-14.md:3-8  Incident 2026-03-14: no backup to restore > What happened  p=0.04
    The `nightly_backup` run filled the storage bucket at 03:40 and stopped without an error, and nobody checked the scheduler. At 11:00 a bad migration corrupted t…
    -> code · defines nightly_backup · app:jobs/backup.py:4-9  nightly_backup
    -> page · names nightly_backup too · wiki:runbook.md:3-6  Nightly backup runbook > Nightly backup
@@ -82,6 +109,8 @@ categories speak about the same thing (`about` links); `inventio show` lists the
 judged, but they are not printed under results, since a judged link can be wrong (see
 [Limitations](#limitations)).
 
+## Installing
+
 `uv tool install` puts `inventio` on your PATH for every terminal; `uvx --from "inventio[dispositio]"
 inventio ...` runs it once without installing. The unreleased `main` installs with
 `"inventio[dispositio] @ git+https://github.com/minhquan23102000/inventio"`.
@@ -90,11 +119,14 @@ the model that ranks, judges `--facts` and predicts `--types` (1.4 GB, downloade
 Face on the first query). A GPU reads 15 candidates in about 0.16 s (RTX 5070 laptop); a CPU reads
 them too, in about 15 s (fp32, 4,200 tokens of state). `--pool 30` reads twice as many in three passes,
 about three times as long.
-A package install cannot write outside its own environment, so the agent skill is copied by
-`inventio skill` (or `inventio skill --project` for this repository's `.agents/skills`); run it
-again after an upgrade to refresh it.
 
 ## How it works
+
+It uses no embeddings. The structure comes from the sources themselves (headings, functions,
+tables, the names files share), BM25 finds candidates, and a small decision model reorders them:
+[dispositio](https://huggingface.co/minhquan2310/dispositio) on your own machine, or
+[TypeSafe Jev](https://docs.typesafe.ai) in the cloud for sources you mark public. Everything
+lives in one SQLite file.
 
 ### Ingest
 
@@ -575,6 +607,11 @@ extra passes, measured per set on the laptop.
 - The categories above are new. Whether `--facts` with them finds answers a same-size BM25 pool
   does not is not measured yet; the earlier measurement, with schema.org types, is in
   [benchmarks/README.md](benchmarks/README.md#categories-and-fact-links---arms).
+
+## Why the name
+
+> *Inventio*, from *invenire*: to come upon. In classical rhetoric the orator did not make his
+> material up; he went looking through the *loci*, the places where it already lay.
 
 ## License
 
