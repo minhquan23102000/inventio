@@ -3,7 +3,7 @@
 Notable changes to inventio, newest first. Versions are on [PyPI](https://pypi.org/project/inventio/);
 the ranker models are on [Hugging Face](https://huggingface.co/minhquan2310/dispositio).
 
-## Unreleased
+## 0.5.5 (2026-09-29)
 
 ### Added
 - PDF files, with the `pdf` extra (pypdf): the text of each page under a `Page N` heading, so a
