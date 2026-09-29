@@ -142,7 +142,6 @@ def test_urls_name_a_folder_my_drive_or_one_file():
 
 
 def test_a_folder_is_mirrored_as_its_tree_and_searched(drive, tmp_path, capsys):
-    pytest.importorskip("pypdf")
     db = str(tmp_path / "map.db")
     assert cli.main(["--db", db, "init", f"https://drive.google.com/drive/folders/{TOP}"]) == 0
     capsys.readouterr()
@@ -163,7 +162,6 @@ def test_a_folder_is_mirrored_as_its_tree_and_searched(drive, tmp_path, capsys):
 
 
 def test_only_changed_files_are_downloaded_again(drive, tmp_path, capsys):
-    pytest.importorskip("pypdf")
     db = str(tmp_path / "map.db")
     assert cli.main(["--db", db, "init", f"https://drive.google.com/drive/folders/{TOP}"]) == 0
     drive.calls.clear()

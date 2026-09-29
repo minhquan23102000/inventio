@@ -681,7 +681,6 @@ def _pdf(pages: list[str | None]) -> bytes:
 
 
 def test_a_pdf_is_searched_by_the_text_of_its_pages_and_a_scan_is_reported(tmp_path, capsys):
-    pytest.importorskip("pypdf")
     docs = tmp_path / "docs"
     docs.mkdir()
     (docs / "handbook.pdf").write_bytes(_pdf(["Welcome to the team", "Restore the nightly backup from the replica"]))

@@ -22,7 +22,7 @@ Google lets a program read your Drive only through an OAuth client that you crea
 5. Install and sign in:
 
 ```sh
-uv tool install "inventio[pdf]" --with inventio-gdrive   # or, from this repo: --with ./examples/connectors/inventio-gdrive
+uv tool install inventio --with inventio-gdrive   # or, from this repo: --with ./examples/connectors/inventio-gdrive
 inventio login https://drive.google.com                  # asks for the JSON's path, then opens the browser
 inventio init https://drive.google.com/drive/folders/<id>
 inventio query "..." -w format:sheet
@@ -41,7 +41,7 @@ one-off run, `GOOGLE_DRIVE_TOKEN` can hold an access token instead.
 | Google Docs | Drive's Markdown export: headings, lists, tables, links (inline images dropped) |
 | Google Sheets | the first sheet as a table (Drive exports one sheet as CSV) |
 | Google Slides | the text of the slides |
-| PDFs | the text of each page under `Page N`, as inventio reads a PDF on disk (needs `[pdf]`) |
+| PDFs | the text of each page under `Page N`, as inventio reads a PDF on disk |
 | Markdown and text files | as they are |
 
 Other files (Word, images, video) are left out. `-w` filters on `format` (doc, sheet, slides,
@@ -53,6 +53,6 @@ URL like one of your own (untested on a real shared drive).
 ## Test
 
 ```sh
-uv pip install -e ../../.. -e . pytest pypdf
+uv pip install -e ../../.. -e . pytest
 pytest tests
 ```

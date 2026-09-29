@@ -9,7 +9,7 @@ What is read, and how:
 - Google Docs: Drive's own Markdown export, so headings, lists, tables and links stay.
 - Google Sheets: the first sheet as a Markdown table (Drive exports one sheet as CSV).
 - Google Slides: the slides' text (Drive's plain-text export).
-- PDFs: the text of each page, as inventio reads a PDF on disk (the `pdf` extra).
+- PDFs: the text of each page, as inventio reads a PDF on disk.
 - Markdown and plain-text files: as they are.
 Other files (Word, images, video) are left out. A file is fetched again only when Drive's
 version of it changed.

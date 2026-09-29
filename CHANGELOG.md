@@ -3,6 +3,13 @@
 Notable changes to inventio, newest first. Versions are on [PyPI](https://pypi.org/project/inventio/);
 the ranker models are on [Hugging Face](https://huggingface.co/minhquan2310/dispositio).
 
+## 0.5.6 (2026-09-29)
+
+### Changed
+- PDF files are read by default: `pypdf` is a dependency of inventio, the `pdf` extra is gone, and a
+  PDF is no longer skipped with a note to install it. `inventio[pdf]` still installs; pip only
+  says the extra does not exist.
+
 ## 0.5.5 (2026-09-29)
 
 ### Added

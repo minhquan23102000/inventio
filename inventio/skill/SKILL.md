@@ -38,7 +38,7 @@ uv tool install "inventio[dispositio]"
 the weights, 1.4 GB, download once); without it results come in BM25 order. Schema cards need `[data]`
 plus the database's driver in the same tool environment:
 `uv tool install "inventio[dispositio,data]" --with psycopg2-binary` (Postgres; `pymysql` for
-MySQL). PDF files need `[pdf]` (the text of each page; scans and password-protected PDFs are left
+MySQL). PDF files are read by page (scans and password-protected PDFs are left
 out). A `pip install` into another environment is invisible to a `uv tool` install.
 
 ## Sign in and add sources
