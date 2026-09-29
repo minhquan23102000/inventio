@@ -98,6 +98,11 @@ def decode_text(data: bytes) -> str | None:
     return data.decode("utf-8", "replace").replace("\r\n", "\n")
 
 
+def shown_text(data: bytes) -> str:
+    """A text file's bytes as `read` and `grep` show them (UTF-8, universal newlines)."""
+    return data.decode("utf-8", "replace").replace("\r\n", "\n").replace("\r", "\n")
+
+
 def file_text(path: Path) -> str:
     """What the map holds for a file, as `read` and `grep` show it: its text, or for a data file
     the card of its schema."""
@@ -105,7 +110,11 @@ def file_text(path: Path) -> str:
         from .schema import file_card
 
         return file_card(path, path.name) or ""
-    return path.read_text(encoding="utf-8", errors="replace")
+    return shown_text(path.read_bytes())
+
+
+def keep_text(con, file_id: int, text: str) -> None:
+    con.execute("INSERT OR REPLACE INTO file_texts (file_id, text) VALUES (?, ?)", (file_id, text))
 
 
 # ---------------------------------------------------------------- identifiers and references
@@ -594,7 +603,9 @@ def ingest_source(con, name: str, root: Path, public: bool, excludes: list[str],
         ).lastrowid
     known = {
         r["path"]: r
-        for r in con.execute("SELECT id, path, lang, type, size, mtime_ns, sha1 FROM files WHERE source_id = ?", (sid,))
+        for r in con.execute("SELECT id, path, lang, type, size, mtime_ns, sha1, "
+                             "EXISTS (SELECT 1 FROM file_texts t WHERE t.file_id = files.id) AS has_text "
+                             "FROM files WHERE source_id = ?", (sid,))
     }
     counts = {"added": 0, "changed": 0, "removed": 0, "unchanged": 0}
     for rel in list_files(root, excludes):
@@ -608,20 +619,26 @@ def ingest_source(con, name: str, root: Path, public: bool, excludes: list[str],
         if same and old["size"] == st.st_size and old["mtime_ns"] == st.st_mtime_ns:
             if old["type"] != dtype_:
                 con.execute("UPDATE files SET type = ? WHERE id = ?", (dtype_, old["id"]))
+            if not old["has_text"]:   # a map built before file_texts existed: filled once, by the next sync
+                keep_text(con, old["id"], file_text(path))
             counts["unchanged"] += 1
             continue
         if lang == "data":
             from .schema import file_card
 
             digest, text = f"stat:{st.st_size}:{st.st_mtime_ns}", file_card(path, rel)
+            shown = text or ""
         else:
             data = path.read_bytes()
             digest = hashlib.sha1(data).hexdigest()
+            shown = shown_text(data)
             if same and old["sha1"] == digest:
                 con.execute(
                     "UPDATE files SET size = ?, mtime_ns = ?, type = ? WHERE id = ?",
                     (st.st_size, st.st_mtime_ns, dtype_, old["id"]),
                 )
+                if not old["has_text"]:
+                    keep_text(con, old["id"], shown)
                 counts["unchanged"] += 1
                 continue
             text = decode_text(data)
@@ -631,7 +648,7 @@ def ingest_source(con, name: str, root: Path, public: bool, excludes: list[str],
             counts["removed"] += old is not None
             continue
         counts["changed" if old is not None else "added"] += 1
-        _insert_file(con, sid, rel, lang, dtype_, text, st.st_size, st.st_mtime_ns, digest)
+        _insert_file(con, sid, rel, lang, dtype_, text, st.st_size, st.st_mtime_ns, digest, shown)
     for old in known.values():  # indexed before, gone from disk or now excluded
         drop_file(con, old["id"])
         counts["removed"] += 1
@@ -644,11 +661,12 @@ def ingest_source(con, name: str, root: Path, public: bool, excludes: list[str],
 
 
 def _insert_file(con, sid: int, rel: str, lang: str, dtype: str, text: str, size: int, mtime_ns: int,
-                 digest: str) -> None:
+                 digest: str, shown: str) -> None:
     fid = con.execute(
         "INSERT INTO files (source_id, path, lang, type, size, mtime_ns, sha1) VALUES (?, ?, ?, ?, ?, ?, ?)",
         (sid, rel, lang, dtype, size, mtime_ns, digest),
     ).lastrowid
+    keep_text(con, fid, shown)
     ids: list[int] = []
     for c in chunk_file(text, lang, rel):
         parent_id = ids[c.parent] if c.parent is not None and c.parent < len(ids) else None

@@ -522,6 +522,39 @@ def test_grep_and_ls_print_coordinates_that_read_opens(tmp_path, capsys):
     assert out.out.splitlines() == ["d:ops/runbook.md:3-4  section  Runbook > Late backup"]
 
 
+def test_grep_searches_the_kept_text_and_opens_only_files_changed_since_sync(tmp_path, capsys, monkeypatch):
+    """grep reads the text the map keeps (opening thousands of files took 24 s on a Mac where their stat took
+    0.05 s), so a file edited after the last sync must still be read from disk, or grep shows lines that
+    `read` no longer has. A map built before the text was kept gets it on its next sync."""
+    import sqlite3
+
+    import inventio.ingest as ingest
+
+    db = str(tmp_path / "map.db")
+    write(tmp_path / "d", "a.md", "# A\n\nnightly backup runs at 07:00\n")
+    edited = write(tmp_path / "d", "b.md", "# B\n\nnothing here\n")
+    assert run(capsys, "--db", db, "init", str(tmp_path / "d"), "--name", "d")[0] == 0
+    edited.write_text("# B\n\nthe nightly backup moved to 09:00\n", encoding="utf-8")
+
+    opened = []
+    real = ingest.file_text
+    monkeypatch.setattr(ingest, "file_text", lambda p: opened.append(p.name) or real(p))
+    code, out = run(capsys, "--db", db, "grep", "nightly backup", "--json")
+    got = json.loads(out.out)["matches"]
+    assert [(m["path"], m["line"], m["text"]) for m in got] == [
+        ("a.md", 3, "nightly backup runs at 07:00"), ("b.md", 3, "the nightly backup moved to 09:00")]
+    assert opened == ["b.md"]
+
+    con = sqlite3.connect(db)
+    con.execute("DELETE FROM file_texts")
+    con.commit()
+    assert run(capsys, "--db", db, "sync")[0] == 0
+    assert con.execute("SELECT count(*) FROM file_texts").fetchone()[0] == 2
+    opened.clear()
+    code, out = run(capsys, "--db", db, "grep", "09:00")
+    assert code == 0 and opened == []
+
+
 def test_show_names_who_decided_each_fact_and_every_coordinate_opens(tmp_path, capsys):
     db = str(tmp_path / "map.db")
     write(tmp_path / "d", "ops/runbook.md", """

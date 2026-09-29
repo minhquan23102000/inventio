@@ -33,6 +33,12 @@ CREATE TABLE IF NOT EXISTS files (
     sha1 TEXT,
     UNIQUE (source_id, path)
 );
+-- each file's text as `read` shows it, so `grep` opens only the files changed since the last sync
+-- (on some machines opening a file costs milliseconds: 7,164 of them took 24 s, their stat 0.05 s)
+CREATE TABLE IF NOT EXISTS file_texts (
+    file_id INTEGER PRIMARY KEY REFERENCES files(id) ON DELETE CASCADE,
+    text TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS chunks (
     id INTEGER PRIMARY KEY,
     file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,

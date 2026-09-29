@@ -184,8 +184,9 @@ def cmd_show(args) -> int:
 
 def cmd_grep(args) -> int:
     """Every line that matches, in the files the map indexes: exhaustive where `query` ranks a
-    few. Files are read where `read` reads them (the directory, or the mirror of a remote source),
-    so every printed coordinate opens with `read`."""
+    few. A file unchanged since the last sync (same size and mtime) is searched in the text the map
+    keeps; only a changed one is opened where `read` opens it, so every printed coordinate opens with
+    `read` either way."""
     import re
 
     from .ingest import file_text
@@ -204,12 +205,16 @@ def cmd_grep(args) -> int:
     from .scope import where as scope_where
 
     where, params = scope_where(scope, chunks=False)
-    rows = con.execute("SELECT s.name, s.root, f.path FROM files f JOIN sources s ON s.id = f.source_id WHERE 1 = 1"
+    rows = con.execute("SELECT s.name, s.root, f.path, f.size, f.mtime_ns, t.text FROM files f "
+                       "JOIN sources s ON s.id = f.source_id LEFT JOIN file_texts t ON t.file_id = f.id WHERE 1 = 1"
                        + where + " ORDER BY s.name, f.path", params).fetchall()
     hits, total, files = [], 0, 0
     for r in rows:
+        path = Path(r["root"]) / r["path"]
         try:
-            text = file_text(Path(r["root"]) / r["path"])
+            st = path.stat()
+            fresh = r["text"] is not None and (st.st_size, st.st_mtime_ns) == (r["size"], r["mtime_ns"])
+            text = r["text"] if fresh else file_text(path)
         except OSError:
             continue
         if not rx.search(text):
