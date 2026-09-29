@@ -1216,6 +1216,103 @@ def cmd_scale(a):
     record("scale", a.tag, a.axis, s)
 
 
+def cmd_backend(a):
+    """Prefill speed of one checkpoint on this machine: the torch path against mlx-lm, the length curve, and
+    where the time goes. The state read is the whole per-query cost, so this is the measurement a Mac decision
+    rests on.
+
+    Measured 2026-09-29 on Mac15,3 (M3, 10-core GPU, 16 GB), dispositio@v5, one pass over a random state:
+
+        tokens    torch (MPS, reference kernels)   mlx (mlx-lm 0.31.3, mlx 0.32.3)
+         3,000          6.4 s                          7.1 s
+         9,000         19.3 s                         23.1 s
+
+    MLX is not faster here. The reason is mlx-lm's gated-delta Metal kernel: it advances one token per step
+    (grid (32, Dv, B*Hv)), so the 18 DeltaNet layers cost 0.43 s each at 3,000 tokens and scale with length,
+    against 0.065 s for each of the 6 attention layers. The torch path is not faster because it is better; it
+    is chunked (flash-linear-attention's form) and so less linear in the length.
+
+    The floor under both is the GPU, not the kernel: 0.8B x 9,000 tokens is 14.4 TFLOP, and this GPU measures
+    2.8 TFLOP/s on a bf16 matmul, so about 5 s at perfect efficiency. A 9,000-token state cannot be read in
+    under 2 s on this machine by any backend; only a shorter state, or another machine, can do that.
+    """
+    import platform
+    import resource
+    import time
+
+    lens = [int(x) for x in a.lens.split(",")]
+    rows = {"run": a.run, "machine": f"{platform.processor()} {platform.platform()}", "lens": lens,
+            "torch": {}, "mlx": {}, "mlx_layers": {}}
+
+    def timed(fn, reps):
+        fn()
+        ts = []
+        for _ in range(reps):
+            t = time.time()
+            fn()
+            ts.append(time.time() - t)
+        return round(min(ts), 2)
+
+    if a.torch != "skip":
+        import torch
+
+        from inventio._systemone import load
+
+        for device in a.torch.split(","):
+            tok, m = load(a.run, device=device)
+            print(f"torch on {device}: {m.dtype}, {m.device}", flush=True)
+            sync = torch.mps.synchronize if str(m.device).startswith("mps") else lambda: None
+            for L in lens:
+                ids = torch.randint(0, 1000, (1, L)).to(m.device)
+                with torch.no_grad():
+                    ms = timed(lambda: (m.lm(input_ids=ids), sync())[1], a.reps)
+                rows["torch"][f"{device}:{L}"] = ms
+                print(f"  torch {L:6d} tokens {ms:7.2f} s", flush=True)
+            del m
+
+    if a.mlx:
+        import json
+
+        import mlx.core as mx
+        from mlx_lm.models.base import create_attention_mask, create_ssm_mask
+        from mlx_lm.models.qwen3_5 import TextModel, TextModelArgs
+
+        from inventio._systemone.checkpoint import resolve_run
+
+        path = resolve_run(a.run)
+        with open(os.path.join(path, "config.json"), encoding="utf-8") as f:
+            args = TextModelArgs.from_dict(json.load(f))
+        tm = TextModel(args)
+        # mlx-lm's own sanitize: its names for the DeltaNet conv (channel-last) and its norm convention, so a
+        # conversion bug cannot be mistaken for a slow kernel
+        tm.model.load_weights(list(tm.sanitize(mx.load(os.path.join(path, "model.safetensors"))).items()))
+        mx.eval(tm.parameters())
+        mx.set_cache_limit(1 << 30)
+        lm = tm.model
+        for L in lens:
+            ids = mx.array([[1] * L], dtype=mx.int32)
+            rows["mlx"][str(L)] = timed(lambda: mx.eval(lm(ids)), a.reps)
+            print(f"  mlx   {L:6d} tokens {rows['mlx'][str(L)]:7.2f} s", flush=True)
+        L = lens[0]   # one layer at a time, at the shortest length: which kind of layer the machine is slow on
+        h = lm.embed_tokens(mx.array([[1] * L], dtype=mx.int32))
+        mx.eval(h)
+        cache = [None] * len(lm.layers)
+        masks = {"fa": create_attention_mask(h, cache[lm.fa_idx]), "ssm": create_ssm_mask(h, cache[lm.ssm_idx])}
+        for i, layer in enumerate(lm.layers):
+            t = time.time()
+            h = layer(h, mask=masks["ssm" if layer.is_linear else "fa"], cache=None)
+            mx.eval(h)
+            rows["mlx_layers"][str(i)] = {"linear": bool(layer.is_linear), "sec": round(time.time() - t, 3)}
+        lin = [v["sec"] for v in rows["mlx_layers"].values() if v["linear"]]
+        att = [v["sec"] for v in rows["mlx_layers"].values() if not v["linear"]]
+        print(f"  at {L} tokens: {len(lin)} DeltaNet layers {sum(lin):.2f} s ({sum(lin) / len(lin):.3f} s each), "
+              f"{len(att)} attention layers {sum(att):.2f} s ({sum(att) / len(att):.3f} s each)", flush=True)
+        rows["mlx_layers_summary"] = {"linear_total": round(sum(lin), 2), "attention_total": round(sum(att), 2)}
+
+    rows["peak_rss_gb"] = round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1e9, 2)
+    record("backend", a.run, "speed", rows)
+
+
 def cmd_train(a):
     """The run's recipe, in the repo: the balanced record file, then Kev's trainer through
     `kev_win.py` with every knob pinned, and a `recipe.json` recording the Kev commit, the base
@@ -1413,6 +1510,12 @@ def main():
     s.add_argument("url"); s.add_argument("tag")
     s.add_argument("--axis", default="q,len"); s.add_argument("--pools", type=int, default=60)
     s.set_defaults(fn=cmd_scale)
+    s = sub.add_parser("backend", help="prefill speed of one checkpoint on this machine: torch against mlx-lm")
+    s.add_argument("--run", default="minhquan2310/dispositio@v5")
+    s.add_argument("--torch", default="mps", help="devices to time the torch path on, or 'skip'")
+    s.add_argument("--mlx", action="store_true", help="also time mlx-lm (Apple Silicon only)")
+    s.add_argument("--lens", default="3000,9000"); s.add_argument("--reps", type=int, default=3)
+    s.set_defaults(fn=cmd_backend)
     s = sub.add_parser("spike", help="ask a served System One model over the pools")
     s.add_argument("url"); s.add_argument("tag"); s.add_argument("--model", default="jev-latest")
     s.add_argument("--sets", default="md2d"); s.add_argument("--limit", type=int, default=0)
