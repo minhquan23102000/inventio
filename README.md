@@ -323,7 +323,10 @@ inventio query "why read from the replica" -w "item:pull state:merged"
 
 Inventio keeps no GitHub token; each run asks the GitHub CLI for the one it holds (`gh auth
 token`), for github.com and for a GitHub Enterprise host the CLI is signed in to (`GH_TOKEN`,
-`GITHUB_TOKEN` or `GH_ENTERPRISE_TOKEN` without the CLI). One file per issue or pull request: the
+`GITHUB_TOKEN` or `GH_ENTERPRISE_TOKEN` without the CLI, or to force one). With several accounts
+signed in (`gh auth login` again adds one), each repository is read with the first account that can
+see it, the active one first, so a company repository syncs while a personal account is active;
+sync prints which account it used when that is not the active one. One file per issue or pull request: the
 description, the comments, and for a pull request its reviews and every review comment under a
 heading with the file and line it is on and the last lines of its diff. `#12` and links to the
 repository's own items become relative links, so they are `citation` links in the map; the file

@@ -15,10 +15,8 @@ from inventio.read import section
 
 
 @pytest.fixture(autouse=True)
-def offline(monkeypatch, tmp_path):
+def offline(monkeypatch):
     monkeypatch.setenv("INVENTIO_RANKER", "none")
-    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "data"))  # mirrors go under the data directory
-    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
 
 
 def test_confluence_page_keeps_code_links_and_diagrams():
@@ -329,3 +327,52 @@ def test_login_comes_from_the_environment_before_the_keychain(monkeypatch):
         assert credentials.logout("https://a.atlassian.net/wiki/spaces/OPS") == "removed the login for https://a.atlassian.net"
     finally:
         keyring.set_keyring(before)
+
+
+def test_a_repository_is_read_with_the_first_gh_account_that_can_see_it(monkeypatch, capsys):
+    """With a personal account active and a company one signed in beside it, a company repository
+    must be read with the company account, without `gh auth switch`; GH_TOKEN, when set, wins; and
+    when no account can see the repository the error names the ones tried."""
+    from inventio.connectors import github
+
+    tokens = {"me": "t-me", "work": "t-work"}
+    readable = {("acme/shop", "t-work"), ("me/notes", "t-me"), ("me/notes", "t-work")}
+    monkeypatch.setattr(github, "logins", lambda host: ["me", "work"])   # the active one first
+    monkeypatch.setattr(github, "_gh", lambda host, login=None: tokens[login or "me"])
+    monkeypatch.setattr(github, "_can_read", lambda host, repo, tok: (repo, tok) in readable)
+    monkeypatch.setattr(github, "_readers", {})
+    for v in ("GH_TOKEN", "GITHUB_TOKEN"):
+        monkeypatch.delenv(v, raising=False)
+
+    assert github.reader("https://github.com/acme/shop") == "t-work"
+    assert "gh account work" in capsys.readouterr().err
+    assert github.reader("https://github.com/me/notes") == "t-me"   # both can: the active one, in silence
+    assert capsys.readouterr().err == ""
+    with pytest.raises(connectors.RemoteError, match="tried me, work"):
+        github.reader("https://github.com/other/private")
+    monkeypatch.setenv("GH_TOKEN", "t-env")
+    assert github.reader("https://github.com/other/x") == "t-env"
+
+
+def test_one_failing_source_does_not_stop_the_others_from_syncing(monkeypatch, tmp_path, capsys):
+    site = "https://wiki.test/space"
+    fake = SimpleNamespace(KIND="fake", Remote=FakeRemote, heading_url=lambda item, heads: item["url"],
+                           origin=lambda url, q=None: url if url == site else None, locate=lambda url: None)
+    monkeypatch.setitem(connectors.KINDS, "fake", fake)
+    FakeRemote.items = {"1": ("v1", "Policy.md", "# Policy\n\nKeep backups for 35 days.\n")}
+    db = str(tmp_path / "map.db")
+    (tmp_path / "zdocs").mkdir()
+    (tmp_path / "zdocs" / "a.md").write_text("# A\n\nfirst\n", encoding="utf-8")
+    assert cli.main(["--db", db, "init", site]) == 0
+    assert cli.main(["--db", db, "init", str(tmp_path / "zdocs")]) == 0   # sorts after `notes`
+    (tmp_path / "zdocs" / "a.md").write_text("# A\n\nsecond\n", encoding="utf-8")
+
+    def refuse(self):
+        raise connectors.RemoteError("404 Not Found")
+    monkeypatch.setattr(FakeRemote, "listing", refuse)
+    capsys.readouterr()
+    assert cli.main(["--db", db, "sync"]) == 2
+    err = capsys.readouterr().err
+    assert "notes: 404 Not Found" in err and "not synced: notes" in err
+    kept = [t for (t,) in sqlite3.connect(db).execute("SELECT text FROM file_texts")]
+    assert any("second" in t for t in kept)   # the directory after the failing source was still synced

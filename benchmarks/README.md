@@ -41,7 +41,7 @@ python benchmarks/pack_check.py                    # packed neighbour call vs on
 # dispositio v4: MultiDoc2Dial states and category passages, then a LoRA run on Kev 0.8B
 python benchmarks/category_data.py
 python benchmarks/systemone.py data && python benchmarks/systemone.py data --judge
-python benchmarks/systemone.py run <tag> --judge-records <data>/s1/data/judge.jsonl   # recipe: STATUS.md
+python benchmarks/systemone.py run <tag> --judge-records <data>/s1/data/judge.jsonl   # recipe pinned in `systemone.py train`
 python benchmarks/systemone.py export <run dir> <export dir> && python benchmarks/systemone.py publish <export dir> --dry-run
 ```
 

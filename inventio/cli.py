@@ -111,7 +111,8 @@ def _report(stats: dict, links: dict, t: float, args) -> None:
 
 def cmd_sync(args) -> int:
     """Bring every source (or the named ones) up to date: directories re-read, remote sources
-    re-listed and only what changed fetched."""
+    re-listed and only what changed fetched. A source that fails (a login, a network) is reported
+    and the others still sync; the exit code is then 2."""
     from . import connectors
     from .ingest import ingest_source
     from .links import rebuild_links
@@ -124,6 +125,7 @@ def cmd_sync(args) -> int:
             print(f"no source named {', '.join(sorted(unknown))}", file=sys.stderr)
             return 2
         rows = [r for r in rows if r["name"] in args.source]
+    failed = []
     for r in rows:
         t = time.time()
         try:
@@ -136,12 +138,16 @@ def cmd_sync(args) -> int:
                 links = rebuild_links(con)
         except connectors.RemoteError as e:
             print(f"{r['name']}: {e}", file=sys.stderr)
-            return 2
+            failed.append(r["name"])
+            continue
         _report(stats, links, t, args)
+    if failed:
+        print(f"not synced: {', '.join(failed)}", file=sys.stderr)
     if args.facts:
-        args.source = [r["name"] for r in rows]
-        return cmd_facts(args)
-    return 0
+        args.source = [r["name"] for r in rows if r["name"] not in failed]
+        code = cmd_facts(args)
+        return 2 if failed else code
+    return 2 if failed else 0
 
 
 def cmd_read(args) -> int:

@@ -4,7 +4,9 @@
 
 Inventio keeps no GitHub token: every run asks the GitHub CLI for the one it already holds
 (`gh auth token --hostname <host>`), so `gh auth login` once is all it takes, for github.com and
-for GitHub Enterprise hosts alike. Without the CLI, GH_TOKEN or GITHUB_TOKEN is used.
+for GitHub Enterprise hosts alike. With several accounts signed in on a host (a personal one and
+a company one), each repository is read with the first that can see it, the active one tried
+first, so no `gh auth switch` is needed. GH_TOKEN or GITHUB_TOKEN, when set, is used as given.
 
 A file holds the item's description, its comments, and for a pull request its reviews and the
 review comments with the file and line they are on. `#123` and links to this repository's
@@ -15,11 +17,15 @@ issues become relative links, so they are `citation` links in the map; the first
 The code itself is not fetched: index a clone with `inventio init <dir>`.
 """
 
+import json
 import os
 import re
 import shutil
 import subprocess
+import sys
+import urllib.error
 import urllib.parse
+import urllib.request
 
 from ..ingest import FENCE, HEADING, slug
 from .http import Client, RemoteError
@@ -30,25 +36,85 @@ KIND = "github"
 PAGE = 100
 REPO_PATH = re.compile(r"^/([\w.\-]+)/([\w.\-]+?)(?:\.git)?(?:/|$)")
 ITEM_PATH = re.compile(r"^/[\w.\-]+/[\w.\-]+/(?:issues|pull)/(\d+)")
-_tokens: dict[str, str | None] = {}  # host -> the GitHub CLI's token, asked once per process
+_tokens: dict[tuple, str | None] = {}  # (host, login or None) -> the GitHub CLI's token, asked once per process
+_readers: dict[str, str] = {}  # origin -> the token that reads it
 
 
-def _gh(host: str) -> str | None:
-    """The GitHub CLI's token for this host, or None (not installed, not signed in there)."""
-    if host not in _tokens:
+def _gh(host: str, login: str | None = None) -> str | None:
+    """The GitHub CLI's token for this host (for one of its accounts), or None (not installed, not signed in)."""
+    if (host, login) not in _tokens:
         found = None
         if shutil.which("gh"):
-            r = subprocess.run(["gh", "auth", "token", "--hostname", host], capture_output=True, text=True)
+            cmd = ["gh", "auth", "token", "--hostname", host] + (["--user", login] if login else [])
+            r = subprocess.run(cmd, capture_output=True, text=True)
             found = r.stdout.strip() if r.returncode == 0 else None
-        _tokens[host] = found or None
-    return _tokens[host]
+        _tokens[(host, login)] = found or None
+    return _tokens[(host, login)]
+
+
+def logins(host: str) -> list[str]:
+    """The GitHub CLI's accounts signed in on this host, the active one first; [] when the CLI cannot
+    say (not installed, or older than `gh auth status --json`)."""
+    if not shutil.which("gh"):
+        return []
+    r = subprocess.run(["gh", "auth", "status", "--json", "hosts", "--hostname", host], capture_output=True, text=True)
+    try:
+        accounts = json.loads(r.stdout)["hosts"].get(host) or []
+    except (ValueError, KeyError, AttributeError):
+        return []
+    ok = [a for a in accounts if a.get("state") == "success" and a.get("login")]
+    return [a["login"] for a in sorted(ok, key=lambda a: not a.get("active"))]
+
+
+def _can_read(host: str, owner_repo: str, tok: str) -> bool:
+    base = "https://api.github.com" if host == "github.com" else f"https://{host}/api/v3"
+    req = urllib.request.Request(f"{base}/repos/{owner_repo}", headers={
+        "Authorization": f"Bearer {tok}", "Accept": "application/vnd.github+json"})
+    try:
+        with urllib.request.urlopen(req, timeout=30):
+            return True
+    except urllib.error.HTTPError as e:
+        if e.code in (401, 403, 404):   # GitHub answers 404 to an account that may not see a private repository
+            return False
+        raise RemoteError(f"{e.code} {e.reason} from {base}/repos/{owner_repo}") from None
+    except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
+        raise RemoteError(f"cannot reach {base}: {getattr(e, 'reason', e)}") from None
+
+
+def _env_token(host: str) -> str | None:
+    env = ("GH_TOKEN", "GITHUB_TOKEN") if host == "github.com" else ("GH_ENTERPRISE_TOKEN",)
+    return next((os.environ[v] for v in env if os.environ.get(v)), None)
+
+
+def reader(origin_url: str) -> str:
+    """The token that reads this repository: GH_TOKEN (or GITHUB_TOKEN) as given; else the first of the
+    CLI's accounts on the host that can see the repository, the active one first."""
+    if origin_url in _readers:
+        return _readers[origin_url]
+    host = host_of(origin_url)
+    owner_repo = urllib.parse.urlparse(origin_url).path.strip("/")
+    found = _env_token(host)
+    tried = logins(host) if found is None else []
+    for i, login in enumerate(tried):
+        tok = _gh(host, login)
+        if tok and _can_read(host, owner_repo, tok):
+            if i:
+                print(f"{origin_url}: read with gh account {login} (the active one, {tried[0]}, cannot see it)",
+                      file=sys.stderr)
+            found = tok
+            break
+    else:
+        if tried:
+            raise RemoteError(f"no GitHub CLI account on {host} can read {owner_repo} (tried {', '.join(tried)}): "
+                              f"gh auth login --hostname {host} with one that can")
+    _readers[origin_url] = found or token(host)
+    return _readers[origin_url]
 
 
 def token(host: str, quiet: bool = False) -> str | None:
     """The token requests to this host carry: the GitHub CLI's, else GH_TOKEN or GITHUB_TOKEN
     for github.com and GH_ENTERPRISE_TOKEN for another host."""
-    env = ("GH_TOKEN", "GITHUB_TOKEN") if host == "github.com" else ("GH_ENTERPRISE_TOKEN",)
-    found = _gh(host) or next((os.environ[v] for v in env if os.environ.get(v)), None)
+    found = _gh(host) or _env_token(host)
     if found is None and not quiet:
         raise RemoteError(f"GitHub on {host} needs the GitHub CLI signed in: gh auth login --hostname {host}")
     return found
@@ -94,7 +160,7 @@ def _api(origin_url: str) -> tuple[Client, str]:
     host = host_of(origin_url)
     base = "https://api.github.com" if host == "github.com" else f"https://{host}/api/v3"
     owner_repo = urllib.parse.urlparse(origin_url).path.strip("/")
-    client = Client(base, {"Authorization": f"Bearer {token(host)}", "Accept": "application/vnd.github+json",
+    client = Client(base, {"Authorization": f"Bearer {reader(origin_url)}", "Accept": "application/vnd.github+json",
                            "X-GitHub-Api-Version": "2022-11-28"})
     return client, f"/repos/{owner_repo}"
 
