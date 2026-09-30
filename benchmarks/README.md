@@ -16,6 +16,44 @@ its BM25 number is comparable to the paper's. `mixed` indexes the whole reposito
 would point Inventio at it: code, tests, `.rst`/`.md`/`.txt` docs, configs. The gold files are
 the same; everything else is noise a real user would have.
 
+## Reading the table
+
+The table is in the [README](../README.md#benchmarks). Its two dispositio rows were measured with
+v4; v5, the model installed today, is compared with v4 in [docs/dispositio.md](../docs/dispositio.md).
+
+- **No model**: ahead of BGE-base and Voyage-Code-2 on SWE-bench Lite. The likely reason, not
+  isolated by an ablation, is that chunks follow functions and carry their file path. On plain
+  text it stays below the embedders.
+- **dispositio v4**, on a laptop: ahead of BM25 on all six, by +0.032 (StackOverflow QA) to +0.136
+  (MultiDoc2Dial). Reading the first 15 only, it trails v3 on SciFact, Zalo and MultiDoc2Dial and v2 on
+  SWE-bench Lite code (0.599 / 0.661), and nearly all of that is the answers at ranks 16-30 it never reads:
+  on the passages both read, v4 ties v3 (and v2 on code) everywhere except Zalo, where its ranker saw no
+  Vietnamese (-0.026 [-0.041, -0.011]). With `--pool 30`: MultiDoc2Dial 0.640 against v3's 0.622,
+  StackOverflow QA 0.711 / 0.691, TechQA 0.489 / 0.416, SciFact 0.716 / 0.733 (interval touching zero),
+  SWE-bench Lite code 0.643 / v2's 0.661 (-0.017 [-0.051, +0.015]); Zalo stays below (0.805 / 0.838).
+  Where it leads is what these tables do not score: the line, and saying the map does not answer
+  ([dispositio](../docs/dispositio.md)). SWE-bench rows were run on Modal (ingest on CPU, the ranker on an L4).
+- **dispositio** (v3), on a laptop: ahead of BM25 on all five text sets, by +0.021 (StackOverflow
+  QA) to +0.152 (MultiDoc2Dial). Against v2, paired per query: +0.015 on StackOverflow QA and
+  +0.017 on Zalo with the interval above zero, −0.015 on MultiDoc2Dial with the interval touching
+  zero, level on SciFact and TechQA. SWE-bench Lite was not re-run; the previous release's card
+  reports 0.661 there, ahead of every embedder listed, on 12 repositories it never trained on.
+- **StackOverflow QA** puts its train and test answers in one corpus, and dispositio was trained
+  on the train answers as answers. The previous release's card reports that it ranked some of
+  them too high, and was ahead of BM25 with them removed (0.752 against 0.729). v3 is ahead of
+  BM25 as published; the filtered variant was not re-run.
+- **Jev** stays ahead on SWE-bench, SciFact, StackOverflow QA and above all TechQA, where the
+  answer is one section of a long technote.
+- **Laya as published** ranks worse than BM25 alone, which is why dispositio exists.
+- **Whole repositories** (code, tests, docs and configs indexed together) are harder: BM25 0.400,
+  the previous dispositio 0.486, v4 0.431, Jev 0.515. Tests and docs crowd the files to fix out of the 30 candidates;
+  looking up the names the issue contains puts the file among them for 73% of issues instead of
+  63%.
+- **[examples/webshop](../examples/webshop)**, 13 on-call questions over a runbook, a policy, an
+  incident report and code, written after training (`python benchmarks/example_bench.py none
+  dispositio typesafe`): the answer is first for 4 with dispositio v3, 7 with v2, 6 with BM25,
+  13 with Jev.
+
 ## Reproduce
 
 ```sh
