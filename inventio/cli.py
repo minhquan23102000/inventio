@@ -418,21 +418,20 @@ def _snippet(text: str, width: int = 160) -> str:
     return s[:width] + ("…" if len(s) > width else "")
 
 
-def cmd_query(args) -> int:
-    from .connectors import web_url
-    from . import serve
+class QueryFailed(Exception):
+    """A query that answers with an exit code and a message instead of hits."""
+
+    def __init__(self, code: int, message: str):
+        super().__init__(message)
+        self.code, self.message = code, message
+
+
+def ranked(con, args, scope) -> tuple[list, list[str]]:
+    """The hits `inventio query` prints and the notes it writes to stderr; QueryFailed when it answers with
+    an exit code instead. The CLI and `serve --http` both answer through this, so the two cannot drift."""
     from .search import search
 
-    if args.ranker == "dispositio" and not args.here and serve.enabled():
-        code = serve.forward(args.argv)  # the model stays loaded between queries
-        if code is not None:
-            return code
-    con = _db(args)
-    try:
-        scope = _scope(con, args)
-    except ValueError as e:
-        print(str(e), file=sys.stderr)
-        return 2
+    notes = []
 
     def searched(ranker, judge=None):
         return search(con, args.text, k=args.k, pool=args.pool, ranker=ranker,
@@ -450,22 +449,19 @@ def cmd_query(args) -> int:
         # tool always had; an explicit `--ranker dispositio` gets the whole message and exit 3 instead,
         # because there the promise was made by the caller.
         if args.ranker_explicit or args.facts:   # --facts asked for a model's judgment: never skip it quietly
-            print(str(e), file=sys.stderr)
-            return 3
-        print(f"inventio: {str(e).splitlines()[0]}; answering in BM25 order", file=sys.stderr)
+            raise QueryFailed(3, str(e)) from e
+        notes.append(f"inventio: {str(e).splitlines()[0]}; answering in BM25 order")
         ranker, hits = None, searched(None)
     except CloudRefused as e:
-        print(str(e), file=sys.stderr)
-        return 3
+        raise QueryFailed(3, str(e)) from e
     except ValueError as e:   # a request this ranker cannot serve: --types without a type head
-        print(str(e), file=sys.stderr)
-        return 2
+        raise QueryFailed(2, str(e)) from e
     if args.ranker == "dispositio" and ranker is not None:
         from .systemone import honesty, update_notice
 
         notice = update_notice()
         if notice:
-            print(notice, file=sys.stderr)
+            notes.append(notice)
 
         # The caveat is off unless the operator sets the threshold (`INVENTIO_DISPOSITIO_CAVEAT`): `exists`
         # is calibrated per corpus (answerable medians 0.447 md2d, 0.232 techqa, 0.377 webshop), so one
@@ -474,10 +470,40 @@ def cmd_query(args) -> int:
         want = os.environ.get("INVENTIO_DISPOSITIO_CAVEAT")
         note = honesty(getattr(ranker, "last", None), float(want) if want else None)
         if note:
-            print(note, file=sys.stderr)
+            notes.append(note)
+    return hits, notes
+
+
+def json_rows(hits) -> list[dict]:
+    """What `query --json` prints for these hits."""
+    from .connectors import web_url
+
+    return [{**h.as_dict(), "url": web_url(h.root, h.path, h.heading_path)} for h in hits]
+
+
+def cmd_query(args) -> int:
+    from .connectors import web_url
+    from . import serve
+
+    if args.ranker == "dispositio" and not args.here and serve.enabled():
+        code = serve.forward(args.argv)  # the model stays loaded between queries
+        if code is not None:
+            return code
+    con = _db(args)
+    try:
+        scope = _scope(con, args)
+    except ValueError as e:
+        print(str(e), file=sys.stderr)
+        return 2
+    try:
+        hits, notes = ranked(con, args, scope)
+    except QueryFailed as e:
+        print(e.message, file=sys.stderr)
+        return e.code
+    for note in notes:
+        print(note, file=sys.stderr)
     if args.json:
-        rows = [{**h.as_dict(), "url": web_url(h.root, h.path, h.heading_path)} for h in hits]
-        print(json.dumps(rows, ensure_ascii=False, indent=2))
+        print(json.dumps(json_rows(hits), ensure_ascii=False, indent=2))
         return 0
     if not hits:
         from .scope import count
@@ -564,6 +590,8 @@ def cmd_serve(args) -> int:
     if args.stop:
         print("stopped" if serve.stop() else "no server running")
         return 0
+    if args.http is not None:
+        return serve.serve_http(args.http, args.db)
     return serve.serve(args.idle)
 
 
@@ -589,9 +617,8 @@ def cmd_update(args) -> int:
     return 0
 
 
-def main(argv=None) -> int:
-    if hasattr(sys.stdout, "reconfigure"):
-        sys.stdout.reconfigure(encoding="utf-8")
+def parser() -> argparse.ArgumentParser:
+    """The command line `main` reads; `serve --http` reads a request through it too (`parse`)."""
     p = argparse.ArgumentParser(
         prog="inventio", formatter_class=argparse.RawDescriptionHelpFormatter,
         description="Local retrieval map: BM25 + structure + links, reranked by dispositio or TypeSafe.",
@@ -744,7 +771,10 @@ there. Every command prints source:path:start-end coordinates that read and show
                                      "query; INVENTIO_SERVE=0 turns it off)")
     s.add_argument("--idle", type=float, default=float(os.environ.get("INVENTIO_SERVE_IDLE", 900)),
                    help="exit after this many seconds without a request (default 900)")
-    s.add_argument("--stop", action="store_true", help="stop the running server")
+    s.add_argument("--stop", action="store_true", help="stop the running servers (background and --http)")
+    s.add_argument("--http", type=int, metavar="PORT",
+                   help="instead: answer POST /query with what `query --json` prints, on 127.0.0.1:PORT (0: any "
+                        "free port), until stopped; the URL and the token go to serve-http.json in the data directory")
     s.set_defaults(fn=cmd_serve)
 
     s = sub.add_parser("update", help="fetch the latest released dispositio (queries say when there is one)")
@@ -762,10 +792,20 @@ there. Every command prints source:path:start-end coordinates that read and show
     ranking(s)
     s.set_defaults(fn=cmd_bench)
 
-    raw = sys.argv[1:] if argv is None else list(argv)
-    args = p.parse_args(_join_where(raw))
-    args.argv = raw
-    args.ranker_explicit = "--ranker" in raw   # the default may fall back; a named ranker may not
+    return p
+
+
+def parse(argv: list[str]) -> argparse.Namespace:
+    args = parser().parse_args(_join_where(argv))
+    args.argv = list(argv)
+    args.ranker_explicit = "--ranker" in argv   # the default may fall back; a named ranker may not
+    return args
+
+
+def main(argv=None) -> int:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
+    args = parse(sys.argv[1:] if argv is None else list(argv))
     try:
         return args.fn(args)
     except OSError as e:

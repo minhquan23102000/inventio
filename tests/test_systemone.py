@@ -173,6 +173,22 @@ def test_a_pool_of_30_is_read_in_two_heats_and_one_final(tmp_path, monkeypatch):
     assert ranker.last["heats"] == 2
 
 
+def test_leaving_out_the_line_and_exists_questions_leaves_every_passage_probability_unchanged(tmp_path, monkeypatch):
+    """`query` ranks by `where_passage` alone and asks `where_line` and `exists` only for the caveat; each
+    question is its own row over the state, so the ranking must be the same with or without them."""
+    from dataclasses import replace
+    from inventio.rankers import SystemOneRanker
+
+    monkeypatch.setenv("INVENTIO_DEVICE", "cpu")
+    run = tiny_run(tmp_path)
+    pool = [replace(hits()[0], id=i, path=f"api{i}.md") for i in range(5)]
+    full = SystemOneRanker(run=str(run), explain=True)
+    lean = SystemOneRanker(run=str(run), explain=False)
+    a, b = full.score("how many requests a minute?", pool), lean.score("how many requests a minute?", pool)
+    assert full.last["exists_head"] is not None and lean.last["exists_head"] is None and lean.last["line"] is None
+    assert max(abs(x - y) for x, y in zip(a, b)) < 1e-5
+
+
 def test_private_text_is_read_in_process_but_never_sent_to_a_remote_model(tmp_path, monkeypatch):
     """The default reads the map in this process, so a private source is ranked like any other; the same
     ranker pointed at a remote URL refuses it before anything is sent."""

@@ -7,6 +7,9 @@ request. INVENTIO_SERVE=0 runs every query in its own process, as before.
 It listens on 127.0.0.1 only and answers a request only when it carries the token written, with
 the port, to `serve.json` in the data directory (readable by its owner alone). A server started
 by an older copy of the code is stopped and replaced.
+
+`inventio serve --http PORT` is the other shape: a server that runs until stopped and answers
+`POST /query` with what `query --json` prints (see serve_http).
 """
 
 import contextlib
@@ -14,6 +17,7 @@ import io
 import json
 import os
 import secrets
+import signal
 import socket
 import subprocess
 import sys
@@ -233,8 +237,166 @@ def serve(idle: float) -> int:
 
 
 def stop() -> bool:
+    """Stop the background server and the HTTP server, whichever run (both hold weights `update` replaces);
+    whether one did."""
+    stopped = False
     state = _live()
-    if not state:
-        return False
-    _send(state, {"op": "stop"}, 5)
-    return True
+    if state:
+        _send(state, {"op": "stop"}, 5)
+        stopped = True
+    with contextlib.suppress(OSError, ValueError, KeyError):
+        os.kill(json.loads(http_state_file().read_text())["pid"], signal.SIGTERM)
+        stopped = True
+    return stopped
+
+
+# --- `inventio serve --http PORT`: the answers of `query --json` over HTTP on loopback, for a program that asks
+# many questions (a portal, an agent harness). It runs until stopped and loads the model at start, so no
+# question pays for PyTorch and the checkpoint. The map is opened per request: a sync or init is seen by the
+# next question, with nothing to reload. Requests run on their own threads; the model reads one state at a
+# time (systemone.Model's lock), BM25 and the rest run side by side. A request carries the token written, with
+# the port, to `serve-http.json` (readable by its owner alone).
+
+def http_state_file() -> Path:
+    return data_home() / "serve-http.json"
+
+
+QUERY_FIELDS = {"text": str, "where": str, "source": list, "k": int, "pool": int, "ranker": str,
+                "no_links": bool, "no_symbols": bool, "neighbours": bool, "types": bool, "facts": bool}
+
+
+def query_argv(body: dict) -> list[str]:
+    """A request body as the `inventio query --json` command line it stands for. ValueError on a field
+    that is unknown or of the wrong type: a typo must not be answered with the defaults."""
+    unknown = set(body) - set(QUERY_FIELDS)
+    if unknown:
+        raise ValueError(f"unknown field(s): {', '.join(sorted(unknown))}; known: {', '.join(QUERY_FIELDS)}")
+    for key, kind in QUERY_FIELDS.items():
+        if key in body and (not isinstance(body[key], kind) or kind is int and isinstance(body[key], bool)):
+            raise ValueError(f"{key} must be {kind.__name__}")
+    text = " ".join(body.get("text", "").split())
+    if not text:
+        raise ValueError("text is empty")
+    # a leading space keeps a question that starts with '-' a positional, never a flag
+    argv = ["query", " " + text, "--json", "--here"]
+    if "where" in body:
+        argv += ["-w", body["where"]]
+    for name in body.get("source", []):
+        argv.append(f"--source={name}")   # one token: a name like '-h' stays a value
+    from .rankers import RANKERS
+
+    if body.get("ranker", "dispositio") not in RANKERS:
+        raise ValueError(f"ranker must be one of {', '.join(RANKERS)}")
+    for key, flag in (("k", "-k"), ("pool", "--pool"), ("ranker", "--ranker")):
+        if key in body:
+            argv += [flag, str(body[key])]
+    for key in ("no_links", "no_symbols", "neighbours", "types", "facts"):
+        if body.get(key):
+            argv.append("--" + key.replace("_", "-"))
+    return argv
+
+
+def serve_http(port: int, db: str | None = None) -> int:
+    """`db`: the map `inventio --db` named when the server started; every question reads that one."""
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    from . import cli, rankers
+
+    token = secrets.token_hex(16)
+    status = {"model": "loading", "run": None, "device": None, "error": None}
+    loaded = threading.Event()   # the start-up load is over: questions wait for it rather than load a second copy
+
+    def warm():
+        try:
+            if rankers.default_ranker() != "dispositio":
+                status["model"] = "none"
+            else:
+                info = rankers.SystemOneRanker()._served()
+                status.update(model="ready", run=info["run"], device=info.get("device"))
+        except Exception as e:   # questions are still answered (in BM25 order, as `query` would); /health says why
+            status.update(model="error", error=f"{type(e).__name__}: {e}")
+        finally:
+            loaded.set()
+
+    class Handler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def log_message(self, fmt, *args):
+            sys.stderr.write(f"{time.strftime('%Y-%m-%dT%H:%M:%S')} {fmt % args}\n")
+
+        def _reply(self, code: int, payload):
+            data = json.dumps(payload, ensure_ascii=False).encode()
+            self.send_response(code)
+            self.send_header("content-type", "application/json; charset=utf-8")
+            self.send_header("content-length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def _authorized(self) -> bool:
+            got = self.headers.get("authorization", "").removeprefix("Bearer ").strip()
+            if secrets.compare_digest(got, token):
+                return True
+            self._reply(401, {"error": "missing or wrong token (see serve-http.json)"})
+            return False
+
+        def do_GET(self):
+            if self.path != "/health":
+                return self._reply(404, {"error": "GET /health or POST /query"})
+            if self._authorized():
+                self._reply(200, {"ok": True, "pid": os.getpid(), **status})
+
+        def do_POST(self):
+            if self.path != "/query":
+                return self._reply(404, {"error": "GET /health or POST /query"})
+            if not self._authorized():
+                return
+            t = time.perf_counter()
+            try:
+                body = json.loads(self.rfile.read(int(self.headers.get("content-length", 0))) or b"{}")
+                if not isinstance(body, dict):
+                    raise ValueError("the body must be a JSON object")
+                args = cli.parse((["--db", db] if db else []) + query_argv(body))
+            except (ValueError, SystemExit) as e:   # argparse exits on a value it refuses (an unknown ranker)
+                return self._reply(400, {"error": str(e) if isinstance(e, ValueError) else "bad argument"})
+            loaded.wait()
+            try:
+                con = cli._db(args)
+                try:
+                    scope = cli._scope(con, args)
+                    hits, notes = cli.ranked(con, args, scope)
+                    rows = cli.json_rows(hits)
+                finally:
+                    con.close()
+            except ValueError as e:   # a -w filter the map cannot read
+                return self._reply(400, {"error": str(e)})
+            except cli.QueryFailed as e:
+                return self._reply(422 if e.code == 2 else 503, {"error": e.message, "code": e.code})
+            except Exception as e:   # a failing question must not take the server down
+                return self._reply(500, {"error": f"{type(e).__name__}: {e}"})
+            for note in notes:
+                sys.stderr.write(note + "\n")
+            self.log_message("query: %d hits in %.0f ms", len(rows), (time.perf_counter() - t) * 1000)
+            self._reply(200, rows)
+
+    srv = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    srv.daemon_threads = False   # server_close waits for the questions in flight
+    path = http_state_file()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.unlink(missing_ok=True)
+    with os.fdopen(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w") as f:   # never readable by others
+        json.dump({"url": f"http://127.0.0.1:{srv.server_port}", "token": token, "pid": os.getpid()}, f)
+    os.replace(tmp, path)
+    print(f"serving HTTP on 127.0.0.1:{srv.server_port}, pid {os.getpid()}, until stopped", flush=True)
+    threading.Thread(target=warm, daemon=True).start()
+    # `inventio serve --stop`, `inventio update` (new weights) or a supervisor sends SIGTERM
+    if threading.current_thread() is threading.main_thread():   # signals reach the main thread only
+        signal.signal(signal.SIGTERM, lambda *_: threading.Thread(target=srv.shutdown, daemon=True).start())
+    try:
+        srv.serve_forever()
+    finally:
+        srv.server_close()
+        with contextlib.suppress(OSError, ValueError):
+            if json.loads(path.read_text()).get("pid") == os.getpid():
+                path.unlink()
+    return 0

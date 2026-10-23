@@ -80,10 +80,12 @@ def exists(q, label):
                          "false": "No passage addresses this"}, "label": label}
 
 
-def questions(q, pids, lids, with_line=True, with_passage_asks=False):
+def questions(q, pids, lids, with_line=True, with_passage_asks=False, with_exists=True):
     """The questions one request asks: the shape a served model is read with.
 
     The served shape is the choice heads (`where_passage`, `where_line`) and `exists` — three branches.
+    Every branch is its own row over the state, so `with_line=False, with_exists=False` leaves the
+    `where_passage` probabilities exactly as they were (rankers.SystemOneRanker `explain`).
     `with_passage_asks` adds one question per passage (`PASSAGE_ASKS[0]`), which is a *training* device
     (`records()`) and a study at evaluation time: measured on md2d it costs about 100 ms a state and
     reads the passage no better (0.620 against the choice head's 0.653, diff +0.033 [-0.007, +0.071]).
@@ -97,10 +99,11 @@ def questions(q, pids, lids, with_line=True, with_passage_asks=False):
              for p in pids} if with_passage_asks else {})
     qs = {**asks,
           "where_passage": {"type": "choice", "instructions": f'Which passage contains the answer to: "{q}"?',
-                            "criteria": {p: None for p in pids}},
-          "exists": {"type": "noul", "instructions": f'Does any passage answer: "{q}"?',
-                     "criteria": {"true": "At least one passage states or directly implies the answer",
-                                  "false": "No passage addresses this"}}}
+                            "criteria": {p: None for p in pids}}}
+    if with_exists:
+        qs["exists"] = {"type": "noul", "instructions": f'Does any passage answer: "{q}"?',
+                        "criteria": {"true": "At least one passage states or directly implies the answer",
+                                     "false": "No passage addresses this"}}
     if with_line and len(lids) <= MAX_OPTIONS:
         qs["where_line"] = where_line(q, lids)
     return qs

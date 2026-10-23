@@ -695,3 +695,53 @@ def test_a_pdf_is_searched_by_the_text_of_its_pages_and_a_scan_is_reported(tmp_p
     assert "Restore the nightly backup from the replica" in out.out
     code, out = run(capsys, "--db", db, "grep", "nightly")
     assert out.out.startswith("docs:handbook.pdf:")
+
+
+def test_serve_http_answers_what_query_json_prints_and_only_with_its_token(tmp_path, capsys, monkeypatch):
+    """`inventio serve --http`: POST /query gives the rows `query --json` prints for the same question; without
+    the token, or with a field it does not know, it answers nothing; SIGTERM removes its state file."""
+    import os
+    import subprocess
+    import sys
+    import time
+    import urllib.error
+    import urllib.request
+
+    from inventio.serve import http_state_file
+
+    monkeypatch.setenv("INVENTIO_RANKER", "none")   # no model in this test: the seam, not the ranking
+    db = str(tmp_path / "map.db")
+    write(tmp_path / "d", "runbook.md", "# Backup\nRestore the nightly backup from the replica.\n\n# Deploy\nShip on Tuesdays.\n")
+    write(tmp_path / "d", "faq.md", "# FAQ\nThe nightly backup runs at 02:00.\n")
+    assert run(capsys, "--db", db, "init", str(tmp_path / "d"), "--name", "d")[0] == 0
+    code, out = run(capsys, "--db", db, "query", " -nightly backup", "-w", "source:d", "--json", "-k", "3")
+    assert code == 0
+    want = json.loads(out.out)
+
+    proc = subprocess.Popen([sys.executable, "-m", "inventio.cli", "--db", db, "serve", "--http", "0"],
+                            env=os.environ.copy(), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    try:
+        deadline = time.time() + 60
+        while not http_state_file().exists():
+            assert proc.poll() is None and time.time() < deadline, proc.stderr.read().decode()
+            time.sleep(0.1)
+        state = json.loads(http_state_file().read_text())
+        assert oct(http_state_file().stat().st_mode & 0o777) == "0o600"
+
+        def post(body, token=state["token"]):
+            req = urllib.request.Request(state["url"] + "/query", json.dumps(body).encode(),
+                                         {"content-type": "application/json", "authorization": f"Bearer {token}"})
+            try:
+                with urllib.request.urlopen(req, timeout=30) as r:
+                    return r.status, json.loads(r.read())
+            except urllib.error.HTTPError as e:
+                return e.code, json.loads(e.read())
+
+        assert post({"text": "-nightly backup", "where": "source:d", "k": 3}) == (200, want)
+        assert post({"text": "nightly backup"}, token="wrong")[0] == 401
+        code, body = post({"text": "nightly backup", "kk": 3})
+        assert code == 400 and "kk" in body["error"]
+    finally:
+        proc.terminate()
+        proc.wait(timeout=30)
+    assert not http_state_file().exists()

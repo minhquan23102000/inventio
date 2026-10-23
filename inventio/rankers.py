@@ -121,10 +121,17 @@ class SystemOneRanker:
     """dispositio: the local System One model.
 
     One pass over the state (the question and the candidate passages) answers which passage holds the
-    answer, which line does, and whether the passages answer at all. `score` returns, for each hit, the
-    probability the model gave its own passage (`where_passage`) — the reading the gate measures; `last`
-    keeps the rest of that pass: the passage and line the model named, the `exists` head, which weights and
-    temperature answered, and how many candidates had to be left out of the state.
+    answer and, when `explain`, which line does and whether the passages answer at all. `score` returns, for
+    each hit, the probability the model gave its own passage (`where_passage`) — the reading the gate
+    measures; `last` keeps the rest of that pass: the passage and line the model named, the `exists` head
+    (both None unless `explain`), which weights and temperature answered, and how many candidates had to be
+    left out of the state.
+
+    `explain` (default: on only when `INVENTIO_DISPOSITIO_CAVEAT` is set, the one reader of those two
+    answers) asks `where_line` and `exists` too. Each question is its own row over the cached state, so
+    leaving them out changes no `where_passage` probability (measured: identical to 4 decimals on 5 wiki
+    queries) and saves the `where_line` row, one option per line of the state: on an M3 a 15-passage pass
+    went from 1.3-2.4 s of branches to 0.2-0.25 s.
 
     The checkpoint is loaded in this process (`systemone.Model`, Kev's serving path vendored): nothing to
     start, no port, and inventio's own background process is what keeps it warm between queries.
@@ -136,14 +143,14 @@ class SystemOneRanker:
     passes = True   # reads in passes of 15: search says how many leading hits are BM25's pool (search.search)
 
     def __init__(self, url: str | None = None, model: str = "jev-latest", timeout: float = 120,
-                 run: str | None = None):
+                 run: str | None = None, explain: bool | None = None):
         from urllib.parse import urlparse
 
         from .systemone import README
 
         self.url = (url or os.environ.get("INVENTIO_DISPOSITIO_URL") or "").rstrip("/")
         self.host = urlparse(self.url).hostname or ""
-        self.run = run
+        self.run, self.explain = run, explain
         self.model, self.timeout, self.readme, self.last = model, timeout, README, None
         self._info: dict | None = None   # which weights answered, read once: a query should not pay for it twice
 
@@ -229,7 +236,8 @@ class SystemOneRanker:
             if len(state) <= MAX_STATE_CHARS or len(kept) <= 2:
                 break
             kept, dropped = kept[:-1], dropped + 1
-        qs = questions(query, pids, lids)
+        explain = self.explain if self.explain is not None else bool(os.environ.get("INVENTIO_DISPOSITIO_CAVEAT"))
+        qs = questions(query, pids, lids, with_line=explain, with_exists=explain)
         if self.url:
             try:
                 res = ask(self.url, state, qs, self.model, self.timeout)
@@ -248,7 +256,8 @@ class SystemOneRanker:
             by_line = [round(sum(lp.get(l, 0.0) for l, o in zip(lids, owner) if o == i), 4) for i in range(len(kept))]
         self.last = {"passages": {p: round(float(about[p]), 4) for p in pids},
                      "order": sorted(pids, key=lambda p: -about[p]), "by_line": by_line, "line": line,
-                     "exists_head": float(a["exists"]["noul"]), "exists_max": round(max(about.values()), 4),
+                     "exists_head": float(a["exists"]["noul"]) if "exists" in a else None,
+                     "exists_max": round(max(about.values()), 4),
                      "kept": [f"{h.source}:{h.coord}" for h in kept], "dropped_passages": dropped, "heats": 1,
                      "served": info, "model": self.model, "latency_ms": res.get("latency_ms"),
                      "wall_ms": res.get("wall_ms")}
