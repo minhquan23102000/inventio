@@ -17,8 +17,8 @@ the ranker models are on [Hugging Face](https://huggingface.co/minhquan2310/disp
 - A ranked query asks dispositio only `where_passage`, the answer it ranks by: `where_line` and
   `exists` (read only by the `INVENTIO_DISPOSITIO_CAVEAT` note) are asked when that variable is set.
   Every question is its own row over the passages, so the ranking is unchanged (the same top 8 pages
-  on 16 FinX wiki questions); on an M3 a query with the hub's flags went from 13.0 s to 9.3 s at the
-  median (one pass ~6 s -> ~4 s).
+  on 16 questions over an internal wiki); on an M3 a default query with `-k 20` went from 13.0 s to
+  9.3 s at the median (one pass ~6 s -> ~4 s).
 
 ## 0.5.6 (2026-09-29)
 
