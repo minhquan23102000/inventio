@@ -26,16 +26,9 @@ class CloudRefused(RuntimeError):
 
 
 def default_ranker() -> str:
-    """INVENTIO_RANKER, else `dispositio` when this machine can read a checkpoint, else BM25 order.
-
-    The check is a distribution lookup, not an import: building the command line must not cost a torch
-    import.
-    """
-    if os.environ.get("INVENTIO_RANKER"):
-        return os.environ["INVENTIO_RANKER"]
-    from ._systemone import missing
-
-    return "dispositio" if missing() is None else "none"
+    """INVENTIO_RANKER, else BM25 order (`none`). dispositio is asked for by name: on a CPU it reads 15
+    candidates in about 15 s, against 35-140 ms for BM25 alone, so it is never paid for unasked."""
+    return os.environ.get("INVENTIO_RANKER") or "none"
 
 
 def ranker_tag(name: str) -> str:

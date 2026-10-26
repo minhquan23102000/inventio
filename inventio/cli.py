@@ -444,10 +444,10 @@ def ranked(con, args, scope) -> tuple[list, list[str]]:
         ranker = make_ranker(args.ranker)
         hits = searched(ranker, make_judge(args.judge) if args.facts else None)
     except Unreachable as e:
-        # The default is dispositio, and this machine cannot read one (no weights recorded,
-        # no published model cached, no runtime). Answering in BM25 order with one line is the floor the
-        # tool always had; an explicit `--ranker dispositio` gets the whole message and exit 3 instead,
-        # because there the promise was made by the caller.
+        # dispositio was asked for through INVENTIO_RANKER and this machine cannot read one (no weights
+        # recorded, no published model cached, no runtime). Answering in BM25 order with one line is the
+        # floor the tool always had; an explicit `--ranker dispositio` gets the whole message and exit 3
+        # instead, because there the promise was made on the command line.
         if args.ranker_explicit or args.facts:   # --facts asked for a model's judgment: never skip it quietly
             raise QueryFailed(3, str(e)) from e
         notes.append(f"inventio: {str(e).splitlines()[0]}; answering in BM25 order")
@@ -742,8 +742,8 @@ there. Every command prints source:path:start-end coordinates that read and show
 
     def ranking(s):
         s.add_argument("--ranker", choices=RANKERS, default=default_ranker(),
-                       help="reorder the pool: dispositio (local; the default when the dispositio extra is "
-                            "installed), none (BM25 order), typesafe (cloud, public sources only)")
+                       help="reorder the pool: none (BM25 order, the default; INVENTIO_RANKER changes it), "
+                            "dispositio (the local model; needs the dispositio extra), typesafe (cloud, public sources only)")
         s.add_argument("--pool", type=int, default=15, help="BM25 candidates handed to the ranker (dispositio reads 15 in one pass; "
                        "past 15, two heats and a final: better when answers sit at ranks 16-30, ~3x the time)")
         s.add_argument("--no-links", action="store_true",

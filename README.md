@@ -63,7 +63,7 @@ git clone https://github.com/minhquan23102000/inventio && cd inventio
 
 inventio init examples/webshop/app --name app --public     # --public: may be sent to a cloud judge
 inventio init examples/webshop/wiki --name wiki --public
-inventio query "the nightly backup has not finished, what do I do?" -k 3
+inventio query "the nightly backup has not finished, what do I do?" -k 3 --ranker dispositio
 ```
 
 ## Use it from your coding agent
@@ -82,11 +82,11 @@ instead of paraphrasing. Run `inventio skill` again after an upgrade to refresh 
 `uv tool install` puts `inventio` on your PATH for every terminal; `uvx --from "inventio[dispositio]"
 inventio ...` runs it once without installing. The unreleased `main` installs with
 `"inventio[dispositio] @ git+https://github.com/minhquan23102000/inventio"`.
-Without `[dispositio]` it installs in seconds and ranks by BM25 alone; `[dispositio]` adds PyTorch and
-the model that ranks, judges `--facts` and predicts `--types` (1.4 GB, downloaded once from Hugging
-Face on the first query). A GPU reads 15 candidates in about 0.16 s (RTX 5070 laptop); a CPU reads
-them too, in about 15 s (fp32, 4,200 tokens of state). `--pool 30` reads twice as many in three passes,
-about three times as long.
+Results come in BM25 order unless a ranker is asked for. `[dispositio]` adds PyTorch and the model that
+ranks (`--ranker dispositio`, or `INVENTIO_RANKER=dispositio` to make it the default), judges `--facts`
+and predicts `--types` (1.4 GB, downloaded once from Hugging Face on the first ranked query). A GPU
+reads 15 candidates in about 0.16 s (RTX 5070 laptop); a CPU reads them too, in about 15 s (fp32, 4,200
+tokens of state). `--pool 30` reads twice as many in three passes, about three times as long.
 
 ## Sources
 

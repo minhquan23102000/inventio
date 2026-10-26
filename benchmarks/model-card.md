@@ -44,7 +44,7 @@ reads `main` still loads what it can read. v4 lives on the tag `v4`.
 ```sh
 pip install "inventio[dispositio] @ git+https://github.com/minhquan23102000/inventio"
 inventio init ~/code/webshop --name app
-inventio query "the nightly backup has not finished, what do I do?"   # ranked by this model
+inventio query "the nightly backup has not finished, what do I do?" --ranker dispositio   # ranked by this model
 inventio facts --source app                                            # categories, judged by it
 ```
 

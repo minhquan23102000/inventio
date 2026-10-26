@@ -20,6 +20,12 @@ the ranker models are on [Hugging Face](https://huggingface.co/minhquan2310/disp
   with its own credential.
 
 ### Changed
+- BM25 order is the default ranker even when the dispositio extra is installed; `--ranker dispositio`
+  or `INVENTIO_RANKER=dispositio` asks for the model. On a CPU the model costs about 15 s a query
+  against 35-140 ms for BM25, and on 10 questions over an internal wiki with known answer pages it
+  found the same number of them in its top 8 as BM25 alone (9 of 10; median 14.2 s against 0.20 s on
+  an M3).
+
 - A mirrored item's web location (the manifest's `url` and `anchors`) is written into the map at sync
   (`file_web`), and `query`, `read` and `serve --http` read it from there. A server that runs for days
   used to keep the manifest it read first, so a page renamed or moved after that came back without a

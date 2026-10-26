@@ -3,7 +3,7 @@ name: inventio
 description: >-
   Finds where something is written across a team's code, Confluence pages, Jira tickets, GitHub
   issues and pull requests, and database, Kafka and S3 schemas, with the local `inventio` CLI
-  (BM25 plus a small reranker; nothing leaves the machine). Use when a question has to be
+  (BM25, with an optional local reranker; nothing leaves the machine). Use when a question has to be
   answered from internal docs, tickets or code ("why do we...", "where is X documented", "which
   ticket changed Y", "what table holds Z"), when a Confluence, Jira or GitHub URL needs reading,
   when every caller or every mention of a name must be found, or when inventio has to be
@@ -31,13 +31,14 @@ copies source text onto the machine.
 ## Install
 
 ```sh
-uv tool install "inventio[dispositio]"
+uv tool install inventio
 ```
 
-`[dispositio]` adds the local model that reranks, judges `--facts` and predicts `--types` (PyTorch;
-the weights, 1.4 GB, download once); without it results come in BM25 order. Schema cards need `[data]`
+Results come in BM25 order. `[dispositio]` (`uv tool install "inventio[dispositio]"`) adds the local
+model that reranks when asked (`--ranker dispositio`), judges `--facts` and predicts `--types`
+(PyTorch; the weights, 1.4 GB, download once; on a CPU about 15 s a query). Schema cards need `[data]`
 plus the database's driver in the same tool environment:
-`uv tool install "inventio[dispositio,data]" --with psycopg2-binary` (Postgres; `pymysql` for
+`uv tool install "inventio[data]" --with psycopg2-binary` (Postgres; `pymysql` for
 MySQL). PDF files are read by page (scans and password-protected PDFs are left
 out). A `pip install` into another environment is invisible to a `uv tool` install.
 
@@ -69,9 +70,9 @@ Sources are private unless `init` gets `--public`. Never add `--public`, `--rank
 
 ### Ask in the documents' language, first
 
-BM25 picks the 15 candidates the reranker reads, and BM25 matches words, not meaning: it does not
-cross languages. A Vietnamese question over English pages usually brings the right page but not
-the right section, and the reranker cannot choose a passage that never reached it. On a real map,
+BM25 matches words, not meaning: it does not cross languages. A Vietnamese question over English
+pages usually brings the right page but not the right section, and a reranker cannot choose a
+passage BM25 never put in its pool. On a real map,
 "Muốn thêm một bảng mới vào job đồng bộ thì làm thế nào?" missed the answer entirely, while "How do
 I add a new table to the sync job?" put the English page's "Adding a New Sync Job" section first.
 
@@ -99,12 +100,11 @@ saying what you counted as urgent.
 
 ### Steps
 
-1. `inventio query "<the question, in the documents' language>" -k 5`. Ask it as a question; the
-   reranker reads meaning, BM25 needs the words the documents use, so a second query with the
-   likely terms (a table name, a job name, a ticket key) often finds what the first missed.
-   If rephrasing still finds nothing that answers, ask once more with `--pool 30`: the reranker
-   reads BM25's best 15 by default, and some answers sit at ranks 16-30 (slower, about three
-   times the reading time).
+1. `inventio query "<the question, in the documents' language>" -k 5`. BM25 needs the words the
+   documents use, so a second query with the likely terms (a table name, a job name, a ticket key)
+   often finds what the first missed. If rephrasing still finds nothing that answers and the
+   dispositio extra is installed, ask once more with `--ranker dispositio`: it reads meaning over
+   BM25's best 15 (`--pool 30` reads 30, about three times as long).
 2. `inventio read <coordinate>` for the lines behind each promising hit; the snippet in the
    query output is cut.
 3. `inventio show <coordinate>` for where it leads: the code a runbook names, the ticket a page
@@ -118,8 +118,8 @@ saying what you counted as urgent.
 Answer with the coordinate or URL of each passage you rely on. `read` also takes a Confluence,
 Jira or GitHub URL someone pasted, from the mirror or fetched live.
 
-If the reranker cannot load (MemoryError, no PyTorch, no network for its first download), add
-`--ranker none`: the same pool in BM25 order, so read a few more hits before concluding.
+If `--ranker dispositio` cannot load (MemoryError, no PyTorch, no network for its first download),
+drop it: the same pool in BM25 order, so read a few more hits before concluding.
 
 A query may print that a newer dispositio is released. Tell the user; run `inventio update` only
 when they agree (it downloads the model again).

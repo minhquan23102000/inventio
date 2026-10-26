@@ -43,9 +43,9 @@ REQUIRES = ("torch>=2.6", "transformers>=5.17,<6", "peft>=0.21", "pydantic>=2.9"
 def missing() -> str | None:
     """What this environment still has to install to load a checkpoint, or None when it can.
 
-    Reads installed distributions, never imports them: `default_ranker()` asks this while the command line
-    is being built, and importing torch there would make every `inventio` command pay for a model runtime
-    it may not use. A package that answers here and then fails to import is caught at load time, where the
+    Reads installed distributions, never imports them: `model` and `update` ask this before anything loads,
+    and importing torch to answer would make them pay for a model runtime just to say it is missing.
+    A package that answers here and then fails to import is caught at load time, where the
     same message comes back.
     """
     import importlib.util
