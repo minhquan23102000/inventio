@@ -28,7 +28,7 @@ import urllib.parse
 import urllib.request
 
 from ..ingest import FENCE, HEADING, slug
-from .http import Client, RemoteError
+from .http import AccessLost, Client, RemoteError
 from .markdown import fence, tidy
 from .mirror import Doc, Entry
 
@@ -104,9 +104,9 @@ def reader(origin_url: str) -> str:
             found = tok
             break
     else:
-        if tried:
-            raise RemoteError(f"no GitHub CLI account on {host} can read {owner_repo} (tried {', '.join(tried)}): "
-                              f"gh auth login --hostname {host} with one that can")
+        if tried:   # every account signed in, none can see it: the repository is gone or its access was taken away
+            raise AccessLost(f"no GitHub CLI account on {host} can read {owner_repo} (tried {', '.join(tried)}): "
+                             f"gh auth login --hostname {host} with one that can")
     _readers[origin_url] = found or token(host)
     return _readers[origin_url]
 
@@ -205,8 +205,15 @@ class Remote:
 
     def listing(self) -> dict[str, Entry]:
         # the issues listing holds pull requests too, with their bodies: fetch then only adds the threads
-        self.items = {str(i["number"]): i for i in _pages(self.api, f"{self.repo}/issues",
-                                                          {"state": "all", "sort": "updated", "direction": "desc"})}
+        try:
+            self.items = {str(i["number"]): i for i in _pages(self.api, f"{self.repo}/issues",
+                                                              {"state": "all", "sort": "updated", "direction": "desc"})}
+        except RemoteError as e:
+            # GitHub answers 404 to a token that may not see a private repository; when that token still signs in,
+            # the repository is gone or out of its reach (a token that cannot ask /user, an app's, keeps the copy)
+            if str(e).startswith("404") and _signs_in(self.api):
+                raise AccessLost(f"{self.origin}: {e}; the token signs in but no longer sees the repository") from None
+            raise
         return {n: Entry(i["updated_at"], _path(i), i["html_url"]) for n, i in self.items.items()}
 
     def fetch(self, ids: list[str]):
@@ -214,6 +221,14 @@ class Remote:
         for n in ids:
             issue = self.items[n]
             yield n, item_doc(self.origin, issue, *_threads(self.api, self.repo, issue), known=known)
+
+
+def _signs_in(api: Client) -> bool:
+    try:
+        api.get("/user")
+        return True
+    except RemoteError:
+        return False
 
 
 def _path(issue: dict) -> str:

@@ -29,9 +29,10 @@ the ranker models are on [Hugging Face](https://huggingface.co/minhquan2310/disp
   against 35-140 ms for BM25, and on 10 questions over an internal wiki with known answer pages it
   found the same number of them in its top 8 as BM25 alone (9 of 10; median 14.2 s against 0.20 s on
   an M3).
-- A Confluence space that a working login can no longer see (deleted, or access taken away) is dropped
-  by `sync`: its files leave the map and its mirror leaves the disk; the source stays listed and comes
-  back whole on the first sync that sees it. It used to be reported and kept, readable on disk, for good.
+- A Confluence space or a GitHub repository that a working login can no longer see (deleted, or access
+  taken away) is dropped by `sync`: its files leave the map and its mirror leaves the disk; the source
+  stays listed and comes back whole on the first sync that sees it. They used to be reported and kept,
+  readable on disk, for good. (Jira already behaved so: a project a login cannot see lists no tickets.)
   A refused login or a network failure still keeps the copy. A connector from another package opts in by
   raising `AccessLost` from `listing()`.
 - A mirrored item's web location (the manifest's `url` and `anchors`) is written into the map at sync

@@ -445,6 +445,29 @@ def test_a_source_the_remote_no_longer_shows_is_dropped_and_a_failed_login_keeps
     assert state() == (1, None, True)
 
 
+def test_github_404_is_access_lost_only_while_the_token_still_signs_in():
+    """GitHub answers 404 to a token that may not see a private repository. If the same token still signs in,
+    the repository is gone or out of its reach and the copy must go; if it does not (expired, or an app's token
+    that cannot ask /user), it is a login problem and the copy stays."""
+    from inventio.connectors import github
+
+    class Api:
+        def __init__(self, user_ok):
+            self.user_ok = user_ok
+
+        def get(self, path, params=None):
+            if path == "/user" and self.user_ok:
+                return {"login": "reader"}
+            raise connectors.RemoteError(f"{404 if path != '/user' else 401} from https://api.github.com{path}")
+
+    for user_ok, raised in ((True, connectors.AccessLost), (False, connectors.RemoteError)):
+        remote = object.__new__(github.Remote)
+        remote.origin, remote.api, remote.repo, remote.items = "https://github.com/acme/shop", Api(user_ok), "/repos/acme/shop", {}
+        with pytest.raises(connectors.RemoteError) as e:
+            remote.listing()
+        assert type(e.value) is raised
+
+
 def test_a_connector_from_another_package_is_found_and_a_broken_one_does_not_stop_inventio(tmp_path, monkeypatch, capsys):
     """A package registers its connector under the `inventio.connectors` entry point; one whose
     module fails to import is reported and skipped, and none may take a built-in kind's name."""
