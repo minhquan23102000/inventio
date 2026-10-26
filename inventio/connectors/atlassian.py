@@ -10,7 +10,7 @@ import base64
 import os
 import urllib.parse
 
-from .http import Client, RemoteError
+from .http import AccessLost, Client, RemoteError
 
 
 def site(url: str) -> str | None:

@@ -18,9 +18,11 @@ CREATE TABLE IF NOT EXISTS sources (
     root TEXT NOT NULL,
     public INTEGER NOT NULL DEFAULT 0,
     excludes TEXT NOT NULL DEFAULT '',
-    indexed_at TEXT,
+    indexed_at TEXT,                   -- the last ingest that succeeded
     kind TEXT NOT NULL DEFAULT 'dir',  -- 'dir', or a connector (connectors.KINDS) whose mirror is the root
-    origin TEXT NOT NULL DEFAULT ''    -- what a connector syncs from: a space or query URL
+    origin TEXT NOT NULL DEFAULT '',   -- what a connector syncs from: a space or query URL
+    sync_error TEXT,                   -- why the last sync of this source failed; NULL after one succeeds
+    sync_error_at TEXT
 );
 CREATE TABLE IF NOT EXISTS files (
     id INTEGER PRIMARY KEY,
@@ -174,7 +176,8 @@ def connect(path: Path | None = None) -> sqlite3.Connection:
         if col not in have:
             con.execute(f"ALTER TABLE files ADD COLUMN {col} {kind}")
     have = {r["name"] for r in con.execute("PRAGMA table_info(sources)")}
-    for col, decl in (("kind", "TEXT NOT NULL DEFAULT 'dir'"), ("origin", "TEXT NOT NULL DEFAULT ''")):
+    for col, decl in (("kind", "TEXT NOT NULL DEFAULT 'dir'"), ("origin", "TEXT NOT NULL DEFAULT ''"),
+                      ("sync_error", "TEXT"), ("sync_error_at", "TEXT")):
         if col not in have:
             con.execute(f"ALTER TABLE sources ADD COLUMN {col} {decl}")
     return con

@@ -30,7 +30,8 @@ is the plugin interface (CONNECTOR_API below counts its changes):
     credential(origin)          where the credential comes from: "env", "keyring" or "missing"
 
   helpers a plugin may import, kept as stable as the list above: mirror.Doc and mirror.Entry;
-  http.Client (get, post, raw, retrying where the server asks) and RemoteError; markdown's
+  http.Client (get, post, raw, retrying where the server asks), RemoteError and AccessLost (raise it from
+  listing() only when a working login can no longer see the source at all); markdown's
   segment, safe, fence, table and tidy; ingest.slug (a heading's anchor key, for Doc.anchors);
   credentials.get, put, delete and Missing (the keychain, one JSON secret per key).
 """
@@ -40,7 +41,7 @@ from importlib.metadata import entry_points
 from pathlib import Path
 
 from . import confluence, github, jira, kafka, mirror, s3, sql
-from .http import RemoteError
+from .http import AccessLost, RemoteError
 
 CONNECTOR_API = 1  # raised when a name above changes meaning; a plugin may check it
 
@@ -106,6 +107,22 @@ def sync(con, name: str | None, kind: str, origin: str, public: bool, log=print)
     con.execute("UPDATE sources SET kind = ?, origin = ? WHERE name = ?", (kind, origin, name))
     write_meta(con, name, root)
     return {**stats, **counts}
+
+
+def purge(con, name: str) -> int:
+    """Drop what the map and the mirror hold of a source whose remote raised AccessLost; the source row
+    stays, so the next sync that sees it again fetches it whole. Returns the files dropped."""
+    import shutil
+
+    from ..store import drop_source
+
+    row = con.execute("SELECT id, root FROM sources WHERE name = ?", (name,)).fetchone()
+    if row is None:
+        return 0
+    n = con.execute("SELECT count(*) FROM files WHERE source_id = ?", (row["id"],)).fetchone()[0]
+    drop_source(con, row["id"])
+    shutil.rmtree(row["root"], ignore_errors=True)
+    return n
 
 
 def write_meta(con, name: str, root: Path) -> None:

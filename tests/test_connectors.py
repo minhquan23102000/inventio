@@ -3,6 +3,7 @@ the remote through edits, renames and deletions."""
 
 import json
 import sqlite3
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -402,6 +403,46 @@ def test_one_failing_source_does_not_stop_the_others_from_syncing(monkeypatch, t
     assert "notes: 404 Not Found" in err and "not synced: notes" in err
     kept = [t for (t,) in sqlite3.connect(db).execute("SELECT text FROM file_texts")]
     assert any("second" in t for t in kept)   # the directory after the failing source was still synced
+
+
+def test_a_source_the_remote_no_longer_shows_is_dropped_and_a_failed_login_keeps_it(monkeypatch, tmp_path, capsys):
+    """A refused login or a network failure keeps the copy; a remote that no longer shows the source at all
+    (space deleted, access taken away) has its copy dropped from the map and the disk. Each failure is kept on
+    the source for `sources --json`, cleared by the next sync that succeeds, which brings the source back."""
+    site = "https://wiki.test/space"
+    fake = SimpleNamespace(KIND="fake", Remote=FakeRemote, heading_url=lambda item, heads: item["url"],
+                           origin=lambda url, q=None: url if url == site else None, locate=lambda url: None)
+    monkeypatch.setitem(connectors.KINDS, "fake", fake)
+    FakeRemote.items = {"1": ("v1", "Policy.md", "# Policy\n\nKeep backups for 35 days.\n")}
+    db = str(tmp_path / "map.db")
+    assert cli.main(["--db", db, "init", site]) == 0
+    root = Path(sqlite3.connect(db).execute("SELECT root FROM sources").fetchone()[0])
+    listing = FakeRemote.listing
+
+    def state():
+        capsys.readouterr()
+        assert cli.main(["--db", db, "sources", "--json"]) == 0
+        (row,) = json.loads(capsys.readouterr().out)
+        return row["files"], row["sync_error"], (root / "Policy.md").exists()
+
+    def refuse(self):
+        raise connectors.RemoteError("https://wiki.test refused the Atlassian login (401 Unauthorized)")
+    monkeypatch.setattr(FakeRemote, "listing", refuse)
+    assert cli.main(["--db", db, "sync"]) == 2
+    assert state() == (1, "https://wiki.test refused the Atlassian login (401 Unauthorized)", True)
+
+    def gone(self):
+        raise connectors.AccessLost("no Confluence space 'OPS' on https://wiki.test (or no access)")
+    monkeypatch.setattr(FakeRemote, "listing", gone)
+    assert cli.main(["--db", db, "sync"]) == 2
+    assert state() == (0, "access lost, 1 files dropped: no Confluence space 'OPS' on https://wiki.test (or no access)",
+                       False)
+    assert cli.main(["--db", db, "query", "backups", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out) == []   # nothing of it left to find
+
+    monkeypatch.setattr(FakeRemote, "listing", listing)
+    assert cli.main(["--db", db, "sync"]) == 0
+    assert state() == (1, None, True)
 
 
 def test_a_connector_from_another_package_is_found_and_a_broken_one_does_not_stop_inventio(tmp_path, monkeypatch, capsys):

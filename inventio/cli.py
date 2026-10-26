@@ -111,8 +111,9 @@ def _report(stats: dict, links: dict, t: float, args) -> None:
 
 def cmd_sync(args) -> int:
     """Bring every source (or the named ones) up to date: directories re-read, remote sources
-    re-listed and only what changed fetched. A source that fails (a login, a network) is reported
-    and the others still sync; the exit code is then 2."""
+    re-listed and only what changed fetched. A source that fails (a login, a network) is reported, keeps
+    its copy, and the others still sync; one whose remote no longer shows it at all (AccessLost) has its
+    copy dropped. Either way the reason is kept on the source (`sources`), and the exit code is then 2."""
     from . import connectors
     from .ingest import ingest_source
     from .links import rebuild_links
@@ -136,10 +137,19 @@ def cmd_sync(args) -> int:
                 else:
                     stats = connectors.sync(con, r["name"], r["kind"], r["origin"], bool(r["public"]))
                 links = rebuild_links(con)
-        except connectors.RemoteError as e:
-            print(f"{r['name']}: {e}", file=sys.stderr)
+        except connectors.AccessLost as e:
+            with con:
+                dropped = connectors.purge(con, r["name"])
+                rebuild_links(con)
+            _sync_failed(con, r["name"], f"access lost, {dropped} files dropped: {e}")
             failed.append(r["name"])
             continue
+        except connectors.RemoteError as e:
+            _sync_failed(con, r["name"], str(e))
+            failed.append(r["name"])
+            continue
+        with con:
+            con.execute("UPDATE sources SET sync_error = NULL, sync_error_at = NULL WHERE name = ?", (r["name"],))
         _report(stats, links, t, args)
     if failed:
         print(f"not synced: {', '.join(failed)}", file=sys.stderr)
@@ -148,6 +158,22 @@ def cmd_sync(args) -> int:
         code = cmd_facts(args)
         return 2 if failed else code
     return 2 if failed else 0
+
+
+def _sync_failed(con, name: str, why: str) -> None:
+    print(f"{name}: {why}", file=sys.stderr)
+    with con:
+        con.execute("UPDATE sources SET sync_error = ?, sync_error_at = datetime('now') WHERE name = ?", (why, name))
+
+
+def source_rows(con) -> list[dict]:
+    """Each source with its size and how its last sync went: the rows `sources --json` and `serve --http`'s
+    GET /sources print. indexed_at is the last ingest that succeeded; sync_error says why the last sync did not."""
+    return [dict(r) for r in con.execute(
+        "SELECT s.name, s.kind, s.origin, s.public, s.indexed_at, s.sync_error, s.sync_error_at, "
+        "(SELECT count(*) FROM files f WHERE f.source_id = s.id) files, "
+        "(SELECT count(*) FROM chunks c JOIN files f ON f.id = c.file_id WHERE f.source_id = s.id) chunks "
+        "FROM sources s ORDER BY s.name")]
 
 
 def cmd_read(args) -> int:
@@ -308,16 +334,20 @@ def cmd_sources(args) -> int:
     from .credentials import status
 
     con = _db(args)
-    rows = con.execute(
-        "SELECT s.name, s.root, s.kind, s.origin, s.public, s.indexed_at, count(DISTINCT f.id) files, count(c.id) chunks "
-        "FROM sources s LEFT JOIN files f ON f.source_id = s.id LEFT JOIN chunks c ON c.file_id = f.id "
-        "GROUP BY s.id ORDER BY s.name"
-    ).fetchall()
+    rows = source_rows(con)
     for r in rows:
-        where = r["root"] if r["kind"] == "dir" else f"{r['kind']} {r['origin']}"
-        auth = status(r["kind"], r["origin"])
+        r["public"] = bool(r["public"])
+        r["auth"] = status(r["kind"], r["origin"])
+    if args.json:
+        print(json.dumps(rows, ensure_ascii=False, indent=1))
+        return 0
+    roots = dict(con.execute("SELECT name, root FROM sources").fetchall())
+    for r in rows:
+        where = roots[r["name"]] if r["kind"] == "dir" else f"{r['kind']} {r['origin']}"
         print(f"{r['name']:<16} {'public ' if r['public'] else 'private'} {r['files']:>5} files {r['chunks']:>6} chunks  "
-              f"auth {auth:<7}  {where}  ({r['indexed_at']})")
+              f"auth {r['auth']:<7}  {where}  ({r['indexed_at']})")
+        if r["sync_error"]:
+            print(f"{'':<16} last sync failed {r['sync_error_at']}: {r['sync_error']}")
     if not rows:
         print("no sources; run `inventio init <path>`")
     return 0
@@ -718,7 +748,9 @@ there. Every command prints source:path:start-end coordinates that read and show
                    help="look for neighbours of every categorized chunk, not only new ones (judged pairs are reused)")
     s.set_defaults(fn=cmd_facts)
 
-    s = sub.add_parser("sources", help="list indexed sources, with where each one's login comes from")
+    s = sub.add_parser("sources", help="list indexed sources: size, where each one's login comes from, and why "
+                                       "its last sync failed")
+    s.add_argument("--json", action="store_true", help="one object per source")
     s.set_defaults(fn=cmd_sources)
 
     s = sub.add_parser("drop", help="remove a source from the map")

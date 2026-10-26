@@ -362,14 +362,24 @@ def serve_http(port: int, maps: dict[str, str | None]) -> int:
             return False
 
         def do_GET(self):
-            if self.path != "/health":
-                return self._reply(404, {"error": "GET /health or POST /query"})
-            if self._authorized():
-                self._reply(200, {"ok": True, "pid": os.getpid(), "maps": sorted(maps), **status})
+            if self.path not in ("/health", "/sources"):
+                return self._reply(404, {"error": "GET /health, GET /sources or POST /query"})
+            if not self._authorized():
+                return
+            if self.path == "/health":
+                return self._reply(200, {"ok": True, "pid": os.getpid(), "maps": sorted(maps), **status})
+            out = {}
+            for name, db in maps.items():   # each map's sources as `sources --json` lists them, without logins
+                con = cli.connect(Path(db) if db else None)
+                try:
+                    out[name] = cli.source_rows(con)
+                finally:
+                    con.close()
+            self._reply(200, {"maps": out})
 
         def do_POST(self):
             if self.path != "/query":
-                return self._reply(404, {"error": "GET /health or POST /query"})
+                return self._reply(404, {"error": "GET /health, GET /sources or POST /query"})
             if not self._authorized():
                 return
             t = time.perf_counter()

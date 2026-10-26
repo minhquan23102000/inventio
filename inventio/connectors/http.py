@@ -15,6 +15,13 @@ class RemoteError(RuntimeError):
     """A remote source refused or failed; the message is meant for the person at the terminal."""
 
 
+class AccessLost(RemoteError):
+    """The login works, but the source as a whole is no longer among what it may see: deleted, or access
+    taken away. `sync` drops what the map and the mirror hold of it, so nothing the source no longer shows
+    stays readable on disk; the source stays listed and comes back whole on the first sync that sees it.
+    Never raised for a refused login or a network failure: those keep the copy."""
+
+
 class Client:
     def __init__(self, base: str, headers: dict[str, str]):
         self.base = base.rstrip("/")

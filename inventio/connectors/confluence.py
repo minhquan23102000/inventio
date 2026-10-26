@@ -92,8 +92,8 @@ class Remote:
 
     def listing(self) -> dict[str, Entry]:
         spaces = self.api.get("/wiki/api/v2/spaces", {"keys": self.key})["results"]
-        if not spaces:
-            raise atlassian.RemoteError(f"no Confluence space {self.key!r} on {self.site} (or no access)")
+        if not spaces:   # client() has already proved the login, so an empty answer is the space itself gone
+            raise atlassian.AccessLost(f"no Confluence space {self.key!r} on {self.site} (or no access)")
         pages = list(self._paged(f"/wiki/api/v2/spaces/{spaces[0]['id']}/pages", {"limit": 250, "status": "current"}))
         self.paths = tree_paths(pages)
         self.by_title = {p["title"]: p["id"] for p in pages}
