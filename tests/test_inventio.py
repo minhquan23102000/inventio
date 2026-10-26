@@ -745,3 +745,57 @@ def test_serve_http_answers_what_query_json_prints_and_only_with_its_token(tmp_p
         proc.terminate()
         proc.wait(timeout=30)
     assert not http_state_file().exists()
+
+
+def test_serve_http_answers_from_the_map_a_request_names_and_can_leave_the_text_out(tmp_path, capsys, monkeypatch):
+    """`serve --http --map a=… --map b=…`: a request names its map and gets that map's hits; naming none, or one
+    the server was not started with, is refused (a request names a map, never a file); `locations_only` returns
+    where each hit is without its text or links."""
+    import os
+    import subprocess
+    import sys
+    import time
+    import urllib.error
+    import urllib.request
+
+    from inventio.serve import http_state_file
+
+    monkeypatch.setenv("INVENTIO_RANKER", "none")
+    maps = {}
+    for name, text in (("a", "# Backup\nRestore the nightly backup from the replica.\n"),
+                       ("b", "# Payroll\nThe nightly backup of payroll runs at 02:00.\n")):
+        maps[name] = str(tmp_path / f"{name}.db")
+        write(tmp_path / name, "doc.md", text)
+        assert run(capsys, "--db", maps[name], "init", str(tmp_path / name), "--name", name)[0] == 0
+    assert run(capsys, "serve", "--http", "0", "--map", f"a={tmp_path / 'missing.db'}")[0] == 2
+
+    proc = subprocess.Popen([sys.executable, "-m", "inventio.cli", "serve", "--http", "0",
+                             "--map", f"a={maps['a']}", "--map", f"b={maps['b']}"],
+                            env=os.environ.copy(), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    try:
+        deadline = time.time() + 60
+        while not http_state_file().exists():
+            assert proc.poll() is None and time.time() < deadline, proc.stderr.read().decode()
+            time.sleep(0.1)
+        state = json.loads(http_state_file().read_text())
+
+        def post(body):
+            req = urllib.request.Request(state["url"] + "/query", json.dumps(body).encode(),
+                                         {"content-type": "application/json", "authorization": f"Bearer {state['token']}"})
+            try:
+                with urllib.request.urlopen(req, timeout=30) as r:
+                    return r.status, json.loads(r.read())
+            except urllib.error.HTTPError as e:
+                return e.code, json.loads(e.read())
+
+        code, rows = post({"text": "nightly backup", "map": "b", "k": 3})
+        assert code == 200 and {r["source"] for r in rows} == {"b"} and "payroll" in rows[0]["text"]
+        code, rows = post({"text": "nightly backup", "map": "a", "k": 3, "locations_only": True})
+        assert code == 200 and rows and {r["source"] for r in rows} == {"a"}
+        assert all("text" not in r and "links" not in r and r["path"] == "doc.md" for r in rows)
+        assert post({"text": "nightly backup"})[0] == 400
+        assert post({"text": "nightly backup", "map": str(tmp_path / "a.db")})[0] == 400
+        assert post({"text": "nightly backup", "map": ["a"]})[0] == 400
+    finally:
+        proc.terminate()
+        proc.wait(timeout=30)

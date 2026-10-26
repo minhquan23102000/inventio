@@ -474,11 +474,16 @@ def ranked(con, args, scope) -> tuple[list, list[str]]:
     return hits, notes
 
 
-def json_rows(hits) -> list[dict]:
-    """What `query --json` prints for these hits."""
+def json_rows(con, hits, locations_only: bool = False) -> list[dict]:
+    """What `query --json` prints for these hits. `locations_only`: where each hit is (source, path, url,
+    heading, lines, rank) without its text or its links, for a caller that reads the content itself."""
     from .connectors import web_url
 
-    return [{**h.as_dict(), "url": web_url(h.root, h.path, h.heading_path)} for h in hits]
+    rows = [{**h.as_dict(), "url": web_url(con, h.source, h.root, h.path, h.heading_path)} for h in hits]
+    if locations_only:
+        for r in rows:
+            del r["text"], r["links"]
+    return rows
 
 
 def cmd_query(args) -> int:
@@ -503,7 +508,7 @@ def cmd_query(args) -> int:
     for note in notes:
         print(note, file=sys.stderr)
     if args.json:
-        print(json.dumps(json_rows(hits), ensure_ascii=False, indent=2))
+        print(json.dumps(json_rows(con, hits, args.locations_only), ensure_ascii=False, indent=2))
         return 0
     if not hits:
         from .scope import count
@@ -522,7 +527,7 @@ def cmd_query(args) -> int:
             entered = f"  [via {h.via}]" if h.via else ""
             print(f"{i}. {h.source}:{h.coord}  {h.heading_path}{score}{entered}")
             print(f"   {_snippet(h.text)}")
-            url = web_url(h.root, h.path, h.heading_path)
+            url = web_url(con, h.source, h.root, h.path, h.heading_path)
             if url:
                 print(f"   {url}")
             for l in h.links[:3]:   # what the target is · what makes the link · where (search.name_link)
@@ -591,7 +596,15 @@ def cmd_serve(args) -> int:
         print("stopped" if serve.stop() else "no server running")
         return 0
     if args.http is not None:
-        return serve.serve_http(args.http, args.db)
+        try:
+            maps = serve.parse_maps(args.map, args.db)
+        except ValueError as e:
+            print(str(e), file=sys.stderr)
+            return 2
+        return serve.serve_http(args.http, maps)
+    if args.map:
+        print("--map needs --http", file=sys.stderr)
+        return 2
     return serve.serve(args.idle)
 
 
@@ -756,6 +769,8 @@ there. Every command prints source:path:start-end coordinates that read and show
     s.add_argument("-k", type=int, default=5, help="results to print")
     s.add_argument("--source", action="append", metavar="NAME", help="only search this source (repeatable)")
     s.add_argument("--json", action="store_true")
+    s.add_argument("--locations-only", action="store_true",
+                   help="with --json: each hit's place (source, path, url, heading, lines) without its text")
     ranking(s)
     s.add_argument("--here", action="store_true", help=argparse.SUPPRESS)  # set by the server; never forward
     s.set_defaults(fn=cmd_query)
@@ -775,6 +790,9 @@ there. Every command prints source:path:start-end coordinates that read and show
     s.add_argument("--http", type=int, metavar="PORT",
                    help="instead: answer POST /query with what `query --json` prints, on 127.0.0.1:PORT (0: any "
                         "free port), until stopped; the URL and the token go to serve-http.json in the data directory")
+    s.add_argument("--map", action="append", metavar="NAME=PATH",
+                   help="with --http: a map the server answers from, named by a request's `map` (repeatable); "
+                        "without it, the one map --db names")
     s.set_defaults(fn=cmd_serve)
 
     s = sub.add_parser("update", help="fetch the latest released dispositio (queries say when there is one)")

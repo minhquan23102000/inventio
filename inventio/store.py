@@ -60,6 +60,14 @@ CREATE TABLE IF NOT EXISTS file_meta (
 );
 CREATE INDEX IF NOT EXISTS file_meta_key ON file_meta(key, value, file_id);
 CREATE INDEX IF NOT EXISTS file_meta_file ON file_meta(file_id);
+-- where a mirrored file lives on the web: the manifest item's `url` and `anchors` (kind = its connector), written
+-- at sync. A query reads it from the map, so a server that answers questions needs no mirror on its disk and
+-- sees a page renamed or added since it started.
+CREATE TABLE IF NOT EXISTS file_web (
+    file_id INTEGER PRIMARY KEY REFERENCES files(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL,
+    item TEXT NOT NULL
+);
 CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
     head, body, tokenize = 'unicode61 remove_diacritics 2'
 );

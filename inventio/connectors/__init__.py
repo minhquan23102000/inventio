@@ -35,6 +35,7 @@ is the plugin interface (CONNECTOR_API below counts its changes):
   credentials.get, put, delete and Missing (the keychain, one JSON secret per key).
 """
 
+import json
 from importlib.metadata import entry_points
 from pathlib import Path
 
@@ -108,25 +109,40 @@ def sync(con, name: str | None, kind: str, origin: str, public: bool, log=print)
 
 
 def write_meta(con, name: str, root: Path) -> None:
-    """The mirror's per-item fields as file_meta rows, replacing the source's old ones."""
+    """The mirror's per-item fields as file_meta rows, and each item's web location as a file_web row,
+    replacing the source's old ones."""
     files = {r["path"]: r["id"] for r in con.execute(
         "SELECT f.id, f.path FROM files f JOIN sources s ON s.id = f.source_id WHERE s.name = ?", (name,))}
-    con.execute("DELETE FROM file_meta WHERE file_id IN (SELECT f.id FROM files f JOIN sources s "
-                "ON s.id = f.source_id WHERE s.name = ?)", (name,))
-    rows = []
-    for item in mirror.load(root)["items"].values():
+    for table in ("file_meta", "file_web"):
+        con.execute(f"DELETE FROM {table} WHERE file_id IN (SELECT f.id FROM files f JOIN sources s "
+                    "ON s.id = f.source_id WHERE s.name = ?)", (name,))
+    manifest = mirror.load(root)
+    rows, web = [], []
+    for item in manifest["items"].values():
         fid = files.get(item["path"])
-        for key, value in (item.get("meta") or {}).items() if fid else ():
+        if not fid:
+            continue
+        for key, value in (item.get("meta") or {}).items():
             rows += [(fid, key, v) for v in ([value] if isinstance(value, str) else value) if v]
+        web.append((fid, manifest["kind"], json.dumps({k: v for k, v in item.items() if k != "meta"})))
     con.executemany("INSERT INTO file_meta (file_id, key, value) VALUES (?, ?, ?)", rows)
+    con.executemany("INSERT INTO file_web (file_id, kind, item) VALUES (?, ?, ?)", web)
 
 
-def web_url(root: str, path: str, heading_path: str) -> str | None:
-    """Where a chunk of a mirrored file lives on the web; None for a file of a directory source."""
-    hit = mirror.item_at(root, path)
-    if hit is None:
+def web_url(con, source: str, root: str, path: str, heading_path: str) -> str | None:
+    """Where a chunk of a mirrored file lives on the web; None for a file of a directory source. Read from
+    the map; a map synced by an earlier version has no file_web rows yet and falls back to the mirror."""
+    row = con.execute("SELECT w.kind, w.item FROM file_web w JOIN files f ON f.id = w.file_id "
+                      "JOIN sources s ON s.id = f.source_id WHERE s.name = ? AND f.path = ?", (source, path)).fetchone()
+    if row:
+        kind, item = row["kind"], json.loads(row["item"])
+    else:
+        hit = mirror.item_at(root, path)
+        if hit is None:
+            return None
+        kind, item = hit
+    if kind not in KINDS:   # a connector plugin uninstalled since the sync
         return None
-    kind, item = hit
     return KINDS[kind].heading_url(item, [h for h in heading_path.split(" > ") if h])
 
 

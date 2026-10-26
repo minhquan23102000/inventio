@@ -53,7 +53,7 @@ def _from_coord(con, target: str) -> Passage:
         "SELECT c.heading_path FROM chunks c JOIN files f ON f.id = c.file_id JOIN sources s ON s.id = f.source_id "
         "WHERE s.name = ? AND f.path = ? AND c.start_line <= ? ORDER BY c.start_line DESC LIMIT 1",
         (m["source"], m["path"], start)).fetchone()
-    url = connectors.web_url(row["root"], m["path"], head["heading_path"] if head else "")
+    url = connectors.web_url(con, m["source"], row["root"], m["path"], head["heading_path"] if head else "")
     return Passage(m["source"], m["path"], start, end, text[start - 1:end], url)
 
 

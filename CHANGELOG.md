@@ -12,8 +12,19 @@ the ranker models are on [Hugging Face](https://huggingface.co/minhquan2310/disp
   harness). The URL and a bearer token are written to `serve-http.json` in the data directory (owner
   only); `GET /health` says whether the model is loaded. The map is opened per request, so a `sync` is
   seen by the next question. `serve --stop` and `update` stop it too.
+- `serve --http --map NAME=PATH` (repeatable): one server answers from several maps; a request names
+  its map with `"map"`, and naming none is refused when there are several. The paths are fixed when the
+  server starts, so a caller chooses a map, never a file. `GET /health` lists the names.
+- `query --json --locations-only` (`"locations_only": true` over HTTP): each hit's place (source, path,
+  url, heading, lines, rank) without its text or links, for a caller that reads the content itself
+  with its own credential.
 
 ### Changed
+- A mirrored item's web location (the manifest's `url` and `anchors`) is written into the map at sync
+  (`file_web`), and `query`, `read` and `serve --http` read it from there. A server that runs for days
+  used to keep the manifest it read first, so a page renamed or moved after that came back without a
+  URL; and a server on another disk than the mirror (a container beside the one that syncs) answered
+  with no URL at all. A map synced by an earlier version reads the manifest until its next `sync`.
 - A ranked query asks dispositio only `where_passage`, the answer it ranks by: `where_line` and
   `exists` (read only by the `INVENTIO_DISPOSITIO_CAVEAT` note) are asked when that variable is set.
   Every question is its own row over the passages, so the ranking is unchanged (the same top 8 pages

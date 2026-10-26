@@ -117,6 +117,32 @@ def test_mirror_follows_edits_renames_and_deletions(monkeypatch, tmp_path, capsy
     assert capsys.readouterr().out.split("\n")[1] == "3  Rerun nightly_backup from the replica."
 
 
+def test_url_comes_from_the_map_through_renames_and_without_the_mirror(monkeypatch, tmp_path, capsys):
+    """A long-running server opens the map per question: a page renamed after its first question keeps its URL,
+    and a server whose disk has no mirror (another container) still answers with URLs."""
+    import shutil
+
+    site = "https://wiki.test/space"
+    fake = SimpleNamespace(KIND="fake", Remote=FakeRemote, heading_url=lambda item, heads: item["url"],
+                           origin=lambda url, q=None: url if url == site else None, locate=lambda url: None)
+    monkeypatch.setitem(connectors.KINDS, "fake", fake)
+    db = tmp_path / "map.db"
+    FakeRemote.items = {"1": ("v1", "Ops/Runbook.md", "# Runbook\n\nRerun nightly_backup from the replica.\n")}
+    assert cli.main(["--db", str(db), "init", site]) == 0
+
+    def url_of_top_hit():
+        capsys.readouterr()
+        assert cli.main(["--db", str(db), "query", "nightly_backup replica", "--json", "-k", "1"]) == 0
+        return json.loads(capsys.readouterr().out)[0]["url"]
+
+    assert url_of_top_hit() == "https://wiki/1"
+    FakeRemote.items["1"] = ("v1", "Ops/Runbook-2026.md", FakeRemote.items["1"][2])
+    assert cli.main(["--db", str(db), "sync"]) == 0
+    assert url_of_top_hit() == "https://wiki/1"   # same process, renamed file
+    shutil.rmtree(connectors.mirror.mirror_dir("notes"))
+    assert url_of_top_hit() == "https://wiki/1"   # no mirror on this disk
+
+
 def test_url_links_reach_the_mirrored_item_they_name(monkeypatch, tmp_path, capsys):
     """A ticket that links a page by absolute URL, and a page that links the ticket back: each
     becomes a `citation` link to the mirrored item, whatever form the URL takes (host case, a

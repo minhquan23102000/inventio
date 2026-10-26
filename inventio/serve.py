@@ -262,7 +262,8 @@ def http_state_file() -> Path:
 
 
 QUERY_FIELDS = {"text": str, "where": str, "source": list, "k": int, "pool": int, "ranker": str,
-                "no_links": bool, "no_symbols": bool, "neighbours": bool, "types": bool, "facts": bool}
+                "no_links": bool, "no_symbols": bool, "neighbours": bool, "types": bool, "facts": bool,
+                "locations_only": bool, "map": str}
 
 
 def query_argv(body: dict) -> list[str]:
@@ -290,14 +291,35 @@ def query_argv(body: dict) -> list[str]:
     for key, flag in (("k", "-k"), ("pool", "--pool"), ("ranker", "--ranker")):
         if key in body:
             argv += [flag, str(body[key])]
-    for key in ("no_links", "no_symbols", "neighbours", "types", "facts"):
+    for key in ("no_links", "no_symbols", "neighbours", "types", "facts", "locations_only"):
         if body.get(key):
             argv.append("--" + key.replace("_", "-"))
     return argv
 
 
-def serve_http(port: int, db: str | None = None) -> int:
-    """`db`: the map `inventio --db` named when the server started; every question reads that one."""
+def parse_maps(specs: list[str] | None, db: str | None) -> dict[str, str | None]:
+    """`--map NAME=PATH` values as {name: path}; without any, the one map `--db` names (None: the default map)
+    under the name `default`. The paths are fixed here, at start: a request names a map, never a file."""
+    if not specs:
+        return {"default": db}
+    if db:
+        raise ValueError("--db and --map name maps two ways; give the default map as --map default=PATH")
+    maps: dict[str, str | None] = {}
+    for spec in specs:
+        name, sep, path = spec.partition("=")
+        if not sep or not name or not path:
+            raise ValueError(f"--map {spec!r}: expected NAME=PATH")
+        if name in maps:
+            raise ValueError(f"--map {name!r} given twice")
+        if not Path(path).is_file():
+            raise ValueError(f"--map {name}: no map at {path}")
+        maps[name] = path
+    return maps
+
+
+def serve_http(port: int, maps: dict[str, str | None]) -> int:
+    """`maps`: the maps a request may name by `map` ({name: path}, from parse_maps). A request that names none is
+    answered from the only one, and refused when there are several; the map is opened per request."""
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
     from . import cli, rankers
@@ -343,7 +365,7 @@ def serve_http(port: int, db: str | None = None) -> int:
             if self.path != "/health":
                 return self._reply(404, {"error": "GET /health or POST /query"})
             if self._authorized():
-                self._reply(200, {"ok": True, "pid": os.getpid(), **status})
+                self._reply(200, {"ok": True, "pid": os.getpid(), "maps": sorted(maps), **status})
 
         def do_POST(self):
             if self.path != "/query":
@@ -355,7 +377,15 @@ def serve_http(port: int, db: str | None = None) -> int:
                 body = json.loads(self.rfile.read(int(self.headers.get("content-length", 0))) or b"{}")
                 if not isinstance(body, dict):
                     raise ValueError("the body must be a JSON object")
-                args = cli.parse((["--db", db] if db else []) + query_argv(body))
+                argv = query_argv(body)   # checks every field's type, `map` included
+                name = body.get("map")
+                if name is None and len(maps) == 1:
+                    name = next(iter(maps))
+                if name not in maps:
+                    known = ", ".join(sorted(maps))
+                    raise ValueError(f"map must be one of {known}" if name is not None
+                                     else f"name a map: this server answers from {known}")
+                args = cli.parse((["--db", maps[name]] if maps[name] else []) + argv)
             except (ValueError, SystemExit) as e:   # argparse exits on a value it refuses (an unknown ranker)
                 return self._reply(400, {"error": str(e) if isinstance(e, ValueError) else "bad argument"})
             loaded.wait()
@@ -364,7 +394,7 @@ def serve_http(port: int, db: str | None = None) -> int:
                 try:
                     scope = cli._scope(con, args)
                     hits, notes = cli.ranked(con, args, scope)
-                    rows = cli.json_rows(hits)
+                    rows = cli.json_rows(con, hits, args.locations_only)
                 finally:
                     con.close()
             except ValueError as e:   # a -w filter the map cannot read
