@@ -150,18 +150,32 @@ hold is an error that lists the keys it does; a scope with nothing in it says so
 match". `--source NAME` is `-w source:NAME`.
 
 **Access labels.** The owner of a directory source can restrict single files by writing
-`.inventio-meta.json` at its root (never indexed itself), a map from a path or glob (`*` also crosses
-`/`) to its labels; the last entry matching a file wins:
+`.inventio-meta.json` at its root (never indexed itself, nor any `.inventio-meta*` file), a map from a
+path, a folder or a glob to its labels:
 
 ```json
 {"hop-dong/HD-2026-047-*.md": {"acl": ["dept:tham-dinh", "user:an@finx.vn"]}}
 ```
 
+Keys are compared in NFC, without case, ignoring a leading `./` or `/`, spaces around, and `\` as `/`.
+`*` also crosses `/`, `?` is one character, `[` is literal, `**/` may match no folder (`**/*.md` takes
+top-level files too), and a key ending in `/`, or naming a folder, stands for everything under it. The most
+specific key wins whatever its place in the file (an exact path, then the longest literal prefix before a
+wildcard; only a tie goes to the later entry); `init` prints how many files each key matched and which
+files took a more specific key's label. Values are `dept:<id>` or `user:<email>` (`[a-z0-9._@+-]`, lower-cased).
+
 `init`/`sync` write them as the `acl` field, replacing the old ones on every run (a label removed from
-the manifest is gone at the next run, though no file changed). A bad manifest, or an empty `acl`, stops
-the ingest. `-w visible:dept:tham-dinh,user:bo@finx.vn` keeps the files with no label and those labelled
+the manifest is gone at the next run, though no file changed). Anything that could leave a restricted file
+open stops the ingest, keeps the previous copy and labels, and is shown as the source's `sync_error`:
+a manifest that cannot be read, repeats a key, or holds an empty or malformed `acl`; a key that matches no
+file; a `.inventio-meta*` file below the root; **no manifest at all when the source had labels** (deleted or
+skipped by a copy; write `{}` to say every file is open), or with `init --require-labels`, always.
+Symbolic links are not indexed.
+`-w visible:dept:tham-dinh,user:bo@finx.vn` keeps the files with no label and those labelled
 with one of the ids (compared exactly, without case); `visible:-` keeps only the unlabelled. It narrows
-every way into the pool, so a restricted file is neither ranked nor cut into the 15. A caller that
-enforces access passes the asker's ids with every question. `POST /read` takes `"visible": [ids]` and
-answers a file the ids do not match with the 404 of a file that is not there; its answer carries the
-file's `acl`.
+every way into the pool, so a restricted file is neither ranked nor cut into the 15, and the links a hit
+names (unless `--no-links`) lead only inside the scope. Each `query --json` row carries its file's `acl`.
+A caller that enforces access passes the asker's ids with every question, and starts the server with
+`serve --http --require-visible`, which refuses (400) a `/query` without a positive `visible:` term and a
+`/read` without `visible`. `POST /read` takes `"visible": [ids]` and answers a file the ids do not match
+with the 404 of a file that is not there; its answer carries the file's `acl`.

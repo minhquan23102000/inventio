@@ -6,6 +6,14 @@ the ranker models are on [Hugging Face](https://huggingface.co/minhquan2310/disp
 ## Unreleased
 
 ### Added
+- Access-label hardening: no manifest is refused when the source had labels (`{}` opens every file),
+  and `init --require-labels` refuses a folder without one; keys are compared in NFC, case-folded, with
+  `./`, `/`, `\\`, trailing `/` and bare folder names understood, `**/` matching the top level, and a key
+  matching no file refused; the most specific key wins, `init` reports per-key match counts and overrides;
+  `acl` values must be `dept:<id>` / `user:<email>`; duplicate keys, a manifest below the root and symlinks
+  are refused or skipped; `.inventio-meta*` files are never indexed; a failed `init` is recorded as the
+  source's `sync_error`; `query --json` rows carry `acl`; links a hit names stay inside the scope and are
+  skipped under `--no-links`; `serve --http --require-visible`; a mirror connector's `acl` field is ignored.
 - Per-file access labels: `.inventio-meta.json` at a directory source's root maps a path or glob to
   `{"acl": ["dept:...", "user:..."]}`; ingest writes them as the `acl` field (replaced on every run), and
   the manifest is not indexed. `-w visible:ID,ID` keeps unlabelled files and those labelled with one of

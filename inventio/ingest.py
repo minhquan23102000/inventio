@@ -11,6 +11,7 @@ import keyword
 import os
 import re
 import subprocess
+import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -45,6 +46,7 @@ TREE_LANGS = {
 SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv", "dist", "build", ".mypy_cache", ".pytest_cache",
              ".inventio"}
 MANIFEST = ".inventio-meta.json"   # the data owner's labels for the files beside it; never indexed itself
+META_PREFIX = ".inventio-meta"     # nor is any file with this name start, so a copy of the manifest is not an open file
 MAX_FILE_BYTES = 1_000_000
 MAX_PDF_BYTES = 50_000_000  # a PDF's text is a small part of its bytes (fonts, images)
 
@@ -63,8 +65,12 @@ class Chunk:
     refs: list[tuple[str, str]] = field(default_factory=list)  # (target path relative to source root, anchor)
 
 
-def list_files(root: Path, excludes: list[str]) -> list[str]:
-    """Relative POSIX paths. Inside a git work tree, git decides what is ignored."""
+def list_files(root: Path, excludes: list[str], strays: list[str] | None = None) -> list[str]:
+    """Relative POSIX paths. Inside a git work tree, git decides what is ignored. A symlink is never listed:
+    its target may be a file the data owner labelled (the link would index it unlabelled under an open path)
+    or one outside the root (neither git nor os.walk descends into a linked folder). Any `.inventio-meta*` file is left out; those below the root are appended to
+    `strays` when it is given, since a manifest there labels nothing."""
+    root = root.resolve()
     rels: list[str] | None = None
     try:
         out = subprocess.run(
@@ -82,7 +88,11 @@ def list_files(root: Path, excludes: list[str]) -> list[str]:
                 rels.append(Path(dirpath, name).relative_to(root).as_posix())
     keep = []
     for rel in rels:
-        if rel == MANIFEST or Path(rel).suffix.lower() not in LANGS:
+        if Path(rel).name.startswith(META_PREFIX):
+            if "/" in rel and strays is not None:
+                strays.append(rel)
+            continue
+        if Path(rel).suffix.lower() not in LANGS:
             continue
         if any(fnmatch.fnmatch(rel, pat) for pat in excludes):
             continue
@@ -90,6 +100,8 @@ def list_files(root: Path, excludes: list[str]) -> list[str]:
             continue
         p = root / rel
         try:
+            if p.is_symlink():
+                continue
             if not p.is_file() or p.stat().st_size > {"data": float("inf"), "pdf": MAX_PDF_BYTES}.get(
                     LANGS[p.suffix.lower()], MAX_FILE_BYTES):
                 continue
@@ -99,47 +111,141 @@ def list_files(root: Path, excludes: list[str]) -> list[str]:
     return sorted(set(keep))
 
 
-def read_labels(root: Path) -> list[tuple[str, list[str]]]:
-    """The access labels the data owner wrote in `root/.inventio-meta.json`, as [(pattern, acl values)] in file order.
+ACL_VALUE = re.compile(r"^(dept|user):[a-z0-9._@+-]+$")   # the hub's ACL_ID alphabet; `-` is never an id
+
+
+def norm_path(s: str) -> str:
+    """A path or manifest key as it is compared: backslashes as `/`, no leading `./` or `/`, trimmed, NFC,
+    case-folded. A label can only reach more files this way, never fewer."""
+    s = s.replace("\\", "/").strip()
+    while s.startswith("./") or s.startswith("/"):
+        s = s[2:] if s.startswith("./") else s[1:]
+    return unicodedata.normalize("NFC", unicodedata.normalize("NFC", s.strip()).casefold())
+
+
+@dataclass
+class Label:
+    key: str            # as the owner wrote it
+    norm: str
+    acl: list[str]
+    rx: "re.Pattern[str]"
+    plain: bool = False   # no wildcard: a file's path, or a folder's name
+    prefix: int = 0       # literal characters before the first wildcard (a folder's: its name and the `/`)
+
+
+def _key_regex(norm: str) -> "tuple[re.Pattern[str], int, bool]":
+    """`*` crosses `/`; `**/` also matches nothing (so `**/*.md` takes top-level files); `?` is one character;
+    everything else, `[` included, is literal. A key ending in `/`, or without wildcard that names a folder,
+    stands for the folder's files: `key/*`."""
+    wild = "*" in norm or "?" in norm
+    if norm.endswith("/"):
+        norm += "*"
+        wild = True
+    i, out = 0, []
+    while i < len(norm):
+        if norm.startswith("**/", i):
+            out.append("(?:.*/)?")
+            i += 3
+        elif norm[i] == "*":
+            out.append(".*")
+            i += 1
+        elif norm[i] == "?":
+            out.append(".")
+            i += 1
+        else:
+            out.append(re.escape(norm[i]))
+            i += 1
+    first = min((norm.find(c) for c in "*?" if c in norm), default=len(norm))
+    body = "".join(out)
+    if not wild:    # a plain path: that file, or (a folder name) everything under it
+        body += "(?:/.*)?"
+        first += 1
+    return re.compile(body + r"\Z", re.S), first, not wild
+
+
+def read_labels(root: Path) -> list[Label] | None:
+    """The access labels the data owner wrote in `root/.inventio-meta.json`, in file order; None when there is no
+    manifest (ingest_source decides what that means: `{}` is the owner saying every file is open).
 
     {"hd-doi-tac/HD-2026-047-*.md": {"acl": ["dept:tham-dinh", "user:an@finx.vn"]}}
 
-    A key is a path relative to the source root, or a glob (`*` also crosses `/`). No file: no labels. A
-    manifest that cannot be read, or an entry whose `acl` is not a non-empty list of strings, raises ValueError:
-    ingesting on regardless would index a file its owner meant to restrict as readable by everyone."""
+    A key is a path relative to the source root, a folder (`ho-so/`, or its name), or a glob (`*` also crosses
+    `/`, `**/` may match no folder); compared case-folded, in NFC, ignoring `./`, a leading `/` and `\\`. A
+    manifest that cannot be read, repeats a key, or has an entry whose `acl` is not a non-empty list of
+    `dept:<id>` / `user:<email>` raises ValueError: ingesting on regardless would index a file its owner meant to
+    restrict as readable by everyone."""
     path = root / MANIFEST
     if not path.is_file():
-        return []
+        return None
+
+    def pairs(items):
+        keys = [k for k, _ in items]
+        dup = sorted({k for k in keys if keys.count(k) > 1})
+        if dup:
+            raise ValueError(f"repeated key {dup[0]!r}")
+        return dict(items)
+
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=pairs)
     except (OSError, ValueError) as e:
         raise ValueError(f"{path}: {e}") from None
     if not isinstance(data, dict):
         raise ValueError(f"{path}: expected an object mapping a path or glob to {{\"acl\": [...]}}")
-    labels = []
+    labels, seen = [], {}
     for pattern, entry in data.items():
         acl = entry.get("acl") if isinstance(entry, dict) else None
         if not isinstance(acl, list) or not acl or not all(isinstance(v, str) and v.strip() for v in acl):
             raise ValueError(f"{path}: {pattern!r}: acl must be a non-empty list of ids "
                              "(dept:<id>, user:<email>); delete the entry to leave the file open")
-        labels.append((pattern, [v.strip() for v in acl]))
+        ids = sorted({v.strip().lower() for v in acl})
+        bad = [v for v in ids if not ACL_VALUE.match(v)]
+        if bad:
+            raise ValueError(f"{path}: {pattern!r}: {bad[0]!r} is not dept:<id> or user:<email> "
+                             "([a-z0-9._@+-] after the prefix)")
+        norm = norm_path(pattern)
+        if not norm.strip("/"):
+            raise ValueError(f"{path}: {pattern!r}: empty key")
+        if norm in seen:
+            raise ValueError(f"{path}: {pattern!r} and {seen[norm]!r} are the same key")
+        seen[norm] = pattern
+        rx, prefix, plain = _key_regex(norm)
+        labels.append(Label(pattern, norm, ids, rx, plain, prefix))
     return labels
 
 
-def acl_of(rel: str, labels: list[tuple[str, list[str]]]) -> list[str]:
-    """The acl of a file: that of the last entry of the manifest whose path or glob matches it; [] = unlabelled."""
-    found: list[str] = []
-    for pattern, acl in labels:
-        if rel == pattern or fnmatch.fnmatchcase(rel, pattern):
-            found = acl
-    return found
+def resolve_labels(labels: list[Label], rels: list[str]) -> tuple[dict[str, Label], dict[str, int], list[tuple[str, Label, Label]]]:
+    """({path: the label that applies}, {key: files matched}, [(path, winner, loser) where a less specific key
+    also matched]). The most specific key wins whatever the order: a file named exactly, then the longest literal
+    prefix before a wildcard (a file's path and a folder's name count whole, so an exact path beats any glob); only a tie falls to the later entry. A key that matches no
+    file raises ValueError: a typo, a renamed file or a moved folder would otherwise leave it open."""
+    won: dict[str, Label] = {}
+    counts = {l.key: 0 for l in labels}
+    over: list[tuple[str, Label, Label]] = []
+    order = {id(l): i for i, l in enumerate(labels)}
+
+    for rel in rels:
+        n = norm_path(rel)
+        hit = [l for l in labels if l.rx.match(n)]
+        for l in hit:
+            counts[l.key] += 1
+        if hit:
+            best = max(hit, key=lambda l: (l.prefix, order[id(l)]))
+            won[rel] = best
+            over += [(rel, best, l) for l in hit if l is not best and l.acl != best.acl]
+    dead = [l.key for l in labels if not counts[l.key]]
+    if dead:
+        raise ValueError(f"{dead[0]!r} matches no file (renamed, moved, misspelt?); fix or delete the entry, "
+                         "or the file stays open")
+    return won, counts, over
 
 
-def write_labels(con, sid: int, labels: list[tuple[str, list[str]]]) -> None:
+def write_labels(con, sid: int, won: dict[str, Label]) -> None:
     """The source's `acl` rows of file_meta, replaced by the manifest's: a label removed from it is gone."""
     con.execute("DELETE FROM file_meta WHERE key = 'acl' AND file_id IN (SELECT id FROM files WHERE source_id = ?)", (sid,))
-    rows = [(r["id"], "acl", v) for r in con.execute("SELECT id, path FROM files WHERE source_id = ?", (sid,))
-            for v in acl_of(r["path"], labels)]
+    rows = []
+    for r in con.execute("SELECT id, path FROM files WHERE source_id = ?", (sid,)):
+        if r["path"] in won:
+            rows += [(r["id"], "acl", v) for v in won[r["path"]].acl]
     con.executemany("INSERT INTO file_meta (file_id, key, value) VALUES (?, ?, ?)", rows)
 
 
@@ -630,7 +736,7 @@ def chunk_file(text: str, lang: str, rel: str) -> list[Chunk]:
 
 
 def ingest_source(con, name: str, root: Path, public: bool, excludes: list[str], full: bool = False,
-                  dtype: str | None = None) -> dict:
+                  dtype: str | None = None, require_labels: bool = False) -> dict:
     """Bring one source's part of the map in line with the files on disk.
 
     A file whose size and modification time match the map is skipped without being read; one
@@ -639,11 +745,30 @@ def ingest_source(con, name: str, root: Path, public: bool, excludes: list[str],
     `dtype` gives every file one document type (a mirror of table cards is `Dataset`, though
     its files are Markdown). A data file is never hashed (it may be gigabytes): a new size or
     modification time re-reads its schema.
+
+    Access labels (`.inventio-meta.json`, read_labels) are checked before anything is written; ValueError
+    refuses the ingest whole. No manifest is not "every file is open" (that is `{}`): it is refused when the
+    source had labels (the manifest was deleted, moved or skipped by a copy) and, with `require_labels`, always.
     """
     from .store import drop_file, drop_source
 
     root = root.resolve()
     row = con.execute("SELECT id FROM sources WHERE name = ?", (name,)).fetchone()
+    labels = read_labels(root)
+    strays: list[str] = []
+    rels = list_files(root, excludes, strays)
+    if strays:
+        raise ValueError(f"{root / strays[0]}: a manifest below the root labels nothing and would hide its "
+                         f"files' names in plain sight; move its entries to {root / MANIFEST} and delete it")
+    if labels is None:
+        had = row is not None and con.execute(
+            "SELECT 1 FROM file_meta m JOIN files f ON f.id = m.file_id WHERE m.key = 'acl' AND f.source_id = ? LIMIT 1",
+            (row["id"],)).fetchone()
+        if had or require_labels:
+            raise ValueError(f"{root / MANIFEST} is missing" + (" though this source had labels" if had else
+                             " and --require-labels is set") + "; restore it, or write {} to open every file")
+        labels = []
+    won, matched, over = resolve_labels(labels, rels)
     if row:
         sid = row["id"]
         if full:
@@ -663,9 +788,8 @@ def ingest_source(con, name: str, root: Path, public: bool, excludes: list[str],
                              "EXISTS (SELECT 1 FROM file_texts t WHERE t.file_id = files.id) AS has_text "
                              "FROM files WHERE source_id = ?", (sid,))
     }
-    labels = read_labels(root)   # before any file is touched: a bad manifest stops the ingest whole
     counts = {"added": 0, "changed": 0, "removed": 0, "unchanged": 0}
-    for rel in list_files(root, excludes):
+    for rel in rels:
         path = root / rel
         st = path.stat()
         lang = effective_lang(rel)
@@ -718,13 +842,15 @@ def ingest_source(con, name: str, root: Path, public: bool, excludes: list[str],
     for old in known.values():  # indexed before, gone from disk or now excluded
         drop_file(con, old["id"])
         counts["removed"] += 1
-    write_labels(con, sid, labels)
+    write_labels(con, sid, won)
     n_files, n_chunks = con.execute(
         "SELECT count(DISTINCT f.id), count(c.id) FROM files f LEFT JOIN chunks c ON c.file_id = f.id "
         "WHERE f.source_id = ?",
         (sid,),
     ).fetchone()
-    return {"source": name, "files": n_files, "chunks": n_chunks, **counts}
+    return {"source": name, "files": n_files, "chunks": n_chunks, **counts,
+            "labels": [{"key": l.key, "files": matched[l.key], "acl": l.acl} for l in labels],
+            "overrides": [{"path": rel, "key": w.key, "over": l.key} for rel, w, l in over]}
 
 
 def _insert_file(con, sid: int, rel: str, lang: str, dtype: str, text: str, size: int, mtime_ns: int,

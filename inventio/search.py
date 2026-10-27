@@ -319,16 +319,18 @@ WHERE l.{me} = ?
 """
 
 
-def attach_links(con, hits: list[Hit], per_hit: int = 5) -> None:
+def attach_links(con, hits: list[Hit], scope: Scope | None = None, per_hit: int = 5) -> None:
     """Where each hit leads, named by what the map knows for certain (`name_link`): links the sources draw
     (citation, mentions) only, since a model-judged `about` link can be wrong where a shown link must not be;
     links to another kind of thing first (a runbook's code before another runbook), one of each kind before
-    a second; one entry per target."""
+    a second; one entry per target. Only targets inside `scope` are named: a link is text of the file it leads to
+    (its path, its heading, the identifier that joins them)."""
+    where, args = scope_where(scope)
     for h in hits:
         rows = con.execute(
-            LINK_SQL.format(dir="out", other="dst", me="src") + " UNION ALL "
-            + LINK_SQL.format(dir="in", other="src", me="dst"),
-            (h.id, h.id),
+            LINK_SQL.format(dir="out", other="dst", me="src") + where + " UNION ALL "
+            + LINK_SQL.format(dir="in", other="src", me="dst") + where,
+            (h.id, *args, h.id, *args),
         ).fetchall()
         seen, links = set(), []
         for r in rows:
@@ -465,8 +467,9 @@ def _interleave(groups: list[list[Hit]]) -> list[Hit]:
 def search(con, q: str, *, k: int = 5, pool: int = 15, ranker=None, expand_links: bool = False,
            by_type: bool = False, type_limit: int | None = None, facts=None, facts_limit: int = 10,
            symbols: bool = True, neighbours: bool = False, seeds: int = 5, expand_limit: int = 10,
-           scope: Scope | None = None) -> list[Hit]:
-    """`facts` is a judge (facts.make_judge) that predicts the query's content categories."""
+           scope: Scope | None = None, with_links: bool = True) -> list[Hit]:
+    """`facts` is a judge (facts.make_judge) that predicts the query's content categories. `with_links`: name
+    where each hit leads (attach_links); `expand_links` is only whether links widen the pool."""
     hits = bm25(con, q, pool, scope)
     first, added = len(hits), []   # what each widening step adds, kept apart so none crowds the others out
     if symbols:
@@ -499,5 +502,6 @@ def search(con, q: str, *, k: int = 5, pool: int = 15, ranker=None, expand_links
         first_ids = {h.id for h in named}
         hits = named + [h for h in hits if h.id not in first_ids]
     top = hits[:k]
-    attach_links(con, top)
+    if with_links:
+        attach_links(con, top, scope)
     return top

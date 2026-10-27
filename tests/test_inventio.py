@@ -75,11 +75,15 @@ def test_prose_links_to_the_code_that_defines_what_it_names(tmp_path, capsys):
     assert run(capsys, "--db", db, "init", str(wiki), "--name", "wiki")[0] == 0
     code, out = run(capsys, "--db", db, "query", "nightly job orders database", "--json", "--source", "wiki")
     assert code == 0
-    top = json.loads(out.out)[0]
+    assert json.loads(out.out)[0]["links"] == []   # a link leads only to files inside the scope (here: not the repo)
+    code, out = run(capsys, "--db", db, "query", "nightly job orders database", "--json", "--source", "wiki",
+                    "--source", "repo")
+    top = [r for r in json.loads(out.out) if r["path"] == "runbook.md"][0]
     assert {"rel": "mentions", "dir": "out", "via": "nightly_backup", "source": "repo", "coord": "jobs/backup.py:1-2",
             "kind": "code", "fact": "defines nightly_backup", "title": "nightly_backup"} in top["links"]
-    code, out = run(capsys, "--db", db, "query", "nightly_backup snapshot", "--json", "--source", "repo")
-    back = json.loads(out.out)[0]["links"]   # the other way round: the page is what uses the name
+    code, out = run(capsys, "--db", db, "query", "nightly_backup snapshot", "--json", "--source", "repo",
+                    "--source", "wiki")
+    back = [r for r in json.loads(out.out) if r["path"] == "jobs/backup.py"][0]["links"]   # the other way round: the page is what uses the name
     assert [(l["kind"], l["fact"], l["coord"]) for l in back] == [("page", "uses nightly_backup", "runbook.md:1-2")]
 
 
@@ -236,6 +240,9 @@ def test_tree_sitter_definitions_carry_coordinates_and_links(tmp_path, capsys):
     assert (by_name["shippingCost"].kind, by_name["shippingCost"].start_line) == ("function", 12)
 
     top = json.loads(run(capsys, "--db", db, "query", "reports every morning", "--json", "--source", "wiki")[1].out)[0]
+    assert top["links"] == []   # links lead only inside the scope: the repo is outside `--source wiki`
+    top = json.loads(run(capsys, "--db", db, "query", "reports every morning", "--json", "--source", "wiki",
+                         "--source", "repo")[1].out)[0]
     assert ("mentions", "repo", "models/daily_orders.sql:1-3") in {(l["rel"], l["source"], l["coord"]) for l in top["links"]}
 
 
@@ -884,7 +891,7 @@ def test_manifest_labels_restrict_search_before_ranking_and_a_removed_label_disa
 
     assert paths("-") == {"open.md"}
     assert paths("dept:nobody,user:bo@x.vn") == {"open.md"}
-    assert paths("dept:legal") == {"open.md", "deals/other.md"}          # the last matching entry wins
+    assert paths("dept:legal") == {"open.md", "deals/other.md"}          # the exact path beats `deals/*`
     assert paths("dept:APPRAISAL") == {"open.md", "deals/secret.md"}     # ids compare without case
     assert paths("user:an@x.vn,dept:legal") == {"open.md", "deals/other.md", "deals/secret.md"}
     assert paths("dept:nobody", k="1") == {"open.md"}                    # the cut falls on what is visible
@@ -897,7 +904,11 @@ def test_manifest_labels_restrict_search_before_ranking_and_a_removed_label_disa
     (root / MANIFEST).write_text(json.dumps({"deals/secret.md": {"acl": ["dept:appraisal"]}}))   # re-ingest, files untouched
     assert run(capsys, "--db", db, "init", str(root), "--name", "d")[0] == 0
     assert paths("dept:nobody") == {"open.md", "deals/other.md"}         # deals/* label gone
-    (root / MANIFEST).unlink()
+    (root / MANIFEST).unlink()   # P0-1: a vanished manifest is not "open everything": refused, labels stay
+    assert run(capsys, "--db", db, "init", str(root), "--name", "d")[0] == 1
+    assert paths("dept:nobody") == {"open.md", "deals/other.md"}
+    assert "is missing" in json.loads(run(capsys, "--db", db, "sources", "--json")[1].out)[0]["sync_error"]
+    (root / MANIFEST).write_text("{}")   # `{}` is the owner opening every file
     assert run(capsys, "--db", db, "init", str(root), "--name", "d")[0] == 0
     assert paths("dept:nobody") == {"open.md", "deals/other.md", "deals/secret.md"}
 
@@ -977,3 +988,251 @@ def test_serve_http_read_and_query_honour_visible(tmp_path, capsys, monkeypatch)
     finally:
         proc.terminate()
         proc.wait(timeout=30)
+
+
+# ---------------------------------------------------------------- access labels: refusals and misses
+
+def _acl_paths(capsys, db, visible="dept:nobody", k="10"):
+    code, out = run(capsys, "--db", db, "query", "partner fee", "-w", f"visible:{visible}", "--json", "-k", k)
+    assert code == 0
+    return {r["path"] for r in json.loads(out.out)}
+
+
+def _restricted(tmp_path, manifest, files=("ho-so/Khách-A/HD-047.md", "open.md")):
+    root = tmp_path / "d"
+    for f in files:
+        write(root, f, "# Contract\nThe partner fee is secret.\n")
+    (root / ".inventio-meta.json").write_text(manifest if isinstance(manifest, str) else json.dumps(manifest),
+                                              encoding="utf-8")
+    return root
+
+
+def test_no_manifest_is_refused_when_the_source_had_labels_even_with_full(tmp_path, capsys):
+    db = str(tmp_path / "map.db")
+    root = _restricted(tmp_path, {"ho-so/*": {"acl": ["dept:a"]}})
+    assert run(capsys, "--db", db, "init", str(root), "--name", "d")[0] == 0
+    (root / ".inventio-meta.json").rename(root / "moved.txt")
+    for extra in ([], ["--full"]):
+        code, out = run(capsys, "--db", db, "init", str(root), "--name", "d", *extra)
+        assert code == 1 and "is missing" in out.err
+    assert _acl_paths(capsys, db) == {"open.md"}                  # labels and files kept
+    assert "is missing" in json.loads(run(capsys, "--db", db, "sources", "--json")[1].out)[0]["sync_error"]
+
+
+def test_require_labels_refuses_a_folder_without_a_manifest_and_empty_object_opens_it(tmp_path, capsys):
+    db = str(tmp_path / "map.db")
+    root = tmp_path / "d"
+    write(root, "a.md", "# A\nThe partner fee.\n")
+    assert run(capsys, "--db", db, "init", str(root), "--name", "d")[0] == 0   # without the flag: as before
+    code, out = run(capsys, "--db", db, "init", str(root), "--name", "e", "--require-labels")
+    assert code == 1 and "--require-labels" in out.err
+    (root / ".inventio-meta.json").write_text("{}")
+    assert run(capsys, "--db", db, "init", str(root), "--name", "e", "--require-labels")[0] == 0
+
+
+@pytest.mark.parametrize("key", [
+    "HO-SO/KHÁCH-A/HD-047.MD",                       # case
+    "ho-so/Kha\u0301ch-A/HD-047.md",                  # NFD against an NFC file name
+    "./ho-so/Khách-A/HD-047.md", "/ho-so/Khách-A/HD-047.md", "ho-so\\Khách-A\\HD-047.md",
+    "  ho-so/Khách-A/HD-047.md  ", " ./ho-so/Khách-A/HD-047.md",
+    "ho-so/Khách-A/", "ho-so/Khách-A", "ho-so/", "ho-so",   # a folder, with or without the slash
+    "**/HD-*.md", "**/*.md", "ho-so/**/*.md",
+])
+def test_every_kind_of_manifest_key_still_restricts_the_file(tmp_path, capsys, key):
+    import unicodedata
+
+    db = str(tmp_path / "map.db")
+    root = _restricted(tmp_path, {key: {"acl": ["dept:a"]}}, files=("ho-so/Khách-A/HD-047.md",))
+    root_file = write(root, "ho-so/Khách-A/HD-047.md", "# Contract\nThe partner fee is secret.\n")
+    assert root_file.exists()
+    assert run(capsys, "--db", db, "init", str(root), "--name", "d")[0] == 0
+    assert "ho-so/Khách-A/HD-047.md" not in _acl_paths(capsys, db)
+    assert "ho-so/Khách-A/HD-047.md" in _acl_paths(capsys, db, "dept:a")
+
+
+def test_a_double_star_folder_key_reaches_top_level_files_and_nfd_file_names_match(tmp_path, capsys):
+    import unicodedata
+
+    db = str(tmp_path / "map.db")
+    root = tmp_path / "d"
+    write(root, "top.md", "# T\nThe partner fee.\n")
+    write(root, unicodedata.normalize("NFD", "Tệp-Á.md"), "# N\nThe partner fee.\n")
+    (root / ".inventio-meta.json").write_text(json.dumps({"**/*.md": {"acl": ["dept:a"]}}))
+    assert run(capsys, "--db", db, "init", str(root), "--name", "d")[0] == 0
+    assert _acl_paths(capsys, db) == set()
+    root2 = tmp_path / "e"
+    write(root2, unicodedata.normalize("NFD", "Tệp-Á.md"), "# N\nThe partner fee.\n")
+    (root2 / ".inventio-meta.json").write_text(json.dumps({unicodedata.normalize("NFC", "tệp-á.md"): {"acl": ["dept:a"]}}))
+    assert run(capsys, "--db", db, "init", str(root2), "--name", "e")[0] == 0
+    assert _acl_paths(capsys, db) == set()
+
+
+def test_a_bracket_in_a_key_is_literal_and_a_key_matching_no_file_is_refused(tmp_path, capsys):
+    db = str(tmp_path / "map.db")
+    root = tmp_path / "d"
+    write(root, "a [1].md", "# A\nThe partner fee.\n")
+    write(root, "a 1.md", "# B\nThe partner fee.\n")
+    (root / ".inventio-meta.json").write_text(json.dumps({"a [1].md": {"acl": ["dept:a"]}}))
+    assert run(capsys, "--db", db, "init", str(root), "--name", "d")[0] == 0
+    assert _acl_paths(capsys, db) == {"a 1.md"}                  # `[1]` is not a character class
+    for dead in ("a [2].md", "renamed.md", "nowhere/", "x/*.md"):
+        (root / ".inventio-meta.json").write_text(json.dumps({"a [1].md": {"acl": ["dept:a"]}, dead: {"acl": ["dept:b"]}}))
+        code, out = run(capsys, "--db", db, "init", str(root), "--name", "d")
+        assert code == 1 and "matches no file" in out.err
+    assert _acl_paths(capsys, db) == {"a 1.md"}                  # the old labels stay
+
+
+def test_init_reports_how_many_files_each_key_matched_and_the_overrides(tmp_path, capsys):
+    db = str(tmp_path / "map.db")
+    root = _restricted(tmp_path, {"ho-so/*": {"acl": ["dept:a", "dept:b"]}, "ho-so/Khách-A/*": {"acl": ["dept:a"]}},
+                       files=("ho-so/Khách-A/HD-047.md", "ho-so/B/HD-1.md"))
+    code, out = run(capsys, "--db", db, "init", str(root), "--name", "d")
+    assert code == 0
+    assert "label 'ho-so/*': 2 file(s)" in out.out and "label 'ho-so/Khách-A/*': 1 file(s)" in out.out
+    assert "override: ho-so/Khách-A/HD-047.md takes 'ho-so/Khách-A/*' over 'ho-so/*'" in out.out
+
+
+@pytest.mark.parametrize("order", [0, 1])
+def test_the_most_specific_key_wins_whatever_the_order(tmp_path, capsys, order):
+    db = str(tmp_path / "map.db")
+    entries = [("ho-so/Khách-A/*", {"acl": ["dept:a"]}), ("ho-so/*", {"acl": ["dept:a", "dept:b"]})]
+    root = _restricted(tmp_path, json.dumps(dict(entries[::1 - 2 * order])),
+                       files=("ho-so/Khách-A/HD-047.md", "ho-so/B/HD-1.md"))
+    assert run(capsys, "--db", db, "init", str(root), "--name", "d")[0] == 0
+    assert _acl_paths(capsys, db, "dept:b") == {"ho-so/B/HD-1.md"}          # khach-a stays with dept:a only
+    assert _acl_paths(capsys, db, "dept:a") == {"ho-so/Khách-A/HD-047.md", "ho-so/B/HD-1.md"}
+
+
+def test_an_exact_path_beats_a_glob_listed_after_it(tmp_path, capsys):
+    db = str(tmp_path / "map.db")
+    root = _restricted(tmp_path, json.dumps({"ho-so/Khách-A/HD-047.md": {"acl": ["dept:a"]},
+                                             "**/*.md": {"acl": ["dept:a", "dept:b"]}}),
+                       files=("ho-so/Khách-A/HD-047.md", "open.md"))
+    assert run(capsys, "--db", db, "init", str(root), "--name", "d")[0] == 0
+    assert _acl_paths(capsys, db, "dept:b") == {"open.md"}
+
+
+@pytest.mark.parametrize("bad", [
+    {"a.md": {"acl": ["-"]}}, {"a.md": {"acl": ["dept: x"]}}, {"a.md": {"acl": ["x"]}},
+    {"a.md": {"acl": ["dept:a,dept:b"]}}, {"a.md": {"acl": ["dept:İ"]}}, {"a.md": {"acl": ["group:a"]}},
+])
+def test_acl_values_must_be_dept_or_user_ids(tmp_path, bad):
+    from inventio.ingest import read_labels
+
+    root = tmp_path / "d"
+    root.mkdir()
+    (root / ".inventio-meta.json").write_text(json.dumps(bad))
+    with pytest.raises(ValueError):
+        read_labels(root)
+
+
+def test_acl_values_are_lowercased_and_duplicate_keys_refused(tmp_path):
+    from inventio.ingest import read_labels
+
+    root = tmp_path / "d"
+    root.mkdir()
+    (root / ".inventio-meta.json").write_text(json.dumps({"a.md": {"acl": [" DEPT:Phap-Che ", "User:An@FinX.vn"]}}))
+    assert read_labels(root)[0].acl == ["dept:phap-che", "user:an@finx.vn"]
+    for dup in ('{"a.md": {"acl": ["dept:a"]}, "a.md": {"acl": ["dept:b"]}}',     # last-wins in plain json
+                '{"a.md": {"acl": ["dept:a"]}, "./A.md": {"acl": ["dept:b"]}}'):   # the same file under two spellings
+        (root / ".inventio-meta.json").write_text(dup)
+        with pytest.raises(ValueError):
+            read_labels(root)
+
+
+def test_symlinks_are_not_indexed_and_a_manifest_below_the_root_is_refused(tmp_path, capsys):
+    db = str(tmp_path / "map.db")
+    root = _restricted(tmp_path, {"rieng/*": {"acl": ["dept:a"]}}, files=("rieng/HD-047.md", "chung/ok.md"))
+    (root / "chung" / "x.md").symlink_to(root / "rieng" / "HD-047.md")
+    (root / "chung" / "dir").symlink_to(root / "rieng", target_is_directory=True)
+    (root / "outside.md").symlink_to(tmp_path / "elsewhere.md")
+    write(tmp_path, "elsewhere.md", "# E\nThe partner fee.\n")
+    assert run(capsys, "--db", db, "init", str(root), "--name", "d")[0] == 0
+    assert _acl_paths(capsys, db) == {"chung/ok.md"}
+    (root / "chung" / ".inventio-meta.json.bak").write_text('{"rieng/HD-047.md": {"acl": ["dept:a"]}}')
+    code, out = run(capsys, "--db", db, "init", str(root), "--name", "d")
+    assert code == 1 and "below the root" in out.err
+    (root / "chung" / ".inventio-meta.json.bak").unlink()
+    (root / ".inventio-meta.json.bak").write_text("{}")      # beside the manifest: never indexed, never refused
+    assert run(capsys, "--db", db, "init", str(root), "--name", "d")[0] == 0
+    code, out = run(capsys, "--db", db, "query", "inventio-meta", "--json", "-w", "visible:dept:a")
+    assert not any("inventio-meta" in r["path"] for r in json.loads(out.out))
+
+
+def test_no_links_names_no_links_and_query_rows_carry_their_acl(tmp_path, capsys):
+    db = str(tmp_path / "map.db")
+    root = tmp_path / "d"
+    write(root, "a.md", "# A\nSee [the deal](b.md) for the partner fee.\n")
+    write(root, "b.md", "# B\nThe partner fee deal.\n")
+    (root / ".inventio-meta.json").write_text(json.dumps({"b.md": {"acl": ["dept:a"]}}))
+    assert run(capsys, "--db", db, "init", str(root), "--name", "d")[0] == 0
+    rows = json.loads(run(capsys, "--db", db, "query", "partner fee", "--json", "-w", "visible:dept:a")[1].out)
+    assert {r["path"]: r["acl"] for r in rows} == {"a.md": [], "b.md": ["dept:a"]}
+    assert any(r["links"] for r in rows if r["path"] == "a.md")
+    rows = json.loads(run(capsys, "--db", db, "query", "partner fee", "--json", "-w", "visible:dept:nobody")[1].out)
+    assert [r["path"] for r in rows] == ["a.md"] and rows[0]["links"] == []     # the labelled target is not named
+    rows = json.loads(run(capsys, "--db", db, "query", "partner fee", "--json", "--no-links",
+                          "-w", "visible:dept:a")[1].out)
+    assert all(r["links"] == [] for r in rows)
+
+
+def test_serve_http_require_visible_refuses_a_query_or_read_without_it(tmp_path, capsys, monkeypatch):
+    import os
+    import subprocess
+    import sys
+    import time
+    import urllib.error
+    import urllib.request
+
+    from inventio.serve import http_state_file
+
+    monkeypatch.setenv("INVENTIO_RANKER", "none")
+    db = str(tmp_path / "map.db")
+    _labelled_dir(tmp_path / "d")
+    assert run(capsys, "--db", db, "init", str(tmp_path / "d"), "--name", "d")[0] == 0
+    proc = subprocess.Popen([sys.executable, "-m", "inventio.cli", "--db", db, "serve", "--http", "0",
+                             "--require-visible"], env=os.environ.copy(), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    try:
+        deadline = time.time() + 60
+        while not http_state_file().exists():
+            assert proc.poll() is None and time.time() < deadline, proc.stderr.read().decode()
+            time.sleep(0.1)
+        state = json.loads(http_state_file().read_text())
+
+        def post(path, body):
+            req = urllib.request.Request(state["url"] + path, json.dumps(body).encode(),
+                                         {"content-type": "application/json", "authorization": f"Bearer {state['token']}"})
+            try:
+                with urllib.request.urlopen(req, timeout=30) as r:
+                    return r.status, json.loads(r.read())
+            except urllib.error.HTTPError as e:
+                return e.code, json.loads(e.read())
+
+        for where in (None, "path:*", "-visible:dept:legal", "kind:dir visible:"):
+            body = {"text": "partner fee", **({"where": where} if where else {})}
+            assert post("/query", body)[0] == 400, where
+        assert post("/read", {"source": "d", "path": "deals/secret.md"})[0] == 400
+        assert post("/query", {"text": "partner fee", "where": "visible:-"})[0] == 200
+        code, rows = post("/query", {"text": "partner fee", "where": "path:*.md visible:dept:legal"})
+        assert code == 200 and {r["path"] for r in rows} == {"open.md", "deals/other.md"}
+        assert post("/read", {"source": "d", "path": "open.md", "visible": []})[0] == 200
+    finally:
+        proc.terminate()
+        proc.wait(timeout=30)
+
+
+def test_a_connector_field_named_acl_never_becomes_a_label(tmp_path, capsys, monkeypatch):
+    from inventio import connectors
+    from inventio.connectors import mirror, write_meta
+
+    db = str(tmp_path / "map.db")
+    write(tmp_path / "m", "p.md", "# P\nThe partner fee.\n")
+    assert run(capsys, "--db", db, "init", str(tmp_path / "m"), "--name", "m")[0] == 0
+    monkeypatch.setattr(mirror, "load", lambda root: {"kind": "jira", "origin": "x", "items": {
+        "1": {"path": "p.md", "meta": {"acl": ["dept:x"], "status": "Done"}}}})
+    con = cli.connect(Path(db))
+    with con:
+        write_meta(con, "m", tmp_path / "m")
+    keys = {r[0] for r in con.execute("SELECT key FROM file_meta")}
+    con.close()
+    assert keys == {"status"}

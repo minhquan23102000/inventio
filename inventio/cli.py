@@ -50,9 +50,15 @@ def cmd_init(args) -> int:
         print(f"source {name!r} already indexes {row['root']}; give this one another --name, "
               f"or pass --full to re-point {name!r} here", file=sys.stderr)
         return 2
-    with con:
-        stats = ingest_source(con, name, root, args.public, args.exclude or [], full=args.full)
-        links = rebuild_links(con)
+    try:
+        with con:
+            stats = ingest_source(con, name, root, args.public, args.exclude or [], full=args.full,
+                                  require_labels=args.require_labels)
+            links = rebuild_links(con)
+            con.execute("UPDATE sources SET sync_error = NULL, sync_error_at = NULL WHERE name = ?", (name,))
+    except ValueError as e:   # the old copy and labels stay; the reason is kept on the source, where `sources` shows it
+        _sync_failed(con, name, f"not indexed: {e}")
+        return 1
     _report(stats, links, t, args)
     if args.facts:
         args.source = [name]
@@ -107,6 +113,10 @@ def _report(stats: dict, links: dict, t: float, args) -> None:
         f"map links {', '.join(f'{k} {v}' for k, v in sorted(links.items())) or 'none'}; "
         f"{time.time() - t:.1f}s -> {args.db or default_db()}"
     )
+    for l in stats.get("labels", []):
+        print(f"  label {l['key']!r}: {l['files']} file(s) -> {', '.join(l['acl'])}")
+    for o in stats.get("overrides", []):
+        print(f"  override: {o['path']} takes {o['key']!r} over {o['over']!r}")
 
 
 def cmd_sync(args) -> int:
@@ -144,7 +154,7 @@ def cmd_sync(args) -> int:
             _sync_failed(con, r["name"], f"access lost, {dropped} files dropped: {e}")
             failed.append(r["name"])
             continue
-        except connectors.RemoteError as e:
+        except (connectors.RemoteError, ValueError) as e:   # ValueError: a manifest ingest refuses (the copy stays)
             _sync_failed(con, r["name"], str(e))
             failed.append(r["name"])
             continue
@@ -465,7 +475,7 @@ def ranked(con, args, scope) -> tuple[list, list[str]]:
 
     def searched(ranker, judge=None):
         return search(con, args.text, k=args.k, pool=args.pool, ranker=ranker,
-                      expand_links=not args.no_links and ranker is not None,
+                      expand_links=not args.no_links and ranker is not None, with_links=not args.no_links,
                       by_type=args.types, facts=judge,
                       symbols=not args.no_symbols, neighbours=args.neighbours and ranker is not None,
                       scope=scope)
@@ -509,7 +519,11 @@ def json_rows(con, hits, locations_only: bool = False) -> list[dict]:
     heading, lines, rank) without its text or its links, for a caller that reads the content itself."""
     from .connectors import web_url
 
-    rows = [{**h.as_dict(), "url": web_url(con, h.source, h.root, h.path, h.heading_path)} for h in hits]
+    from .read import file_acl
+
+    acls: dict[tuple[str, str], list[str]] = {}
+    rows = [{**h.as_dict(), "url": web_url(con, h.source, h.root, h.path, h.heading_path),
+             "acl": acls.setdefault((h.source, h.path), file_acl(con, h.source, h.path) or [])} for h in hits]
     if locations_only:
         for r in rows:
             del r["text"], r["links"]
@@ -631,9 +645,9 @@ def cmd_serve(args) -> int:
         except ValueError as e:
             print(str(e), file=sys.stderr)
             return 2
-        return serve.serve_http(args.http, maps)
-    if args.map:
-        print("--map needs --http", file=sys.stderr)
+        return serve.serve_http(args.http, maps, args.require_visible)
+    if args.map or args.require_visible:
+        print("--map and --require-visible need --http", file=sys.stderr)
         return 2
     return serve.serve(args.idle)
 
@@ -698,6 +712,8 @@ there. Every command prints source:path:start-end coordinates that read and show
     s.add_argument("--public", action="store_true", help="allow this source's text to be sent to a cloud ranker")
     s.add_argument("--exclude", action="append", metavar="GLOB", help="skip paths matching GLOB (repeatable)")
     s.add_argument("--full", action="store_true", help="drop the source and rebuild it from scratch")
+    s.add_argument("--require-labels", action="store_true",
+                   help="refuse a directory without `.inventio-meta.json` (`{}` there says every file is open)")
     s.add_argument("--facts", action="store_true", help="then judge content categories and fact links (see `facts`)")
     judge = default_judge()
     judges = "dispositio (local), typesafe (cloud, public sources only)"
@@ -826,6 +842,9 @@ there. Every command prints source:path:start-end coordinates that read and show
     s.add_argument("--map", action="append", metavar="NAME=PATH",
                    help="with --http: a map the server answers from, named by a request's `map` (repeatable); "
                         "without it, the one map --db names")
+    s.add_argument("--require-visible", action="store_true",
+                   help="with --http: refuse a /query without a positive `visible:` term in `where` and a /read "
+                        "without `visible` (for a caller that must apply per-file access labels)")
     s.set_defaults(fn=cmd_serve)
 
     s = sub.add_parser("update", help="fetch the latest released dispositio (queries say when there is one)")

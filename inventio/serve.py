@@ -320,9 +320,18 @@ def parse_maps(specs: list[str] | None, db: str | None) -> dict[str, str | None]
     return maps
 
 
-def serve_http(port: int, maps: dict[str, str | None]) -> int:
+def has_visible_term(where: str | None) -> bool:
+    """Whether a `-w` filter holds a positive `visible:` term (ValueError if it cannot be read at all)."""
+    from .scope import Scope
+
+    return any(t.key == "visible" and not t.negate and t.values for t in Scope.parse(where, None).terms)
+
+
+def serve_http(port: int, maps: dict[str, str | None], require_visible: bool = False) -> int:
     """`maps`: the maps a request may name by `map` ({name: path}, from parse_maps). A request that names none is
-    answered from the only one, and refused when there are several; the map is opened per request."""
+    answered from the only one, and refused when there are several; the map is opened per request.
+    `require_visible`: refuse (400) a /query whose `where` has no positive `visible:` term and a /read without
+    `visible`, so a caller that forgets the access check gets an error instead of every labelled file."""
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
     from . import cli, rankers, read
@@ -378,7 +387,8 @@ def serve_http(port: int, maps: dict[str, str | None]) -> int:
         def _read(self):
             """POST /read: one file's chunks and `acl` from the map, in line order (or those overlapping the lines asked).
             `visible` (a list of ids, as the `visible:` filter takes them) refuses a labelled file none of them
-            matches with the 404 of a file that is not there; without it the file is read whatever its label."""
+            matches with the 404 of a file that is not there; without it the file is read whatever its label
+            (unless the server runs with `require_visible`, which answers 400)."""
             try:
                 body = json.loads(self.rfile.read(int(self.headers.get("content-length", 0))) or b"{}")
                 if not isinstance(body, dict):
@@ -396,6 +406,8 @@ def serve_http(port: int, maps: dict[str, str | None]) -> int:
                 for key in ("source", "path"):
                     if not body.get(key):
                         raise ValueError(f"{key} is required")
+                if require_visible and body.get("visible") is None:
+                    raise ValueError("this server requires `visible` (the ids the reader may see as)")
                 start, end = body.get("start_line"), body.get("end_line")
                 if (start is not None and start < 1) or (end is not None and end < 1):
                     raise ValueError("start_line and end_line count from 1")
@@ -446,6 +458,9 @@ def serve_http(port: int, maps: dict[str, str | None]) -> int:
                 if not isinstance(body, dict):
                     raise ValueError("the body must be a JSON object")
                 argv = query_argv(body)   # checks every field's type, `map` included
+                if require_visible and not has_visible_term(body.get("where")):
+                    raise ValueError("this server requires a positive `visible:` term in `where` (visible:- for "
+                                     "the files nobody restricted)")
                 name = self._pick_map(body)
                 args = cli.parse((["--db", maps[name]] if maps[name] else []) + argv)
             except (ValueError, SystemExit) as e:   # argparse exits on a value it refuses (an unknown ranker)

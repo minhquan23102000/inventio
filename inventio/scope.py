@@ -20,7 +20,8 @@ and `visible:-` (no id is ever `-`) is the files nobody restricted. Compared exa
 a search term it never leaves a file out for being absent: it is the one term whose miss is a leak.
 
 Every path into the pool (BM25, named files and definitions, predicted types, categories,
-neighbours, links) is narrowed by the same scope, so no candidate outside it is ever ranked.
+neighbours, links) is narrowed by the same scope, so no candidate outside it is ever ranked, and the
+links a hit names (attach_links) lead only to files inside it.
 """
 
 import datetime as _dt

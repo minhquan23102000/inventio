@@ -132,7 +132,7 @@ def write_meta(con, name: str, root: Path) -> None:
         "SELECT f.id, f.path FROM files f JOIN sources s ON s.id = f.source_id WHERE s.name = ?", (name,))}
     for table in ("file_meta", "file_web"):
         con.execute(f"DELETE FROM {table} WHERE file_id IN (SELECT f.id FROM files f JOIN sources s "
-                    "ON s.id = f.source_id WHERE s.name = ?)", (name,))
+                    "ON s.id = f.source_id WHERE s.name = ?)" + (" AND key != 'acl'" if table == "file_meta" else ""), (name,))
     manifest = mirror.load(root)
     rows, web = [], []
     for item in manifest["items"].values():
@@ -140,6 +140,8 @@ def write_meta(con, name: str, root: Path) -> None:
         if not fid:
             continue
         for key, value in (item.get("meta") or {}).items():
+            if key == "acl":   # reserved: access labels come only from `.inventio-meta.json`, never from a connector's fields
+                continue
             rows += [(fid, key, v) for v in ([value] if isinstance(value, str) else value) if v]
         web.append((fid, manifest["kind"], json.dumps({k: v for k, v in item.items() if k != "meta"})))
     con.executemany("INSERT INTO file_meta (file_id, key, value) VALUES (?, ?, ?)", rows)
