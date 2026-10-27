@@ -290,13 +290,15 @@ def resolve_labels(labels: list[Label], rels: list[str], known: "set[str] | froz
     keys = [l.key for l in dead]
     if dead:
         loose = [rel for rel in rels if rel not in known
-                 and (rel not in won or not all(set(won[rel].acl) <= set(l.acl) for l in dead))]
+                 and (rel not in won or not all(l.norm in won[rel].widen or set(won[rel].acl) <= set(l.acl)
+                                                for l in dead))]
         if loose:
             raise ValueError(f"{', '.join(map(repr, keys))} match{'es' if len(keys) == 1 else ''} no file while "
                              f"{len(loose)} new file(s) have no label or one that gives wider access than the "
                              f"dead key ({', '.join(loose[:3])}): a renamed or moved file would be indexed open "
                              "or wider; move the key to the file's new path, and delete it only if the file is "
-                             "really gone")
+                             "really gone; if the file is meant to be wider, list the dead key in the new "
+                             "file's entry: \"widen\": [\"<key>\"]")
     return won, counts, over, keys
 
 
@@ -796,6 +798,9 @@ def chunk_file(text: str, lang: str, rel: str) -> list[Chunk]:
     return chunks
 
 
+TOMBSTONE_DAYS = 30
+
+
 def _labelled_digests(con, sid: int) -> "dict[str, list[tuple[str, frozenset[str]]]]":
     """{sha1: [(path, ids)]} of the source's labelled files as the map holds them now (data files, whose digest
     is only a size and a date, are left out)."""
@@ -808,30 +813,52 @@ def _labelled_digests(con, sid: int) -> "dict[str, list[tuple[str, frozenset[str
     return out
 
 
+def _tombstones(con, sid: int) -> "dict[str, list[tuple[str, frozenset[str]]]]":
+    """The same shape for labelled files dropped from the map in the last TOMBSTONE_DAYS days (a copy kept out of
+    the run that deleted the original is still caught); older ones are deleted."""
+    con.execute("DELETE FROM tombstones WHERE dropped_at < datetime('now', ?)", (f"-{TOMBSTONE_DAYS} days",))
+    out: dict[str, list[tuple[str, frozenset[str]]]] = {}
+    for r in con.execute("SELECT path, sha1, ids FROM tombstones WHERE source_id = ?", (sid,)):
+        out.setdefault(r["sha1"], []).append((r["path"], frozenset(r["ids"].split("\x1f"))))
+    return out
+
+
+def _bury(con, sid: int, gone: "dict[str, tuple[str, frozenset[str]]]") -> None:
+    """Remember (sha1, ids) of the labelled files that left the map in this run, with the date."""
+    con.executemany(
+        "INSERT OR REPLACE INTO tombstones (source_id, path, sha1, ids, dropped_at) VALUES (?, ?, ?, ?, datetime('now'))",
+        [(sid, p, sha, "\x1f".join(sorted(ids))) for p, (sha, ids) in gone.items()])
+
+
 def _refuse_copies(con, sid: int, won: dict[str, Label], fresh: "list[tuple[str, str]]",
-                   prior: "dict[str, list[tuple[str, frozenset[str]]]]") -> None:
+                   prior: "dict[str, list[tuple[str, frozenset[str]]]]", rels: "set[str]") -> None:
     """ValueError when a file added or changed by this run has the bytes of a labelled file (one labelled now, or
-    one that was before this run: a copy first and a delete later, an archived `v1` beside a new file under the
-    old name, a hard link) and its own ids are not a subset of that file's; unlabelled counts as wider. The
-    winner's `widen` may name the key of the file it copies."""
-    refs = {sha: list(v) for sha, v in prior.items()}
-    for path, sha in con.execute("SELECT path, sha1 FROM files WHERE source_id = ? AND sha1 NOT LIKE 'stat:%'", (sid,)):
-        if path in won:
+    one that was before this run or was dropped within TOMBSTONE_DAYS days: a copy first and a delete later, an
+    archived `v1` beside a new file under the old name, a hard link) and its own ids are not a subset of that
+    file's; unlabelled counts as wider. A file still on disk with the same bytes is judged by its label now, not by the one it had.
+    A key in the winner's `widen` that matches the other file's path exempts it (a move to a wider folder)."""
+    now = dict(con.execute("SELECT path, sha1 FROM files WHERE source_id = ?", (sid,)).fetchall())
+    refs = {sha: [(p, ids) for p, ids in v if not (p in rels and now.get(p) == sha)] for sha, v in prior.items()}
+    for path, sha in now.items():
+        if path in won and not sha.startswith("stat:"):
             refs.setdefault(sha, []).append((path, frozenset(won[path].acl)))
     leaks = []
     for rel, sha in fresh:
         mine = won.get(rel)
+        wide = [_key_regex(w)[0] for w in mine.widen] if mine is not None else []
         for ref, ids in refs.get(sha, ()):
             if ref == rel or (mine is not None and frozenset(mine.acl) <= ids):
                 continue
-            if mine is not None and ref in won and won[ref].norm in mine.widen:
+            if any(rx.match(norm_path(ref)) for rx in wide):
                 continue
             leaks.append(f"{rel} has the content of {ref}")
             break
     if leaks:
         raise ValueError(f"{len(leaks)} new or edited file(s) have the same content as a labelled file but "
                          f"less restrictive ids ({'; '.join(leaks[:3])}): a copy or a move would be readable by "
-                         "more people than the original; label it as restrictively, or remove the copy")
+                         "more people than the original; label it as restrictively, or remove the copy; if it is "
+                         "meant to be wider, list the original's key in the new file's entry: "
+                         "\"widen\": [\"<key>\"]")
 
 
 def ingest_source(con, name: str, root: Path, public: bool, excludes: list[str], full: bool = False,
@@ -879,7 +906,11 @@ def ingest_source(con, name: str, root: Path, public: bool, excludes: list[str],
                              " and --require-labels is set") + "; restore it, or write {} to open every file")
         labels = []
     before = {r["path"] for r in con.execute("SELECT path FROM files WHERE source_id = ?", (row["id"],))} if row else set()
-    prior = _labelled_digests(con, row["id"]) if row else {}
+    digests = _labelled_digests(con, row["id"]) if row else {}
+    prior = {sha: list(v) for sha, v in digests.items()}
+    if row:
+        for sha, v in _tombstones(con, row["id"]).items():
+            prior.setdefault(sha, []).extend(v)
     won, matched, over, dead = resolve_labels(labels, rels, before, lambda: disk_files(root))
     warnings += [f"key {k!r} matches no file on disk; its entry labels nothing (delete it only if the file is really "
                  "gone; if it was renamed or moved, move the key to the new path)" for k in dead]
@@ -963,7 +994,9 @@ def ingest_source(con, name: str, root: Path, public: bool, excludes: list[str],
         drop_file(con, old["id"])
         counts["removed"] += 1
     if fresh_files:
-        _refuse_copies(con, sid, won, fresh_files, prior)
+        _refuse_copies(con, sid, won, fresh_files, prior, set(rels))
+    here = {r["path"] for r in con.execute("SELECT path FROM files WHERE source_id = ?", (sid,))}
+    _bury(con, sid, {p: (sha, ids) for sha, v in digests.items() for p, ids in v if p not in here})
     write_labels(con, sid, won)
     n_files, n_chunks = con.execute(
         "SELECT count(DISTINCT f.id), count(c.id) FROM files f LEFT JOIN chunks c ON c.file_id = f.id "

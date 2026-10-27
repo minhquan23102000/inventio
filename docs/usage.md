@@ -175,15 +175,20 @@ matches no file on disk (any regular file counts, a DOCX or a file over the size
 also brings a new file that has no label or ids not within every such key's (what a rename looks like, even
 under a broader folder key or a `*` catch-all: move the key to the new path, delete it only if the file is
 really gone; a dead key alone, such as a labelled file the owner deleted, only warns so a revocation is never
-blocked); a file added or edited in this run whose bytes equal a labelled file's (now or before the run:
-copy then delete, an archived `v1`, a hard link) but whose ids are not within that file's; a
+blocked; `widen` on the new file's entry, naming the dead key, says the file is meant to be wider); a file
+added or edited in this run whose bytes equal a labelled file's in the same source (now, before the run, or
+dropped from the map within 30 days: copy then delete, an archived `v1`, a hard link) but whose ids are not
+within that file's, unless the new file's `widen` names a key matching the other file's path; a
 `.inventio-meta*` file below the root (skipped with a warning in a source that has no labels); **no manifest at all when the source had labels** (deleted or
 skipped by a copy; write `{}` to say every file is open), or with `init --require-labels`, always.
 Symbolic links are not indexed in a source with labels (or `--require-labels`, which a later `sync` keeps
 applying); elsewhere they are indexed as files. A first `init` that fails leaves an empty source with its
 `sync_error`, which `sync` retries. A run that succeeds keeps its warnings (dead keys, `override:` lines) in
-`sync_warning`, shown by `sources` and `sources --json`, and clears them when it is clean. Not covered: a file
-renamed *and* edited across two runs; keep restricted files under a restricting folder key.
+`sync_warning`, shown by `sources` and `sources --json`, and clears them when it is clean. The copy check is a net for the owner's mistakes, not a leak barrier. Caught: an unedited copy or move
+within the same source (any timing within 30 days), a rename under exact keys. Not caught: an edited copy or
+move out of a folder key (Save As of a PDF, an edit, a CRLF/BOM rewrite), a copy into another source (a `{}`
+source included), anything done outside the documents volume. Keep restricted files under a folder key and
+do not move them out of it; keep restricted material in a source of its own.
 `-w visible:dept:tham-dinh,user:bo@finx.vn` keeps the files with no label and those labelled
 with one of the ids (compared exactly, without case); `visible:-` keeps only the unlabelled. It narrows
 every way into the pool, so a restricted file is neither ranked nor cut into the 15, and the links a hit

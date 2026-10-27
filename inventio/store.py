@@ -72,6 +72,16 @@ CREATE TABLE IF NOT EXISTS file_web (
     kind TEXT NOT NULL,
     item TEXT NOT NULL
 );
+-- (sha1, ids) of a labelled file dropped from the map, kept TOMBSTONE_DAYS days so that a copy of it added in a
+-- later run than the deletion is still compared with the ids it had (ingest._refuse_copies)
+CREATE TABLE IF NOT EXISTS tombstones (
+    source_id INTEGER NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+    path TEXT NOT NULL,
+    sha1 TEXT NOT NULL,
+    ids TEXT NOT NULL,
+    dropped_at TEXT NOT NULL,
+    PRIMARY KEY (source_id, path, sha1)
+);
 CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
     head, body, tokenize = 'unicode61 remove_diacritics 2'
 );

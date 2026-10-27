@@ -1452,6 +1452,70 @@ def test_widen_names_the_keys_it_may_override_and_nothing_else(tmp_path, capsys)
     assert run(capsys, "--db", db, "init", str(root), "--name", "d")[0] == 1
 
 
+@pytest.mark.parametrize("last", [False, True])
+def test_moving_a_file_to_a_wider_folder_needs_widen_and_is_refused_without_it(tmp_path, capsys, last):
+    db = str(tmp_path / "map.db")
+    files = ("ho-so/a.md",) if last else ("ho-so/a.md", "ho-so/b.md")           # last: the move leaves ho-so/ dead
+    manifest = {"ho-so/": {"acl": ["dept:a"]}, "pub/": {"acl": ["dept:a", "dept:b"]}}
+    root = _restricted(tmp_path, manifest, files=files)
+    assert run(capsys, "--db", db, "init", str(root), "--name", "d")[0] == 0
+    (root / "pub").mkdir()
+    (root / "ho-so" / "a.md").rename(root / "pub" / "a.md")
+    code, out = run(capsys, "--db", db, "init", str(root), "--name", "d")
+    assert code == 1 and "widen" in out.err                                         # the message names the way out
+    assert _acl_paths(capsys, db, "dept:b") == set()
+    manifest["pub/"]["widen"] = ["ho-so/"]
+    (root / ".inventio-meta.json").write_text(json.dumps(manifest))
+    assert run(capsys, "--db", db, "init", str(root), "--name", "d")[0] == 0
+    assert _acl_paths(capsys, db, "dept:b") == {"pub/a.md"}
+
+
+def test_a_relabel_and_a_copy_in_one_run_judge_the_file_by_its_label_now(tmp_path, capsys):
+    import shutil
+
+    db = str(tmp_path / "map.db")
+    root = _restricted(tmp_path, {"ho-so/khach-a/x.md": {"acl": ["dept:a"]}, "ho-so/y.md": {"acl": ["dept:a"]}},
+                       files=("ho-so/khach-a/x.md", "ho-so/y.md"))
+    assert run(capsys, "--db", db, "init", str(root), "--name", "d")[0] == 0
+    manifest = {"ho-so/khach-a/": {"acl": ["dept:a", "dept:b"]}, "ho-so/y.md": {"acl": ["dept:a"]}}
+    shutil.copy(root / "ho-so" / "khach-a" / "x.md", root / "ho-so" / "khach-a" / "x2.md")
+    (root / ".inventio-meta.json").write_text(json.dumps(manifest))                  # x.md relabelled wider, and copied
+    assert run(capsys, "--db", db, "init", str(root), "--name", "d")[0] == 0         # x.md's old ids no longer count
+    assert _acl_paths(capsys, db, "dept:b") == {"ho-so/khach-a/x.md", "ho-so/khach-a/x2.md"}
+    shutil.copy(root / "ho-so" / "y.md", root / "ho-so" / "khach-a" / "y2.md")       # a copy of a file that stays narrow
+    code, out = run(capsys, "--db", db, "init", str(root), "--name", "d")
+    assert code == 1 and "ho-so/khach-a/y2.md has the content of ho-so/y.md" in out.err and "widen" in out.err
+    manifest["ho-so/khach-a/"]["widen"] = ["ho-so/y.md"]                             # the way out the message names
+    (root / ".inventio-meta.json").write_text(json.dumps(manifest))
+    assert run(capsys, "--db", db, "init", str(root), "--name", "d")[0] == 0
+
+
+def test_a_copy_added_after_the_original_was_deleted_in_another_run_is_refused_for_30_days(tmp_path, capsys):
+    import shutil
+    import sqlite3
+
+    db = str(tmp_path / "map.db")
+    root = _restricted(tmp_path, {"ho-so/": {"acl": ["dept:a"]}, "*": {"acl": ["dept:a", "dept:b"]}},
+                       files=("ho-so/a.md", "ho-so/b.md"))
+    assert run(capsys, "--db", db, "init", str(root), "--name", "d")[0] == 0
+    shutil.copy(root / "ho-so" / "a.md", tmp_path / "keep.txt")                      # the bytes, kept outside the source
+    (root / "ho-so" / "a.md").unlink()
+    assert run(capsys, "--db", db, "init", str(root), "--name", "d")[0] == 0         # run 2: the original is gone
+    (tmp_path / "keep.txt").rename(root / "a-copy.md")                                   # run 3: the unedited copy arrives
+    code, out = run(capsys, "--db", db, "init", str(root), "--name", "d")
+    assert code == 1 and "a-copy.md has the content of ho-so/a.md" in out.err
+    assert _acl_paths(capsys, db, "dept:b") == set()
+    con = sqlite3.connect(db)                                                        # past the expiry it is let in
+    con.execute("UPDATE tombstones SET dropped_at = datetime('now', '-31 days')")
+    con.commit()
+    con.close()
+    assert run(capsys, "--db", db, "init", str(root), "--name", "d")[0] == 0
+    assert _acl_paths(capsys, db, "dept:b") == {"a-copy.md"}
+    con = sqlite3.connect(db)
+    assert con.execute("SELECT count(*) FROM tombstones").fetchone()[0] == 0        # expired rows are deleted
+    con.close()
+
+
 def test_warnings_are_kept_on_the_source_and_cleared_by_a_clean_run(tmp_path, capsys):
     db = str(tmp_path / "map.db")
     root = _restricted(tmp_path, {"ho-so/a.md": {"acl": ["dept:a"]}}, files=("ho-so/a.md", "open.md"))
@@ -1534,4 +1598,4 @@ def test_stat_digests_are_not_content(tmp_path):
     root.mkdir()
     (root / ".inventio-meta.json").write_text(json.dumps({"ho-so/": {"acl": ["dept:t"]}}))
     won = {"ho-so/a.csv": read_labels(root)[0]}
-    _refuse_copies(con, sid, won, [("b.csv", "stat:1:1")], {})                       # no refusal
+    _refuse_copies(con, sid, won, [("b.csv", "stat:1:1")], {}, {"b.csv"})                       # no refusal
