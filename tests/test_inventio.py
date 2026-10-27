@@ -857,3 +857,123 @@ def test_serve_http_read_returns_a_files_chunks_exactly_and_refuses_what_it_cann
     finally:
         proc.terminate()
         proc.wait(timeout=30)
+
+
+def _labelled_dir(root):
+    write(root, "open.md", "# Open\nThe partner fee is public knowledge.\n")
+    write(root, "deals/secret.md", "# Secret\nThe partner fee is 412 billion, partner fee partner fee.\n")
+    write(root, "deals/other.md", "# Other\nThe partner fee for the second deal.\n")
+    (root / ".inventio-meta.json").write_text(json.dumps(
+        {"deals/*": {"acl": ["dept:legal"]}, "deals/secret.md": {"acl": ["dept:appraisal", "user:an@x.vn"]}}))
+
+
+def test_manifest_labels_restrict_search_before_ranking_and_a_removed_label_disappears(tmp_path, capsys):
+    """`.inventio-meta.json` writes acl labels at ingest; `-w visible:...` keeps only unlabelled files and
+    files labelled with one of the ids, before the pool is cut (k=1 returns the open file, not nothing)."""
+    from inventio.ingest import MANIFEST
+
+    db = str(tmp_path / "map.db")
+    root = tmp_path / "d"
+    _labelled_dir(root)
+    assert run(capsys, "--db", db, "init", str(root), "--name", "d")[0] == 0
+
+    def paths(visible, k="5"):
+        code, out = run(capsys, "--db", db, "query", "partner fee", "-w", f"visible:{visible}", "--json", "-k", k)
+        assert code == 0
+        return {r["path"] for r in json.loads(out.out)}
+
+    assert paths("-") == {"open.md"}
+    assert paths("dept:nobody,user:bo@x.vn") == {"open.md"}
+    assert paths("dept:legal") == {"open.md", "deals/other.md"}          # the last matching entry wins
+    assert paths("dept:APPRAISAL") == {"open.md", "deals/secret.md"}     # ids compare without case
+    assert paths("user:an@x.vn,dept:legal") == {"open.md", "deals/other.md", "deals/secret.md"}
+    assert paths("dept:nobody", k="1") == {"open.md"}                    # the cut falls on what is visible
+    code, out = run(capsys, "--db", db, "query", "partner fee", "--json", "-k", "5")
+    assert {r["path"] for r in json.loads(out.out)} == {"open.md", "deals/secret.md", "deals/other.md"}
+    assert not any(MANIFEST in r["path"] for r in json.loads(out.out))
+    code, out = run(capsys, "--db", db, "query", "partner fee", "-w", "path:*meta*", "--json")
+    assert json.loads(out.out) == []                                     # the manifest is not indexed
+
+    (root / MANIFEST).write_text(json.dumps({"deals/secret.md": {"acl": ["dept:appraisal"]}}))   # re-ingest, files untouched
+    assert run(capsys, "--db", db, "init", str(root), "--name", "d")[0] == 0
+    assert paths("dept:nobody") == {"open.md", "deals/other.md"}         # deals/* label gone
+    (root / MANIFEST).unlink()
+    assert run(capsys, "--db", db, "init", str(root), "--name", "d")[0] == 0
+    assert paths("dept:nobody") == {"open.md", "deals/other.md", "deals/secret.md"}
+
+
+def test_a_bad_manifest_stops_the_ingest_rather_than_publish(tmp_path):
+    from inventio.ingest import read_labels
+
+    root = tmp_path / "d"
+    root.mkdir()
+    for bad in ("{", "[]", json.dumps({"a.md": {"acl": []}}), json.dumps({"a.md": ["dept:x"]}),
+                json.dumps({"a.md": {"acl": [3]}})):
+        (root / ".inventio-meta.json").write_text(bad)
+        with pytest.raises(ValueError):
+            read_labels(root)
+
+
+def test_read_refuses_a_labelled_file_like_a_missing_one(tmp_path, capsys):
+    from inventio import read
+
+    db = str(tmp_path / "map.db")
+    root = tmp_path / "d"
+    _labelled_dir(root)
+    assert run(capsys, "--db", db, "init", str(root), "--name", "d")[0] == 0
+    con = cli.connect(Path(db))
+    try:
+        assert read.indexed_chunks(con, "d", "deals/secret.md")[0] == ["dept:appraisal", "user:an@x.vn"]   # no filter: as before
+        assert read.indexed_chunks(con, "d", "deals/secret.md", visible=["dept:legal"]) is None
+        assert read.indexed_chunks(con, "d", "deals/secret.md", visible=[]) is None
+        assert read.indexed_chunks(con, "d", "deals/secret.md", visible=["user:AN@x.vn"]) is not None
+        assert read.indexed_chunks(con, "d", "open.md", visible=[])[0] == []
+        assert read.indexed_chunks(con, "d", "gone.md", visible=["dept:legal"]) is None
+    finally:
+        con.close()
+
+
+def test_serve_http_read_and_query_honour_visible(tmp_path, capsys, monkeypatch):
+    import os
+    import subprocess
+    import sys
+    import time
+    import urllib.error
+    import urllib.request
+
+    from inventio.serve import http_state_file
+
+    monkeypatch.setenv("INVENTIO_RANKER", "none")
+    db = str(tmp_path / "map.db")
+    _labelled_dir(tmp_path / "d")
+    assert run(capsys, "--db", db, "init", str(tmp_path / "d"), "--name", "d")[0] == 0
+    proc = subprocess.Popen([sys.executable, "-m", "inventio.cli", "--db", db, "serve", "--http", "0"],
+                            env=os.environ.copy(), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    try:
+        deadline = time.time() + 60
+        while not http_state_file().exists():
+            assert proc.poll() is None and time.time() < deadline, proc.stderr.read().decode()
+            time.sleep(0.1)
+        state = json.loads(http_state_file().read_text())
+
+        def post(path, body):
+            req = urllib.request.Request(state["url"] + path, json.dumps(body).encode(),
+                                         {"content-type": "application/json", "authorization": f"Bearer {state['token']}"})
+            try:
+                with urllib.request.urlopen(req, timeout=30) as r:
+                    return r.status, json.loads(r.read())
+            except urllib.error.HTTPError as e:
+                return e.code, json.loads(e.read())
+
+        secret = {"source": "d", "path": "deals/secret.md"}
+        assert post("/read", {**secret, "visible": ["dept:legal"]})[0] == 404
+        assert post("/read", {**secret, "visible": []})[0] == 404
+        assert post("/read", {**secret, "visible": [3]})[0] == 400
+        code, body = post("/read", {**secret, "visible": ["dept:appraisal"]})
+        assert code == 200 and body["acl"] == ["dept:appraisal", "user:an@x.vn"]
+        assert post("/read", {"source": "d", "path": "open.md", "visible": []})[1]["acl"] == []
+        code, rows = post("/query", {"text": "partner fee", "where": "visible:dept:legal", "k": 5})
+        assert code == 200 and {r["path"] for r in rows} == {"open.md", "deals/other.md"}
+    finally:
+        proc.terminate()
+        proc.wait(timeout=30)

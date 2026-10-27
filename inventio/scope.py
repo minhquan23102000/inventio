@@ -14,6 +14,11 @@ is a field a connector wrote for its items (file_meta): Jira status, assignee, l
 Confluence labels, author, updated; GitHub state, author, labels, updated. A chunk whose file has
 no such field does not match a term on it, and does match its negation.
 
+`visible:a,b` is the access check: a file with no `acl` label (written from `.inventio-meta.json`, see
+ingest.read_labels), or one labelled with a or b. A principal's ids go here (`visible:dept:phap-che,user:an@x.vn`),
+and `visible:-` (no id is ever `-`) is the files nobody restricted. Compared exactly, not as a pattern. Unlike
+a search term it never leaves a file out for being absent: it is the one term whose miss is a leak.
+
 Every path into the pool (BM25, named files and definitions, predicted types, categories,
 neighbours, links) is narrowed by the same scope, so no candidate outside it is ever ranked.
 """
@@ -24,7 +29,7 @@ import shlex
 from dataclasses import dataclass, field
 
 BUILTIN = {"source": "s.name", "kind": "s.kind", "type": "f.type", "lang": "f.lang", "path": "f.path",
-           "category": None}
+           "category": None, "visible": None}
 OPS = (">=", "<=", ">", "<")
 KEY = re.compile(r"^[a-z_][\w.\-]*$")
 RELATIVE = re.compile(r"^-(\d+)([dw])$")
@@ -124,6 +129,11 @@ def _match(col: str, values: list[str]) -> tuple[str, list]:
 
 
 def _clause(t: Term, chunks: bool) -> tuple[str, list]:
+    if t.key == "visible":
+        marks = ", ".join("?" * len(t.values))
+        return ("NOT EXISTS (SELECT 1 FROM file_meta a WHERE a.file_id = f.id AND a.key = 'acl') "
+                "OR f.id IN (SELECT a.file_id FROM file_meta a WHERE a.key = 'acl' "
+                f"AND lower(a.value) IN ({marks}))"), [v.lower() for v in t.values]
     if t.key == "category":
         m, a = _match("cc.category", t.values)
         kept = f"SELECT cc.chunk_id FROM chunk_categories cc WHERE cc.kept = 1 AND ({m})"

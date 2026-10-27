@@ -6,6 +6,11 @@ the ranker models are on [Hugging Face](https://huggingface.co/minhquan2310/disp
 ## Unreleased
 
 ### Added
+- Per-file access labels: `.inventio-meta.json` at a directory source's root maps a path or glob to
+  `{"acl": ["dept:...", "user:..."]}`; ingest writes them as the `acl` field (replaced on every run), and
+  the manifest is not indexed. `-w visible:ID,ID` keeps unlabelled files and those labelled with one of
+  the ids, before ranking; `POST /read` takes `visible` (a labelled file none matches is a 404) and
+  returns the file's `acl`.
 - `inventio serve --http PORT`: a server that runs until stopped, loads the model at start and answers
   `POST /query` (`{"text", "where", "source", "k", "pool", "ranker", ...}`) with exactly the rows
   `query --json` prints, on 127.0.0.1 only, for a program that asks many questions (a portal, an agent

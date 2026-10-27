@@ -6,6 +6,7 @@ definitions, links. No model is asked what code can know.
 import ast
 import fnmatch
 import hashlib
+import json
 import keyword
 import os
 import re
@@ -43,6 +44,7 @@ TREE_LANGS = {
 }
 SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv", "dist", "build", ".mypy_cache", ".pytest_cache",
              ".inventio"}
+MANIFEST = ".inventio-meta.json"   # the data owner's labels for the files beside it; never indexed itself
 MAX_FILE_BYTES = 1_000_000
 MAX_PDF_BYTES = 50_000_000  # a PDF's text is a small part of its bytes (fonts, images)
 
@@ -80,7 +82,7 @@ def list_files(root: Path, excludes: list[str]) -> list[str]:
                 rels.append(Path(dirpath, name).relative_to(root).as_posix())
     keep = []
     for rel in rels:
-        if Path(rel).suffix.lower() not in LANGS:
+        if rel == MANIFEST or Path(rel).suffix.lower() not in LANGS:
             continue
         if any(fnmatch.fnmatch(rel, pat) for pat in excludes):
             continue
@@ -95,6 +97,50 @@ def list_files(root: Path, excludes: list[str]) -> list[str]:
             continue
         keep.append(rel)
     return sorted(set(keep))
+
+
+def read_labels(root: Path) -> list[tuple[str, list[str]]]:
+    """The access labels the data owner wrote in `root/.inventio-meta.json`, as [(pattern, acl values)] in file order.
+
+    {"hd-doi-tac/HD-2026-047-*.md": {"acl": ["dept:tham-dinh", "user:an@finx.vn"]}}
+
+    A key is a path relative to the source root, or a glob (`*` also crosses `/`). No file: no labels. A
+    manifest that cannot be read, or an entry whose `acl` is not a non-empty list of strings, raises ValueError:
+    ingesting on regardless would index a file its owner meant to restrict as readable by everyone."""
+    path = root / MANIFEST
+    if not path.is_file():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        raise ValueError(f"{path}: {e}") from None
+    if not isinstance(data, dict):
+        raise ValueError(f"{path}: expected an object mapping a path or glob to {{\"acl\": [...]}}")
+    labels = []
+    for pattern, entry in data.items():
+        acl = entry.get("acl") if isinstance(entry, dict) else None
+        if not isinstance(acl, list) or not acl or not all(isinstance(v, str) and v.strip() for v in acl):
+            raise ValueError(f"{path}: {pattern!r}: acl must be a non-empty list of ids "
+                             "(dept:<id>, user:<email>); delete the entry to leave the file open")
+        labels.append((pattern, [v.strip() for v in acl]))
+    return labels
+
+
+def acl_of(rel: str, labels: list[tuple[str, list[str]]]) -> list[str]:
+    """The acl of a file: that of the last entry of the manifest whose path or glob matches it; [] = unlabelled."""
+    found: list[str] = []
+    for pattern, acl in labels:
+        if rel == pattern or fnmatch.fnmatchcase(rel, pattern):
+            found = acl
+    return found
+
+
+def write_labels(con, sid: int, labels: list[tuple[str, list[str]]]) -> None:
+    """The source's `acl` rows of file_meta, replaced by the manifest's: a label removed from it is gone."""
+    con.execute("DELETE FROM file_meta WHERE key = 'acl' AND file_id IN (SELECT id FROM files WHERE source_id = ?)", (sid,))
+    rows = [(r["id"], "acl", v) for r in con.execute("SELECT id, path FROM files WHERE source_id = ?", (sid,))
+            for v in acl_of(r["path"], labels)]
+    con.executemany("INSERT INTO file_meta (file_id, key, value) VALUES (?, ?, ?)", rows)
 
 
 def decode_text(data: bytes) -> str | None:
@@ -617,6 +663,7 @@ def ingest_source(con, name: str, root: Path, public: bool, excludes: list[str],
                              "EXISTS (SELECT 1 FROM file_texts t WHERE t.file_id = files.id) AS has_text "
                              "FROM files WHERE source_id = ?", (sid,))
     }
+    labels = read_labels(root)   # before any file is touched: a bad manifest stops the ingest whole
     counts = {"added": 0, "changed": 0, "removed": 0, "unchanged": 0}
     for rel in list_files(root, excludes):
         path = root / rel
@@ -671,6 +718,7 @@ def ingest_source(con, name: str, root: Path, public: bool, excludes: list[str],
     for old in known.values():  # indexed before, gone from disk or now excluded
         drop_file(con, old["id"])
         counts["removed"] += 1
+    write_labels(con, sid, labels)
     n_files, n_chunks = con.execute(
         "SELECT count(DISTINCT f.id), count(c.id) FROM files f LEFT JOIN chunks c ON c.file_id = f.id "
         "WHERE f.source_id = ?",

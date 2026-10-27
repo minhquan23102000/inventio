@@ -148,3 +148,20 @@ Every map has `source`, `kind` (`dir`, `confluence`, `jira`, `github`, `sql`, `k
 term on it and does match its negation, so `-status:Done` keeps the code. A key the map does not
 hold is an error that lists the keys it does; a scope with nothing in it says so instead of "no
 match". `--source NAME` is `-w source:NAME`.
+
+**Access labels.** The owner of a directory source can restrict single files by writing
+`.inventio-meta.json` at its root (never indexed itself), a map from a path or glob (`*` also crosses
+`/`) to its labels; the last entry matching a file wins:
+
+```json
+{"hop-dong/HD-2026-047-*.md": {"acl": ["dept:tham-dinh", "user:an@finx.vn"]}}
+```
+
+`init`/`sync` write them as the `acl` field, replacing the old ones on every run (a label removed from
+the manifest is gone at the next run, though no file changed). A bad manifest, or an empty `acl`, stops
+the ingest. `-w visible:dept:tham-dinh,user:bo@finx.vn` keeps the files with no label and those labelled
+with one of the ids (compared exactly, without case); `visible:-` keeps only the unlabelled. It narrows
+every way into the pool, so a restricted file is neither ranked nor cut into the 15. A caller that
+enforces access passes the asker's ids with every question. `POST /read` takes `"visible": [ids]` and
+answers a file the ids do not match with the 404 of a file that is not there; its answer carries the
+file's `acl`.

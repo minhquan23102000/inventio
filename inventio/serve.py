@@ -264,7 +264,8 @@ def http_state_file() -> Path:
 QUERY_FIELDS = {"text": str, "where": str, "source": list, "k": int, "pool": int, "ranker": str,
                 "no_links": bool, "no_symbols": bool, "neighbours": bool, "types": bool, "facts": bool,
                 "locations_only": bool, "map": str}
-READ_FIELDS = {"source": str, "path": str, "start_line": int, "end_line": int, "map": str}
+READ_FIELDS = {"source": str, "path": str, "start_line": int, "end_line": int, "map": str,
+               "visible": list}
 ENDPOINTS = "GET /health, GET /sources, POST /query or POST /read"
 
 
@@ -375,7 +376,9 @@ def serve_http(port: int, maps: dict[str, str | None]) -> int:
             return name
 
         def _read(self):
-            """POST /read: one file's chunks from the map, in line order (or those overlapping the lines asked)."""
+            """POST /read: one file's chunks and `acl` from the map, in line order (or those overlapping the lines asked).
+            `visible` (a list of ids, as the `visible:` filter takes them) refuses a labelled file none of them
+            matches with the 404 of a file that is not there; without it the file is read whatever its label."""
             try:
                 body = json.loads(self.rfile.read(int(self.headers.get("content-length", 0))) or b"{}")
                 if not isinstance(body, dict):
@@ -386,7 +389,10 @@ def serve_http(port: int, maps: dict[str, str | None]) -> int:
                 for key, typ in READ_FIELDS.items():
                     v = body.get(key)
                     if v is not None and (not isinstance(v, typ) or isinstance(v, bool)):
-                        raise ValueError(f"{key} must be a {'string' if typ is str else 'whole number'}")
+                        raise ValueError(f"{key} must be a "
+                                         f"{ {str: 'string', list: 'list of strings'}.get(typ, 'whole number') }")
+                if not all(isinstance(v, str) for v in body.get("visible") or []):
+                    raise ValueError("visible must be a list of strings")
                 for key in ("source", "path"):
                     if not body.get(key):
                         raise ValueError(f"{key} is required")
@@ -401,14 +407,15 @@ def serve_http(port: int, maps: dict[str, str | None]) -> int:
             try:
                 con = cli.connect(Path(maps[name]) if maps[name] else None)
                 try:
-                    chunks = read.indexed_chunks(con, body["source"], body["path"], start, end)
+                    found = read.indexed_chunks(con, body["source"], body["path"], start, end, body.get("visible"))
                 finally:
                     con.close()
             except Exception as e:
                 return self._reply(500, {"error": f"{type(e).__name__}: {e}"})
-            if chunks is None:
+            if found is None:   # missing, or refused by `visible`: the same answer
                 return self._reply(404, {"error": f"{body['source']} has no file {body['path']}"})
-            self._reply(200, {"source": body["source"], "path": body["path"], "chunks": chunks})
+            acl, chunks = found
+            self._reply(200, {"source": body["source"], "path": body["path"], "acl": acl, "chunks": chunks})
 
         def do_GET(self):
             if self.path not in ("/health", "/sources"):

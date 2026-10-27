@@ -31,19 +31,33 @@ class Passage:
                 "url": self.url, "version": self.version, "text": "\n".join(self.lines)}
 
 
-def indexed_chunks(con, source: str, path: str, start: int | None = None, end: int | None = None) -> list[dict] | None:
-    """The chunks the map holds for one file, in line order, as {heading_path, start_line, end_line, text}; with
-    `start`/`end`, only those that overlap those lines. None when the map has no such file. The source name is
-    matched exactly (`=`, not a scope pattern), no url or link is computed: this is what `serve --http`'s
-    POST /read answers."""
+def file_acl(con, source: str, path: str) -> list[str] | None:
+    """The `acl` labels of one indexed file ([] = unlabelled); None when the map has no such file."""
     file = con.execute("SELECT f.id FROM files f JOIN sources s ON s.id = f.source_id WHERE s.name = ? AND f.path = ?",
                        (source, path)).fetchone()
     if not file:
         return None
+    return [r[0] for r in con.execute("SELECT value FROM file_meta WHERE file_id = ? AND key = 'acl' ORDER BY value",
+                                      (file["id"],))]
+
+
+def indexed_chunks(con, source: str, path: str, start: int | None = None, end: int | None = None,
+                   visible: list[str] | None = None) -> tuple[list[str], list[dict]] | None:
+    """(acl, chunks) of one file: the chunks the map holds for it, in line order, as {heading_path, start_line,
+    end_line, text}; with `start`/`end`, only those that overlap those lines. None when the map has no such
+    file, and, when `visible` is given (a principal's ids, as scope's `visible:` term takes them), when the file
+    carries an `acl` label none of them matches: a file refused looks exactly like a file that is not there.
+    The source name is matched exactly (`=`, not a scope pattern), no url or link is computed: this is what
+    `serve --http`'s POST /read answers."""
+    acl = file_acl(con, source, path)
+    if acl is None or (visible is not None and acl and not {v.lower() for v in acl} & {v.lower() for v in visible}):
+        return None
+    fid = con.execute("SELECT f.id FROM files f JOIN sources s ON s.id = f.source_id WHERE s.name = ? AND f.path = ?",
+                      (source, path)).fetchone()["id"]
     rows = con.execute(
         "SELECT heading_path, start_line, end_line, text FROM chunks WHERE file_id = ? AND end_line >= ? AND start_line <= ? "
-        "ORDER BY start_line, end_line, id", (file["id"], start or 1, end if end is not None else 2**62)).fetchall()
-    return [dict(r) for r in rows]
+        "ORDER BY start_line, end_line, id", (fid, start or 1, end if end is not None else 2**62)).fetchall()
+    return acl, [dict(r) for r in rows]
 
 
 def resolve(con, target: str) -> Passage:
