@@ -6,6 +6,12 @@ the ranker models are on [Hugging Face](https://huggingface.co/minhquan2310/disp
 ## Unreleased
 
 ### Added
+- Access labels, second pass: a key is ranked by its literal characters, and a winner whose ids are not a
+  subset of an overridden key's is refused unless the entry says `"widen": true`; a key matching no file on
+  disk (any regular file counts) is refused only beside a new unlabelled file, otherwise a warning, and all
+  dead keys are listed at once; links obey only the `visible` and `source` terms; a nested manifest and
+  symlinks are refused or skipped only in a source with labels or `--require-labels` (kept on the source and
+  applied by `sync`); a first `init` that fails leaves a source row carrying the `sync_error`.
 - Access-label hardening: no manifest is refused when the source had labels (`{}` opens every file),
   and `init --require-labels` refuses a folder without one; keys are compared in NFC, case-folded, with
   `./`, `/`, `\\`, trailing `/` and bare folder names understood, `**/` matching the top level, and a key

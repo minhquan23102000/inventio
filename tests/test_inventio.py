@@ -871,7 +871,8 @@ def _labelled_dir(root):
     write(root, "deals/secret.md", "# Secret\nThe partner fee is 412 billion, partner fee partner fee.\n")
     write(root, "deals/other.md", "# Other\nThe partner fee for the second deal.\n")
     (root / ".inventio-meta.json").write_text(json.dumps(
-        {"deals/*": {"acl": ["dept:legal"]}, "deals/secret.md": {"acl": ["dept:appraisal", "user:an@x.vn"]}}))
+        {"deals/*": {"acl": ["dept:legal"]},
+         "deals/secret.md": {"acl": ["dept:appraisal", "user:an@x.vn"], "widen": True}}))
 
 
 def test_manifest_labels_restrict_search_before_ranking_and_a_removed_label_disappears(tmp_path, capsys):
@@ -1075,6 +1076,7 @@ def test_a_bracket_in_a_key_is_literal_and_a_key_matching_no_file_is_refused(tmp
     (root / ".inventio-meta.json").write_text(json.dumps({"a [1].md": {"acl": ["dept:a"]}}))
     assert run(capsys, "--db", db, "init", str(root), "--name", "d")[0] == 0
     assert _acl_paths(capsys, db) == {"a 1.md"}                  # `[1]` is not a character class
+    write(root, "new.md", "# N\nThe partner fee.\n")             # a dead key beside a new unlabelled file: a rename
     for dead in ("a [2].md", "renamed.md", "nowhere/", "x/*.md"):
         (root / ".inventio-meta.json").write_text(json.dumps({"a [1].md": {"acl": ["dept:a"]}, dead: {"acl": ["dept:b"]}}))
         code, out = run(capsys, "--db", db, "init", str(root), "--name", "d")
@@ -1110,6 +1112,124 @@ def test_an_exact_path_beats_a_glob_listed_after_it(tmp_path, capsys):
                        files=("ho-so/Khách-A/HD-047.md", "open.md"))
     assert run(capsys, "--db", db, "init", str(root), "--name", "d")[0] == 0
     assert _acl_paths(capsys, db, "dept:b") == {"open.md"}
+
+
+@pytest.mark.parametrize("order", [0, 1])
+def test_a_narrower_file_key_beats_a_wider_folder_in_either_order(tmp_path, capsys, order):
+    db = str(tmp_path / "map.db")
+    entries = [("ho-so/", {"acl": ["dept:tham-dinh", "dept:phap-che"]}), ("**/HD-2026-047*", {"acl": ["dept:tham-dinh"]})]
+    root = _restricted(tmp_path, json.dumps(dict(entries[::1 - 2 * order])),
+                       files=("ho-so/HD-2026-047.md", "ho-so/other.md"))
+    assert run(capsys, "--db", db, "init", str(root), "--name", "d")[0] == 0
+    assert _acl_paths(capsys, db, "dept:phap-che") == {"ho-so/other.md"}
+    assert _acl_paths(capsys, db, "dept:tham-dinh") == {"ho-so/HD-2026-047.md", "ho-so/other.md"}
+
+
+@pytest.mark.parametrize("order", [0, 1])
+def test_a_key_that_would_widen_access_is_refused_unless_the_entry_says_widen(tmp_path, capsys, order):
+    db = str(tmp_path / "map.db")
+    entries = [("ho-so/", {"acl": ["dept:tham-dinh"]}), ("**/HD-2026-047*", {"acl": ["dept:tham-dinh", "dept:phap-che"]})]
+    root = _restricted(tmp_path, json.dumps(dict(entries[::1 - 2 * order])),
+                       files=("ho-so/HD-2026-047.md", "ho-so/other.md"))
+    code, out = run(capsys, "--db", db, "init", str(root), "--name", "d")
+    assert code == 1 and "wider access" in out.err and "HD-2026-047*" in out.err
+    assert _acl_paths(capsys, db, "dept:phap-che") == set()                       # nothing was indexed
+    entries[1][1]["widen"] = True
+    (root / ".inventio-meta.json").write_text(json.dumps(dict(entries[::1 - 2 * order])))
+    assert run(capsys, "--db", db, "init", str(root), "--name", "d")[0] == 0
+    assert _acl_paths(capsys, db, "dept:phap-che") == {"ho-so/HD-2026-047.md"}
+    (root / ".inventio-meta.json").write_text(json.dumps({"a.md": {"acl": ["dept:a"], "widen": "yes"}}))
+    assert run(capsys, "--db", db, "init", str(root), "--name", "d")[0] == 1
+
+
+def test_a_key_ranks_by_its_literal_characters_not_its_prefix(tmp_path):
+    from inventio.ingest import read_labels, resolve_labels
+
+    root = tmp_path / "d"
+    root.mkdir()
+    (root / ".inventio-meta.json").write_text(json.dumps({
+        "ho-so/": {"acl": ["dept:a", "dept:b"]}, "**/HD-2026-047*": {"acl": ["dept:a"]}}))
+    labels = read_labels(root)
+    assert [l.literal for l in labels] == [6, 11]
+    won, *_ = resolve_labels(labels, ["ho-so/HD-2026-047.md"])
+    assert won["ho-so/HD-2026-047.md"].key == "**/HD-2026-047*"
+
+
+def test_a_deleted_labelled_file_or_a_labelled_docx_does_not_block_the_source(tmp_path, capsys):
+    db = str(tmp_path / "map.db")
+    root = _restricted(tmp_path, {"ho-so/a.md": {"acl": ["dept:a"]}, "ho-so/b.md": {"acl": ["dept:a", "dept:b"]},
+                                  "ho-so/hd.docx": {"acl": ["dept:a"]}}, files=("ho-so/a.md", "ho-so/b.md", "open.md"))
+    (root / "ho-so" / "hd.docx").write_bytes(b"PK\x03\x04 not indexed")
+    code, out = run(capsys, "--db", db, "init", str(root), "--name", "d")
+    assert code == 0 and "warning" not in out.err                                   # a DOCX key still names a file
+    assert _acl_paths(capsys, db, "dept:b") == {"open.md", "ho-so/b.md"}
+    (root / "ho-so" / "a.md").unlink()                                              # the owner deletes a labelled file
+    (root / ".inventio-meta.json").write_text(json.dumps({"ho-so/a.md": {"acl": ["dept:a"]},
+                                                          "ho-so/b.md": {"acl": ["dept:a"]}}))   # and narrows another
+    code, out = run(capsys, "--db", db, "init", str(root), "--name", "d")
+    assert code == 0 and "warning" in out.err and "'ho-so/a.md'" in out.err and "'ho-so/hd.docx'" not in out.err
+    assert _acl_paths(capsys, db, "dept:b") == {"open.md"}                          # the narrowing took effect
+    assert _acl_paths(capsys, db, "dept:a") == {"open.md", "ho-so/b.md"}
+
+
+def test_dead_keys_with_a_new_unlabelled_file_are_all_reported_at_once(tmp_path, capsys):
+    db = str(tmp_path / "map.db")
+    root = _restricted(tmp_path, {"ho-so/a.md": {"acl": ["dept:a"]}, "ho-so/b.md": {"acl": ["dept:a"]}},
+                       files=("ho-so/a.md", "ho-so/b.md", "open.md"))
+    assert run(capsys, "--db", db, "init", str(root), "--name", "d")[0] == 0
+    (root / "ho-so" / "a.md").rename(root / "ho-so" / "a2.md")                      # a rename: the new file is open
+    (root / "ho-so" / "b.md").rename(root / "ho-so" / "b2.md")
+    code, out = run(capsys, "--db", db, "init", str(root), "--name", "d")
+    assert code == 1 and "'ho-so/a.md'" in out.err and "'ho-so/b.md'" in out.err and "new file" in out.err
+    assert _acl_paths(capsys, db, "dept:b") == {"open.md"}                          # the old copy and labels stay
+
+
+def test_require_labels_is_kept_on_the_source_for_sync_and_a_first_failure_shows_in_sources(tmp_path, capsys):
+    db = str(tmp_path / "map.db")
+    root = tmp_path / "d"
+    write(root, "a.md", "# A\nThe partner fee.\n")
+    (root / ".inventio-meta.json").write_text("{bad")
+    assert run(capsys, "--db", db, "init", str(root), "--name", "d", "--require-labels")[0] == 1
+    rows = json.loads(run(capsys, "--db", db, "sources", "--json")[1].out)         # a first ingest is not invisible
+    assert [r["name"] for r in rows] == ["d"] and "not indexed" in rows[0]["sync_error"] and rows[0]["files"] == 0
+    (root / ".inventio-meta.json").write_text("{}")
+    assert run(capsys, "--db", db, "init", str(root), "--name", "d", "--require-labels")[0] == 0
+    (root / ".inventio-meta.json").unlink()
+    code, out = run(capsys, "--db", db, "sync")                                    # no flag given: the source's own
+    assert code == 2 and "--require-labels" in out.err
+    write(root, "b.md", "# B\nThe partner fee.\n")
+    (root / ".inventio-meta.json").write_text("{}")
+    assert run(capsys, "--db", db, "sync")[0] == 0
+    other = tmp_path / "e"
+    write(other, "a.md", "# A\nThe partner fee.\n")
+    assert run(capsys, "--db", db, "init", str(other), "--name", "e")[0] == 0
+    assert run(capsys, "--db", db, "sync", "--source", "e")[0] == 0                # without the flag: as before
+
+
+def test_links_follow_visible_and_source_only_not_the_other_filters(tmp_path, capsys):
+    db = str(tmp_path / "map.db")
+    root = tmp_path / "d"
+    write(root, "a.md", "# A\nSee [the deal](b.md) for the partner fee.\n")
+    write(root, "b.md", "# B\nThe partner fee deal.\n")
+    assert run(capsys, "--db", db, "init", str(root), "--name", "d")[0] == 0
+    rows = json.loads(run(capsys, "--db", db, "query", "partner fee", "--json", "-w", "path:a.md")[1].out)
+    assert [r["path"] for r in rows] == ["a.md"] and any(l["coord"].startswith("b.md") for l in rows[0]["links"])
+    rows = json.loads(run(capsys, "--db", db, "query", "partner fee", "--json", "-w", "path:a.md source:other")[1].out)
+    assert rows == []
+
+
+def test_a_source_without_labels_skips_a_nested_manifest_with_a_warning_and_indexes_symlinks(tmp_path, capsys):
+    db = str(tmp_path / "map.db")
+    root = tmp_path / "d"
+    write(root, "a.md", "# A\nThe partner fee.\n")
+    write(root, "fixture/.inventio-meta.json", "{}")
+    write(root, "docs/real.md", "# R\nThe partner fee for the linked page.\n")
+    (root / "linked.md").symlink_to(root / "docs" / "real.md")
+    code, out = run(capsys, "--db", db, "init", str(root), "--name", "d")
+    assert code == 0 and "warning" in out.err and "fixture/.inventio-meta.json" in out.err
+    assert "linked.md" in _acl_paths(capsys, db)
+    code, out = run(capsys, "--db", db, "init", str(root), "--name", "e", "--require-labels")   # a labelled source refuses
+    assert code == 1 and "below the root" in out.err
 
 
 @pytest.mark.parametrize("bad", [

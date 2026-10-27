@@ -57,7 +57,8 @@ def cmd_init(args) -> int:
             links = rebuild_links(con)
             con.execute("UPDATE sources SET sync_error = NULL, sync_error_at = NULL WHERE name = ?", (name,))
     except ValueError as e:   # the old copy and labels stay; the reason is kept on the source, where `sources` shows it
-        _sync_failed(con, name, f"not indexed: {e}")
+        _sync_failed(con, name, f"not indexed: {e}", root=root.resolve(), public=args.public,
+                     excludes=args.exclude or [], require_labels=args.require_labels)
         return 1
     _report(stats, links, t, args)
     if args.facts:
@@ -117,6 +118,8 @@ def _report(stats: dict, links: dict, t: float, args) -> None:
         print(f"  label {l['key']!r}: {l['files']} file(s) -> {', '.join(l['acl'])}")
     for o in stats.get("overrides", []):
         print(f"  override: {o['path']} takes {o['key']!r} over {o['over']!r}")
+    for w in stats.get("warnings", []):
+        print(f"  warning: {w}", file=sys.stderr)
 
 
 def cmd_sync(args) -> int:
@@ -143,7 +146,8 @@ def cmd_sync(args) -> int:
             with con:
                 if r["kind"] == "dir":
                     excludes = [x for x in r["excludes"].split("\n") if x]
-                    stats = ingest_source(con, r["name"], Path(r["root"]), bool(r["public"]), excludes)
+                    stats = ingest_source(con, r["name"], Path(r["root"]), bool(r["public"]), excludes,
+                                          require_labels=bool(r["require_labels"]))
                 else:
                     stats = connectors.sync(con, r["name"], r["kind"], r["origin"], bool(r["public"]))
                 links = rebuild_links(con)
@@ -170,9 +174,15 @@ def cmd_sync(args) -> int:
     return 2 if failed else 0
 
 
-def _sync_failed(con, name: str, why: str) -> None:
+def _sync_failed(con, name: str, why: str, root: Path | None = None, public: bool = False,
+                 excludes: list[str] | None = None, require_labels: bool = False) -> None:
+    """Keep why a source failed on its row. A first ingest has no row yet: with `root` one is made (empty, never
+    indexed), so `sources` and the next `sync` show and retry it instead of it being nowhere."""
     print(f"{name}: {why}", file=sys.stderr)
     with con:
+        if root is not None and not con.execute("SELECT 1 FROM sources WHERE name = ?", (name,)).fetchone():
+            con.execute("INSERT INTO sources (name, root, public, excludes, require_labels) VALUES (?, ?, ?, ?, ?)",
+                        (name, str(root), int(public), "\n".join(excludes or []), int(require_labels)))
         con.execute("UPDATE sources SET sync_error = ?, sync_error_at = datetime('now') WHERE name = ?", (why, name))
 
 

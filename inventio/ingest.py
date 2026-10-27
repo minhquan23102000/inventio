@@ -12,6 +12,7 @@ import os
 import re
 import subprocess
 import unicodedata
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -65,11 +66,13 @@ class Chunk:
     refs: list[tuple[str, str]] = field(default_factory=list)  # (target path relative to source root, anchor)
 
 
-def list_files(root: Path, excludes: list[str], strays: list[str] | None = None) -> list[str]:
-    """Relative POSIX paths. Inside a git work tree, git decides what is ignored. A symlink is never listed:
-    its target may be a file the data owner labelled (the link would index it unlabelled under an open path)
-    or one outside the root (neither git nor os.walk descends into a linked folder). Any `.inventio-meta*` file is left out; those below the root are appended to
-    `strays` when it is given, since a manifest there labels nothing."""
+def list_files(root: Path, excludes: list[str], strays: list[str] | None = None,
+               links: list[str] | None = None) -> list[str]:
+    """Relative POSIX paths. Inside a git work tree, git decides what is ignored. Any `.inventio-meta*` file is
+    left out; those below the root are appended to `strays` when it is given, since a manifest there labels
+    nothing. A symlink is indexed as any file, unless `links` is given (a source with access labels): then it
+    is appended there and skipped, since its target may be a file the data owner labelled (the link would
+    index it unlabelled under an open path) or one outside the root."""
     root = root.resolve()
     rels: list[str] | None = None
     try:
@@ -100,7 +103,8 @@ def list_files(root: Path, excludes: list[str], strays: list[str] | None = None)
             continue
         p = root / rel
         try:
-            if p.is_symlink():
+            if links is not None and p.is_symlink():
+                links.append(rel)
                 continue
             if not p.is_file() or p.stat().st_size > {"data": float("inf"), "pdf": MAX_PDF_BYTES}.get(
                     LANGS[p.suffix.lower()], MAX_FILE_BYTES):
@@ -109,6 +113,19 @@ def list_files(root: Path, excludes: list[str], strays: list[str] | None = None)
             continue
         keep.append(rel)
     return sorted(set(keep))
+
+
+def disk_files(root: Path) -> list[str]:
+    """Every regular file under the root, whatever its extension, size or folder (hidden and SKIP_DIRS
+    included; symlinks and manifests not): what a manifest key may still name though inventio cannot index it."""
+    root = root.resolve()
+    out = []
+    for dirpath, _, filenames in os.walk(root):
+        for name in filenames:
+            p = Path(dirpath, name)
+            if not name.startswith(META_PREFIX) and not p.is_symlink() and p.is_file():
+                out.append(p.relative_to(root).as_posix())
+    return out
 
 
 ACL_VALUE = re.compile(r"^(dept|user):[a-z0-9._@+-]+$")   # the hub's ACL_ID alphabet; `-` is never an id
@@ -130,18 +147,20 @@ class Label:
     acl: list[str]
     rx: "re.Pattern[str]"
     plain: bool = False   # no wildcard: a file's path, or a folder's name
-    prefix: int = 0       # literal characters before the first wildcard (a folder's: its name and the `/`)
+    literal: int = 0      # literal characters of the key (a plain key counts one more: an exact path wins a tie)
+    widen: bool = False   # the entry says it may give a file wider access than a key it overrides
 
 
 def _key_regex(norm: str) -> "tuple[re.Pattern[str], int, bool]":
     """`*` crosses `/`; `**/` also matches nothing (so `**/*.md` takes top-level files); `?` is one character;
     everything else, `[` included, is literal. A key ending in `/`, or without wildcard that names a folder,
-    stands for the folder's files: `key/*`."""
+    stands for the folder's files: `key/*`. Returns the regex, the number of literal characters, and whether
+    the key is plain."""
     wild = "*" in norm or "?" in norm
     if norm.endswith("/"):
         norm += "*"
         wild = True
-    i, out = 0, []
+    i, out, literal = 0, [], 0
     while i < len(norm):
         if norm.startswith("**/", i):
             out.append("(?:.*/)?")
@@ -154,13 +173,13 @@ def _key_regex(norm: str) -> "tuple[re.Pattern[str], int, bool]":
             i += 1
         else:
             out.append(re.escape(norm[i]))
+            literal += 1
             i += 1
-    first = min((norm.find(c) for c in "*?" if c in norm), default=len(norm))
     body = "".join(out)
     if not wild:    # a plain path: that file, or (a folder name) everything under it
         body += "(?:/.*)?"
-        first += 1
-    return re.compile(body + r"\Z", re.S), first, not wild
+        literal += 1
+    return re.compile(body + r"\Z", re.S), literal, not wild
 
 
 def read_labels(root: Path) -> list[Label] | None:
@@ -170,7 +189,8 @@ def read_labels(root: Path) -> list[Label] | None:
     {"hd-doi-tac/HD-2026-047-*.md": {"acl": ["dept:tham-dinh", "user:an@finx.vn"]}}
 
     A key is a path relative to the source root, a folder (`ho-so/`, or its name), or a glob (`*` also crosses
-    `/`, `**/` may match no folder); compared case-folded, in NFC, ignoring `./`, a leading `/` and `\\`. A
+    `/`, `**/` may match no folder); compared case-folded, in NFC, ignoring `./`, a leading `/` and `\\`. An
+    entry may add `"widen": true` to give a file wider access than a key it overrides (see resolve_labels). A
     manifest that cannot be read, repeats a key, or has an entry whose `acl` is not a non-empty list of
     `dept:<id>` / `user:<email>` raises ValueError: ingesting on regardless would index a file its owner meant to
     restrict as readable by everyone."""
@@ -179,8 +199,8 @@ def read_labels(root: Path) -> list[Label] | None:
         return None
 
     def pairs(items):
-        keys = [k for k, _ in items]
-        dup = sorted({k for k in keys if keys.count(k) > 1})
+        n = Counter(k for k, _ in items)
+        dup = sorted(k for k, c in n.items() if c > 1)
         if dup:
             raise ValueError(f"repeated key {dup[0]!r}")
         return dict(items)
@@ -197,6 +217,9 @@ def read_labels(root: Path) -> list[Label] | None:
         if not isinstance(acl, list) or not acl or not all(isinstance(v, str) and v.strip() for v in acl):
             raise ValueError(f"{path}: {pattern!r}: acl must be a non-empty list of ids "
                              "(dept:<id>, user:<email>); delete the entry to leave the file open")
+        widen = entry.get("widen", False)
+        if not isinstance(widen, bool):
+            raise ValueError(f"{path}: {pattern!r}: widen must be true or false")
         ids = sorted({v.strip().lower() for v in acl})
         bad = [v for v in ids if not ACL_VALUE.match(v)]
         if bad:
@@ -208,35 +231,66 @@ def read_labels(root: Path) -> list[Label] | None:
         if norm in seen:
             raise ValueError(f"{path}: {pattern!r} and {seen[norm]!r} are the same key")
         seen[norm] = pattern
-        rx, prefix, plain = _key_regex(norm)
-        labels.append(Label(pattern, norm, ids, rx, plain, prefix))
+        rx, literal, plain = _key_regex(norm)
+        labels.append(Label(pattern, norm, ids, rx, plain, literal, widen))
     return labels
 
 
-def resolve_labels(labels: list[Label], rels: list[str]) -> tuple[dict[str, Label], dict[str, int], list[tuple[str, Label, Label]]]:
+def resolve_labels(labels: list[Label], rels: list[str], known: "set[str] | frozenset[str]" = frozenset(),
+                   disk=None) -> tuple[dict[str, Label], dict[str, int], list[tuple[str, Label, Label]], list[str]]:
     """({path: the label that applies}, {key: files matched}, [(path, winner, loser) where a less specific key
-    also matched]). The most specific key wins whatever the order: a file named exactly, then the longest literal
-    prefix before a wildcard (a file's path and a folder's name count whole, so an exact path beats any glob); only a tie falls to the later entry. A key that matches no
-    file raises ValueError: a typo, a renamed file or a moved folder would otherwise leave it open."""
+    also matched], [keys that name no file]).
+
+    The most specific key wins whatever the order: the one with the most literal characters (an exact path
+    ties above a glob of the same length), then the later entry. It must not widen access: when the winner's ids
+    are not a subset of a loser's, ValueError names every such file unless the winner's entry says
+    `"widen": true`; otherwise `**/HD-2026-047*` (narrow) listed beside `ho-so/` (wide) would be a silent leak
+    in whichever direction the order falls.
+
+    A key is dead when it matches no regular file on disk (`disk()` lists them; `rels` are only those inventio
+    can index, so a labelled DOCX or a file the owner deleted is not counted as a typo). A dead key alone is
+    returned for a warning, so a revocation is never blocked; with a new unlabelled file (not in `known`) in the
+    same run it looks like a rename, and ValueError refuses: the renamed file would be indexed open."""
+    plain = {l.norm: l for l in labels if l.plain}
+    wild = [l for l in labels if not l.plain]
+    order = {id(l): i for i, l in enumerate(labels)}
     won: dict[str, Label] = {}
     counts = {l.key: 0 for l in labels}
     over: list[tuple[str, Label, Label]] = []
-    order = {id(l): i for i, l in enumerate(labels)}
+    widened: dict[tuple[str, str], str] = {}
 
     for rel in rels:
         n = norm_path(rel)
-        hit = [l for l in labels if l.rx.match(n)]
+        parts = n.split("/")
+        hit = [plain[p] for p in ("/".join(parts[:i]) for i in range(1, len(parts) + 1)) if p in plain]
+        hit += [l for l in wild if l.rx.match(n)]
         for l in hit:
             counts[l.key] += 1
         if hit:
-            best = max(hit, key=lambda l: (l.prefix, order[id(l)]))
+            best = max(hit, key=lambda l: (l.literal, order[id(l)]))
             won[rel] = best
-            over += [(rel, best, l) for l in hit if l is not best and l.acl != best.acl]
-    dead = [l.key for l in labels if not counts[l.key]]
-    if dead:
-        raise ValueError(f"{dead[0]!r} matches no file (renamed, moved, misspelt?); fix or delete the entry, "
-                         "or the file stays open")
-    return won, counts, over
+            for l in hit:
+                if l is not best and l.acl != best.acl:
+                    over.append((rel, best, l))
+                    if not best.widen and not set(best.acl) <= set(l.acl):
+                        widened.setdefault((best.key, l.key), rel)
+    if widened:
+        lines = "; ".join(f"{w!r} takes {rel} over {l!r}" for (w, l), rel in widened.items())
+        raise ValueError(f"a more specific key would give a file wider access than a key it overrides ({lines}); "
+                         "narrow it, or add \"widen\": true to that entry if it is meant")
+    dead = [l for l in labels if not counts[l.key]]
+    if dead and disk is not None:
+        on_disk = [norm_path(p) for p in disk()]
+        for l in dead:
+            counts[l.key] = sum(1 for p in on_disk if l.rx.match(p))
+        dead = [l for l in dead if not counts[l.key]]
+    keys = [l.key for l in dead]
+    fresh = [rel for rel in rels if rel not in won and rel not in known]
+    if keys and fresh:
+        raise ValueError(f"{', '.join(map(repr, keys))} match{'es' if len(keys) == 1 else ''} no file while "
+                         f"{len(fresh)} new file(s) have no label ({', '.join(fresh[:3])}): a renamed or moved "
+                         "file would be indexed open; fix or delete the entries")
+    return won, counts, over, keys
 
 
 def write_labels(con, sid: int, won: dict[str, Label]) -> None:
@@ -749,38 +803,53 @@ def ingest_source(con, name: str, root: Path, public: bool, excludes: list[str],
     Access labels (`.inventio-meta.json`, read_labels) are checked before anything is written; ValueError
     refuses the ingest whole. No manifest is not "every file is open" (that is `{}`): it is refused when the
     source had labels (the manifest was deleted, moved or skipped by a copy) and, with `require_labels`, always.
+    A source with labels (or `require_labels`) also refuses a manifest below the root and skips symlinks; any
+    other source skips such a manifest with a warning and indexes symlinks as files. `require_labels` is kept
+    on the source, so `sync` applies it again. The stats carry `warnings`.
     """
     from .store import drop_file, drop_source
 
     root = root.resolve()
     row = con.execute("SELECT id FROM sources WHERE name = ?", (name,)).fetchone()
     labels = read_labels(root)
+    had = row is not None and con.execute(
+        "SELECT 1 FROM file_meta m JOIN files f ON f.id = m.file_id WHERE m.key = 'acl' AND f.source_id = ? LIMIT 1",
+        (row["id"],)).fetchone()
+    guarded = bool(labels) or bool(had) or require_labels
+    warnings: list[str] = []
     strays: list[str] = []
-    rels = list_files(root, excludes, strays)
+    links: list[str] = []
+    rels = list_files(root, excludes, strays, links if guarded else None)
     if strays:
-        raise ValueError(f"{root / strays[0]}: a manifest below the root labels nothing and would hide its "
-                         f"files' names in plain sight; move its entries to {root / MANIFEST} and delete it")
+        if guarded:
+            raise ValueError(f"{root / strays[0]}: a manifest below the root labels nothing and would hide its "
+                             f"files' names in plain sight; move its entries to {root / MANIFEST} and delete it")
+        warnings += [f"{s}: a manifest below the root labels nothing; skipped" for s in strays]
+    if links:
+        warnings.append(f"{len(links)} symlink(s) not indexed in a source with labels ({links[0]}...)")
     if labels is None:
-        had = row is not None and con.execute(
-            "SELECT 1 FROM file_meta m JOIN files f ON f.id = m.file_id WHERE m.key = 'acl' AND f.source_id = ? LIMIT 1",
-            (row["id"],)).fetchone()
         if had or require_labels:
             raise ValueError(f"{root / MANIFEST} is missing" + (" though this source had labels" if had else
                              " and --require-labels is set") + "; restore it, or write {} to open every file")
         labels = []
-    won, matched, over = resolve_labels(labels, rels)
+    before = {r["path"] for r in con.execute("SELECT path FROM files WHERE source_id = ?", (row["id"],))} if row else set()
+    won, matched, over, dead = resolve_labels(labels, rels, before, lambda: disk_files(root))
+    warnings += [f"key {k!r} matches no file on disk; its entry labels nothing (delete it)" for k in dead]
+    keep = int(require_labels)
     if row:
         sid = row["id"]
         if full:
             drop_source(con, sid)
         con.execute(
-            "UPDATE sources SET root = ?, public = ?, excludes = ?, indexed_at = datetime('now') WHERE id = ?",
-            (str(root), int(public), "\n".join(excludes), sid),
+            "UPDATE sources SET root = ?, public = ?, excludes = ?, indexed_at = datetime('now'), "
+            "require_labels = max(require_labels, ?) WHERE id = ?",
+            (str(root), int(public), "\n".join(excludes), keep, sid),
         )
     else:
         sid = con.execute(
-            "INSERT INTO sources (name, root, public, excludes, indexed_at) VALUES (?, ?, ?, ?, datetime('now'))",
-            (name, str(root), int(public), "\n".join(excludes)),
+            "INSERT INTO sources (name, root, public, excludes, indexed_at, require_labels) "
+            "VALUES (?, ?, ?, ?, datetime('now'), ?)",
+            (name, str(root), int(public), "\n".join(excludes), keep),
         ).lastrowid
     known = {
         r["path"]: r
@@ -850,7 +919,8 @@ def ingest_source(con, name: str, root: Path, public: bool, excludes: list[str],
     ).fetchone()
     return {"source": name, "files": n_files, "chunks": n_chunks, **counts,
             "labels": [{"key": l.key, "files": matched[l.key], "acl": l.acl} for l in labels],
-            "overrides": [{"path": rel, "key": w.key, "over": l.key} for rel, w, l in over]}
+            "overrides": [{"path": rel, "key": w.key, "over": l.key} for rel, w, l in over],
+            "warnings": warnings}
 
 
 def _insert_file(con, sid: int, rel: str, lang: str, dtype: str, text: str, size: int, mtime_ns: int,

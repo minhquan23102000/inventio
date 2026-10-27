@@ -21,7 +21,8 @@ a search term it never leaves a file out for being absent: it is the one term wh
 
 Every path into the pool (BM25, named files and definitions, predicted types, categories,
 neighbours, links) is narrowed by the same scope, so no candidate outside it is ever ranked, and the
-links a hit names (attach_links) lead only to files inside it.
+links a hit names (attach_links) lead only to files inside its `visible` and `source` terms: the other terms
+narrow what is ranked, not the code and wiki pages that join.
 """
 
 import datetime as _dt

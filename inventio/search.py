@@ -323,9 +323,11 @@ def attach_links(con, hits: list[Hit], scope: Scope | None = None, per_hit: int 
     """Where each hit leads, named by what the map knows for certain (`name_link`): links the sources draw
     (citation, mentions) only, since a model-judged `about` link can be wrong where a shown link must not be;
     links to another kind of thing first (a runbook's code before another runbook), one of each kind before
-    a second; one entry per target. Only targets inside `scope` are named: a link is text of the file it leads to
-    (its path, its heading, the identifier that joins them)."""
-    where, args = scope_where(scope)
+    a second; one entry per target. Only targets inside the `visible` and `source` terms of `scope` are named: a
+    link is text of the file it leads to (its path, its heading, the identifier that joins them). The other
+    terms (`type:`, `path:`, `lang:`, `category:`, a connector field) narrow the hits, not the code and wiki
+    pages they join."""
+    where, args = scope_where(Scope([t for t in scope.terms if t.key in ("visible", "source")]) if scope else None)
     for h in hits:
         rows = con.execute(
             LINK_SQL.format(dir="out", other="dst", me="src") + where + " UNION ALL "
