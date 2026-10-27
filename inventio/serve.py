@@ -9,7 +9,7 @@ the port, to `serve.json` in the data directory (readable by its owner alone). A
 by an older copy of the code is stopped and replaced.
 
 `inventio serve --http PORT` is the other shape: a server that runs until stopped and answers
-`POST /query` with what `query --json` prints (see serve_http).
+`POST /query` with what `query --json` prints and `POST /read` with one file's indexed chunks (see serve_http).
 """
 
 import contextlib
@@ -264,6 +264,8 @@ def http_state_file() -> Path:
 QUERY_FIELDS = {"text": str, "where": str, "source": list, "k": int, "pool": int, "ranker": str,
                 "no_links": bool, "no_symbols": bool, "neighbours": bool, "types": bool, "facts": bool,
                 "locations_only": bool, "map": str}
+READ_FIELDS = {"source": str, "path": str, "start_line": int, "end_line": int, "map": str}
+ENDPOINTS = "GET /health, GET /sources, POST /query or POST /read"
 
 
 def query_argv(body: dict) -> list[str]:
@@ -322,7 +324,7 @@ def serve_http(port: int, maps: dict[str, str | None]) -> int:
     answered from the only one, and refused when there are several; the map is opened per request."""
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-    from . import cli, rankers
+    from . import cli, rankers, read
 
     token = secrets.token_hex(16)
     status = {"model": "loading", "run": None, "device": None, "error": None}
@@ -361,9 +363,56 @@ def serve_http(port: int, maps: dict[str, str | None]) -> int:
             self._reply(401, {"error": "missing or wrong token (see serve-http.json)"})
             return False
 
+        def _pick_map(self, body: dict) -> str:
+            """The name of the map a request addresses; ValueError when it names none of the server's."""
+            name = body.get("map")
+            if name is None and len(maps) == 1:
+                name = next(iter(maps))
+            if name not in maps:
+                known = ", ".join(sorted(maps))
+                raise ValueError(f"map must be one of {known}" if name is not None
+                                 else f"name a map: this server answers from {known}")
+            return name
+
+        def _read(self):
+            """POST /read: one file's chunks from the map, in line order (or those overlapping the lines asked)."""
+            try:
+                body = json.loads(self.rfile.read(int(self.headers.get("content-length", 0))) or b"{}")
+                if not isinstance(body, dict):
+                    raise ValueError("the body must be a JSON object")
+                bad = sorted(set(body) - set(READ_FIELDS))
+                if bad:
+                    raise ValueError(f"unknown field(s): {', '.join(bad)}")
+                for key, typ in READ_FIELDS.items():
+                    v = body.get(key)
+                    if v is not None and (not isinstance(v, typ) or isinstance(v, bool)):
+                        raise ValueError(f"{key} must be a {'string' if typ is str else 'whole number'}")
+                for key in ("source", "path"):
+                    if not body.get(key):
+                        raise ValueError(f"{key} is required")
+                start, end = body.get("start_line"), body.get("end_line")
+                if (start is not None and start < 1) or (end is not None and end < 1):
+                    raise ValueError("start_line and end_line count from 1")
+                if start is not None and end is not None and end < start:
+                    raise ValueError("end_line is before start_line")
+                name = self._pick_map(body)
+            except (ValueError, UnicodeDecodeError) as e:
+                return self._reply(400, {"error": str(e)})
+            try:
+                con = cli.connect(Path(maps[name]) if maps[name] else None)
+                try:
+                    chunks = read.indexed_chunks(con, body["source"], body["path"], start, end)
+                finally:
+                    con.close()
+            except Exception as e:
+                return self._reply(500, {"error": f"{type(e).__name__}: {e}"})
+            if chunks is None:
+                return self._reply(404, {"error": f"{body['source']} has no file {body['path']}"})
+            self._reply(200, {"source": body["source"], "path": body["path"], "chunks": chunks})
+
         def do_GET(self):
             if self.path not in ("/health", "/sources"):
-                return self._reply(404, {"error": "GET /health, GET /sources or POST /query"})
+                return self._reply(404, {"error": ENDPOINTS})
             if not self._authorized():
                 return
             if self.path == "/health":
@@ -378,23 +427,19 @@ def serve_http(port: int, maps: dict[str, str | None]) -> int:
             self._reply(200, {"maps": out})
 
         def do_POST(self):
-            if self.path != "/query":
-                return self._reply(404, {"error": "GET /health, GET /sources or POST /query"})
+            if self.path not in ("/query", "/read"):
+                return self._reply(404, {"error": ENDPOINTS})
             if not self._authorized():
                 return
+            if self.path == "/read":
+                return self._read()
             t = time.perf_counter()
             try:
                 body = json.loads(self.rfile.read(int(self.headers.get("content-length", 0))) or b"{}")
                 if not isinstance(body, dict):
                     raise ValueError("the body must be a JSON object")
                 argv = query_argv(body)   # checks every field's type, `map` included
-                name = body.get("map")
-                if name is None and len(maps) == 1:
-                    name = next(iter(maps))
-                if name not in maps:
-                    known = ", ".join(sorted(maps))
-                    raise ValueError(f"map must be one of {known}" if name is not None
-                                     else f"name a map: this server answers from {known}")
+                name = self._pick_map(body)
                 args = cli.parse((["--db", maps[name]] if maps[name] else []) + argv)
             except (ValueError, SystemExit) as e:   # argparse exits on a value it refuses (an unknown ranker)
                 return self._reply(400, {"error": str(e) if isinstance(e, ValueError) else "bad argument"})

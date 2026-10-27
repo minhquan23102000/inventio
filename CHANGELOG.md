@@ -22,6 +22,11 @@ the ranker models are on [Hugging Face](https://huggingface.co/minhquan2310/disp
   last successful ingest, and why its last sync failed (`sync_error`, `sync_error_at`), so a program
   watching a long-running index sees a source that stopped syncing. The text listing prints the reason
   under the source.
+- `POST /read` on `serve --http` (`{"source", "path", "start_line", "end_line", "map"}`; the last three
+  optional): the indexed chunks of one file in line order (`heading_path`, `start_line`, `end_line`,
+  `text`), or those that overlap the lines asked, without links, so a caller can read a whole file
+  rather than guess queries that match each of its chunks. The source name is matched exactly (no
+  wildcards), an unknown field is a 400 and a file the map does not hold a 404.
 
 ### Changed
 - BM25 order is the default ranker even when the dispositio extra is installed; `--ranker dispositio`

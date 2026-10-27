@@ -820,7 +820,8 @@ there. Every command prints source:path:start-end coordinates that read and show
                    help="exit after this many seconds without a request (default 900)")
     s.add_argument("--stop", action="store_true", help="stop the running servers (background and --http)")
     s.add_argument("--http", type=int, metavar="PORT",
-                   help="instead: answer POST /query with what `query --json` prints, on 127.0.0.1:PORT (0: any "
+                   help="instead: answer POST /query with what `query --json` prints and POST /read with a file's "
+                        "chunks, on 127.0.0.1:PORT (0: any "
                         "free port), until stopped; the URL and the token go to serve-http.json in the data directory")
     s.add_argument("--map", action="append", metavar="NAME=PATH",
                    help="with --http: a map the server answers from, named by a request's `map` (repeatable); "

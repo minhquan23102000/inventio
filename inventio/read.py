@@ -31,6 +31,21 @@ class Passage:
                 "url": self.url, "version": self.version, "text": "\n".join(self.lines)}
 
 
+def indexed_chunks(con, source: str, path: str, start: int | None = None, end: int | None = None) -> list[dict] | None:
+    """The chunks the map holds for one file, in line order, as {heading_path, start_line, end_line, text}; with
+    `start`/`end`, only those that overlap those lines. None when the map has no such file. The source name is
+    matched exactly (`=`, not a scope pattern), no url or link is computed: this is what `serve --http`'s
+    POST /read answers."""
+    file = con.execute("SELECT f.id FROM files f JOIN sources s ON s.id = f.source_id WHERE s.name = ? AND f.path = ?",
+                       (source, path)).fetchone()
+    if not file:
+        return None
+    rows = con.execute(
+        "SELECT heading_path, start_line, end_line, text FROM chunks WHERE file_id = ? AND end_line >= ? AND start_line <= ? "
+        "ORDER BY start_line, end_line, id", (file["id"], start or 1, end if end is not None else 2**62)).fetchall()
+    return [dict(r) for r in rows]
+
+
 def resolve(con, target: str) -> Passage:
     return _from_url(con, target) if target.startswith(("http://", "https://")) else _from_coord(con, target)
 

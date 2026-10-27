@@ -799,3 +799,61 @@ def test_serve_http_answers_from_the_map_a_request_names_and_can_leave_the_text_
     finally:
         proc.terminate()
         proc.wait(timeout=30)
+
+
+def test_serve_http_read_returns_a_files_chunks_exactly_and_refuses_what_it_cannot_name(tmp_path, capsys, monkeypatch):
+    """POST /read: the file's indexed chunks in line order, or those overlapping the lines asked; a source is
+    matched by its exact name (never as a pattern), an unknown field is a 400, a missing file a 404."""
+    import os
+    import subprocess
+    import sys
+    import time
+    import urllib.error
+    import urllib.request
+
+    from inventio.serve import http_state_file
+
+    monkeypatch.setenv("INVENTIO_RANKER", "none")
+    db = str(tmp_path / "map.db")
+    write(tmp_path / "d", "doc.md", "# One\nalpha line\n\n# Two\nbeta line\n\n# Three\ngamma line\n")
+    assert run(capsys, "--db", db, "init", str(tmp_path / "d"), "--name", "Docs")[0] == 0
+
+    proc = subprocess.Popen([sys.executable, "-m", "inventio.cli", "--db", db, "serve", "--http", "0"],
+                            env=os.environ.copy(), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    try:
+        deadline = time.time() + 60
+        while not http_state_file().exists():
+            assert proc.poll() is None and time.time() < deadline, proc.stderr.read().decode()
+            time.sleep(0.1)
+        state = json.loads(http_state_file().read_text())
+
+        def post(path, body, token=state["token"]):
+            req = urllib.request.Request(state["url"] + path, json.dumps(body).encode(),
+                                         {"content-type": "application/json", "authorization": f"Bearer {token}"})
+            try:
+                with urllib.request.urlopen(req, timeout=30) as r:
+                    return r.status, json.loads(r.read())
+            except urllib.error.HTTPError as e:
+                return e.code, json.loads(e.read())
+
+        code, body = post("/read", {"source": "Docs", "path": "doc.md"})
+        assert code == 200 and (body["source"], body["path"]) == ("Docs", "doc.md")
+        lines = [c["start_line"] for c in body["chunks"]]
+        assert lines == sorted(lines) and "alpha line" in body["chunks"][0]["text"]
+        assert "gamma line" in body["chunks"][-1]["text"]
+        assert all(set(c) == {"heading_path", "start_line", "end_line", "text"} for c in body["chunks"])
+        code, part = post("/read", {"source": "Docs", "path": "doc.md", "start_line": 5, "end_line": 5})
+        assert code == 200 and len(part["chunks"]) == 1 and "beta line" in part["chunks"][0]["text"]
+        assert post("/read", {"source": "Docs", "path": "doc.md"}, token="wrong")[0] == 401
+        assert post("/read", {"source": "Docs", "path": "doc.md", "kk": 1})[0] == 400
+        assert post("/read", {"source": "Docs"})[0] == 400
+        assert post("/read", {"source": "Docs", "path": "doc.md", "start_line": "1"})[0] == 400
+        assert post("/read", {"source": "Docs", "path": "doc.md", "start_line": 4, "end_line": 2})[0] == 400
+        assert post("/read", {"source": "Docs", "path": "nope.md"})[0] == 404
+        for name in ("docs", "Doc*", "D?cs", "[D]ocs"):   # not a pattern, not case-folded
+            assert post("/read", {"source": name, "path": "doc.md"})[0] == 404
+        code, body = post("/other", {})
+        assert code == 404 and "POST /read" in body["error"]
+    finally:
+        proc.terminate()
+        proc.wait(timeout=30)
