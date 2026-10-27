@@ -6,8 +6,12 @@ the ranker models are on [Hugging Face](https://huggingface.co/minhquan2310/disp
 ## Unreleased
 
 ### Added
+- Access labels, third pass: a dead key refuses a new file that is unlabelled or labelled wider than it
+  (also under a folder key or `*`); a file added or edited with the bytes of a labelled file but wider ids is
+  refused (now or before the run); `widen` lists the keys it may override; `sync_warning` on `sources`;
+  `init` honours the stored `--require-labels`; an `OSError` during a run is a `sync_error`; a BOM manifest reads.
 - Access labels, second pass: a key is ranked by its literal characters, and a winner whose ids are not a
-  subset of an overridden key's is refused unless the entry says `"widen": true`; a key matching no file on
+  subset of an overridden key's is refused unless the entry lists that key in `"widen": [...]`; a key matching no file on
   disk (any regular file counts) is refused only beside a new unlabelled file, otherwise a warning, and all
   dead keys are listed at once; links obey only the `visible` and `source` terms; a nested manifest and
   symlinks are refused or skipped only in a source with labels or `--require-labels` (kept on the source and

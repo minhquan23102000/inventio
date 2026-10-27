@@ -1,4 +1,5 @@
 import json
+import os
 import textwrap
 from pathlib import Path
 
@@ -872,7 +873,7 @@ def _labelled_dir(root):
     write(root, "deals/other.md", "# Other\nThe partner fee for the second deal.\n")
     (root / ".inventio-meta.json").write_text(json.dumps(
         {"deals/*": {"acl": ["dept:legal"]},
-         "deals/secret.md": {"acl": ["dept:appraisal", "user:an@x.vn"], "widen": True}}))
+         "deals/secret.md": {"acl": ["dept:appraisal", "user:an@x.vn"], "widen": ["deals/*"]}}))
 
 
 def test_manifest_labels_restrict_search_before_ranking_and_a_removed_label_disappears(tmp_path, capsys):
@@ -1002,7 +1003,7 @@ def _acl_paths(capsys, db, visible="dept:nobody", k="10"):
 def _restricted(tmp_path, manifest, files=("ho-so/Khách-A/HD-047.md", "open.md")):
     root = tmp_path / "d"
     for f in files:
-        write(root, f, "# Contract\nThe partner fee is secret.\n")
+        write(root, f, f"# Contract\nThe partner fee is secret, see {f}.\n")
     (root / ".inventio-meta.json").write_text(manifest if isinstance(manifest, str) else json.dumps(manifest),
                                               encoding="utf-8")
     return root
@@ -1134,11 +1135,11 @@ def test_a_key_that_would_widen_access_is_refused_unless_the_entry_says_widen(tm
     code, out = run(capsys, "--db", db, "init", str(root), "--name", "d")
     assert code == 1 and "wider access" in out.err and "HD-2026-047*" in out.err
     assert _acl_paths(capsys, db, "dept:phap-che") == set()                       # nothing was indexed
-    entries[1][1]["widen"] = True
+    entries[1][1]["widen"] = ["ho-so/"]
     (root / ".inventio-meta.json").write_text(json.dumps(dict(entries[::1 - 2 * order])))
     assert run(capsys, "--db", db, "init", str(root), "--name", "d")[0] == 0
     assert _acl_paths(capsys, db, "dept:phap-che") == {"ho-so/HD-2026-047.md"}
-    (root / ".inventio-meta.json").write_text(json.dumps({"a.md": {"acl": ["dept:a"], "widen": "yes"}}))
+    (root / ".inventio-meta.json").write_text(json.dumps({"a.md": {"acl": ["dept:a"], "widen": True}}))
     assert run(capsys, "--db", db, "init", str(root), "--name", "d")[0] == 1
 
 
@@ -1356,3 +1357,181 @@ def test_a_connector_field_named_acl_never_becomes_a_label(tmp_path, capsys, mon
     keys = {r[0] for r in con.execute("SELECT key FROM file_meta")}
     con.close()
     assert keys == {"status"}
+
+
+def _sources(capsys, db):
+    return json.loads(run(capsys, "--db", db, "sources", "--json")[1].out)
+
+
+@pytest.mark.parametrize("catch_all", [False, True])
+def test_renaming_a_narrow_file_under_a_broader_key_is_refused(tmp_path, capsys, catch_all):
+    db = str(tmp_path / "map.db")
+    manifest = {"ho-so/": {"acl": ["dept:tham-dinh", "dept:phap-che"]},
+                "ho-so/HD-047.md": {"acl": ["dept:tham-dinh"]}}
+    if catch_all:
+        manifest = {"*": {"acl": ["dept:tham-dinh", "dept:phap-che"]}, "ho-so/HD-047.md": {"acl": ["dept:tham-dinh"]}}
+    root = _restricted(tmp_path, manifest, files=("ho-so/HD-047.md", "ho-so/other.md"))
+    assert run(capsys, "--db", db, "init", str(root), "--name", "d")[0] == 0
+    (root / "ho-so" / "HD-047.md").rename(root / "ho-so" / "HD-047-ky.md")
+    code, out = run(capsys, "--db", db, "init", str(root), "--name", "d")
+    assert code == 1 and "'ho-so/HD-047.md'" in out.err and "move the key" in out.err
+    assert _acl_paths(capsys, db, "dept:phap-che") == {"ho-so/other.md"}
+    manifest["ho-so/HD-047-ky.md"] = manifest.pop("ho-so/HD-047.md")              # the advice: move the key
+    (root / ".inventio-meta.json").write_text(json.dumps(manifest))
+    assert run(capsys, "--db", db, "init", str(root), "--name", "d")[0] == 0
+    assert _acl_paths(capsys, db, "dept:phap-che") == {"ho-so/other.md"}
+
+
+def test_a_renamed_folder_under_a_broader_key_is_refused(tmp_path, capsys):
+    db = str(tmp_path / "map.db")
+    root = _restricted(tmp_path, {"ho-so/": {"acl": ["dept:a", "dept:b"]}, "ho-so/khach-a/": {"acl": ["dept:a"]}},
+                       files=("ho-so/khach-a/1.md", "ho-so/x.md"))
+    assert run(capsys, "--db", db, "init", str(root), "--name", "d")[0] == 0
+    (root / "ho-so" / "khach-a").rename(root / "ho-so" / "khach-a2")
+    code, out = run(capsys, "--db", db, "init", str(root), "--name", "d")
+    assert code == 1 and "'ho-so/khach-a/'" in out.err
+    assert _acl_paths(capsys, db, "dept:b") == {"ho-so/x.md"}
+
+
+def test_a_copy_of_a_labelled_file_is_refused_now_and_after_the_original_is_gone(tmp_path, capsys):
+    import shutil
+
+    db = str(tmp_path / "map.db")
+    root = _restricted(tmp_path, {"ho-so/a.md": {"acl": ["dept:a"]}}, files=("ho-so/a.md", "open.md"))
+    write(root, "open.md", "# Open\nThe partner fee is public.\n")
+    assert run(capsys, "--db", db, "init", str(root), "--name", "d")[0] == 0
+    shutil.copy(root / "ho-so" / "a.md", root / "b.md")                            # copy first: refused at once
+    code, out = run(capsys, "--db", db, "init", str(root), "--name", "d")
+    assert code == 1 and "same content" in out.err and "b.md" in out.err
+    assert _acl_paths(capsys, db, "dept:b") == {"open.md"}
+    (root / "b.md").unlink()                                                       # copy kept out of one run...
+    (root / "ho-so" / "a.md").unlink()                                             # ...the owner removes file and key
+    (root / ".inventio-meta.json").write_text("{}")
+    assert run(capsys, "--db", db, "init", str(root), "--name", "d")[0] == 0
+    write(root, "c.md", "# Contract\nThe partner fee is secret.\n")                # the old bytes come back, unlabelled
+    code, out = run(capsys, "--db", db, "init", str(root), "--name", "d")
+    assert code == 0                                                               # labels were dropped by the owner's {}
+
+
+def test_the_content_of_a_file_labelled_before_this_run_is_remembered(tmp_path, capsys):
+    db = str(tmp_path / "map.db")
+    root = _restricted(tmp_path, {"hop-dong.md": {"acl": ["dept:a"]}}, files=("hop-dong.md",))
+    assert run(capsys, "--db", db, "init", str(root), "--name", "d")[0] == 0
+    (root / "hop-dong.md").rename(root / "hop-dong-v1.md")                         # archive rotation
+    write(root, "hop-dong.md", "# Contract\nA new version of the contract.\n")
+    code, out = run(capsys, "--db", db, "init", str(root), "--name", "d")
+    assert code == 1 and "hop-dong-v1.md has the content of hop-dong.md" in out.err
+    assert _acl_paths(capsys, db, "dept:b") == set()
+    (root / ".inventio-meta.json").write_text(json.dumps({"hop-dong.md": {"acl": ["dept:a"]},
+                                                          "hop-dong-v1.md": {"acl": ["dept:a"]}}))
+    assert run(capsys, "--db", db, "init", str(root), "--name", "d")[0] == 0       # as restrictive: fine
+
+
+def test_a_hard_link_to_a_labelled_file_is_refused(tmp_path, capsys):
+    db = str(tmp_path / "map.db")
+    root = _restricted(tmp_path, {"ho-so/a.md": {"acl": ["dept:a"]}}, files=("ho-so/a.md",))
+    assert run(capsys, "--db", db, "init", str(root), "--name", "d")[0] == 0
+    os.link(root / "ho-so" / "a.md", root / "link.md")
+    code, out = run(capsys, "--db", db, "init", str(root), "--name", "d")
+    assert code == 1 and "link.md has the content of ho-so/a.md" in out.err
+
+
+def test_widen_names_the_keys_it_may_override_and_nothing_else(tmp_path, capsys):
+    db = str(tmp_path / "map.db")
+    manifest = {"ho-so/": {"acl": ["dept:t"]}, "ho-so/khach-a/": {"acl": ["dept:t", "dept:p"], "widen": ["ho-so/"]},
+                "**/HD-047*": {"acl": ["dept:t"]}}
+    root = _restricted(tmp_path, manifest, files=("ho-so/khach-a/HD-047.md", "ho-so/x.md"))
+    code, out = run(capsys, "--db", db, "init", str(root), "--name", "d")          # the later narrow key is not exempt
+    assert code == 1 and "wider access" in out.err and "'**/HD-047*'" in out.err
+    del manifest["**/HD-047*"]
+    (root / ".inventio-meta.json").write_text(json.dumps(manifest))
+    assert run(capsys, "--db", db, "init", str(root), "--name", "d")[0] == 0
+    assert _acl_paths(capsys, db, "dept:p") == {"ho-so/khach-a/HD-047.md"}
+    manifest["ho-so/khach-a/"]["widen"] = True
+    (root / ".inventio-meta.json").write_text(json.dumps(manifest))
+    assert run(capsys, "--db", db, "init", str(root), "--name", "d")[0] == 1
+
+
+def test_warnings_are_kept_on_the_source_and_cleared_by_a_clean_run(tmp_path, capsys):
+    db = str(tmp_path / "map.db")
+    root = _restricted(tmp_path, {"ho-so/a.md": {"acl": ["dept:a"]}}, files=("ho-so/a.md", "open.md"))
+    assert run(capsys, "--db", db, "init", str(root), "--name", "d")[0] == 0
+    (root / ".inventio-meta.json").write_text(json.dumps({"ho-so/a.md": {"acl": ["dept:a"]},
+                                                          "ho-so/typo.md": {"acl": ["dept:a"]}}))
+    assert run(capsys, "--db", db, "sync")[0] == 0
+    assert "'ho-so/typo.md'" in _sources(capsys, db)[0]["sync_warning"]
+    assert "warning: key 'ho-so/typo.md'" in run(capsys, "--db", db, "sources")[1].out
+    (root / ".inventio-meta.json").write_text(json.dumps({"ho-so/a.md": {"acl": ["dept:a"]}}))
+    assert run(capsys, "--db", db, "sync")[0] == 0
+    assert _sources(capsys, db)[0]["sync_warning"] is None
+
+
+def test_overrides_are_kept_on_the_source(tmp_path, capsys):
+    db = str(tmp_path / "map.db")
+    root = _restricted(tmp_path, {"ho-so/": {"acl": ["dept:a", "dept:b"]}, "**/HD-47.md": {"acl": ["dept:a"]}},
+                       files=("ho-so/HD-47.md",))
+    assert run(capsys, "--db", db, "init", str(root), "--name", "d")[0] == 0
+    assert "override: ho-so/HD-47.md takes '**/HD-47.md' over 'ho-so/'" in _sources(capsys, db)[0]["sync_warning"]
+
+
+def test_a_bom_manifest_reads_and_init_honours_the_stored_flag(tmp_path, capsys):
+    db = str(tmp_path / "map.db")
+    root = tmp_path / "d"
+    write(root, "a.md", "# A\nThe partner fee.\n")
+    (root / ".inventio-meta.json").write_bytes(b"\xef\xbb\xbf{}")
+    assert run(capsys, "--db", db, "init", str(root), "--name", "d", "--require-labels")[0] == 0
+    (root / ".inventio-meta.json").unlink()
+    assert run(capsys, "--db", db, "init", str(root), "--name", "d")[0] == 1       # the flag is the source's own
+
+
+def test_a_file_vanishing_mid_run_is_a_sync_error(tmp_path, capsys, monkeypatch):
+    db = str(tmp_path / "map.db")
+    root = tmp_path / "d"
+    write(root, "a.md", "# A\nThe partner fee.\n")
+    (root / ".inventio-meta.json").write_text("{}")
+    from pathlib import Path as P
+
+    real, calls = P.stat, []
+
+    def stat(self, *a, **k):
+        calls.append(self.name)
+        if self.name == "a.md" and calls.count("a.md") > 2:     # listed fine (two stats), gone when the loop stats it
+            raise FileNotFoundError(2, "gone", str(self))
+        return real(self, *a, **k)
+
+    monkeypatch.setattr(P, "stat", stat)
+    assert run(capsys, "--db", db, "init", str(root), "--name", "d")[0] == 1
+    monkeypatch.undo()
+    assert "gone" in _sources(capsys, db)[0]["sync_error"]
+
+
+def test_a_copy_may_widen_only_through_the_key_widen_names(tmp_path, capsys):
+    db = str(tmp_path / "map.db")
+    manifest = {"ho-so/": {"acl": ["dept:t"]}, "pub/": {"acl": ["dept:t", "dept:p"], "widen": []}}
+    root = _restricted(tmp_path, manifest, files=("ho-so/a.md",))
+    write(root, "pub/a.md", (root / "ho-so" / "a.md").read_text(encoding="utf-8"))
+    code, out = run(capsys, "--db", db, "init", str(root), "--name", "d")
+    assert code == 1 and "pub/a.md has the content of ho-so/a.md" in out.err
+    manifest["pub/"]["widen"] = ["ho-so/"]
+    (root / ".inventio-meta.json").write_text(json.dumps(manifest))
+    assert run(capsys, "--db", db, "init", str(root), "--name", "d")[0] == 0
+
+
+def test_stat_digests_are_not_content(tmp_path):
+    """A data file's digest is a size and a date: two of them agreeing says nothing about their bytes."""
+    from inventio.ingest import _labelled_digests, _refuse_copies, read_labels
+    from inventio.store import connect
+
+    con = connect(tmp_path / "m.db")
+    sid = con.execute("INSERT INTO sources (name, root) VALUES ('d', '/x')").lastrowid
+    for rel in ("ho-so/a.csv", "b.csv"):
+        fid = con.execute("INSERT INTO files (source_id, path, lang, sha1) VALUES (?, ?, 'data', 'stat:1:1')",
+                          (sid, rel)).lastrowid
+        if rel != "b.csv":
+            con.execute("INSERT INTO file_meta (file_id, key, value) VALUES (?, 'acl', 'dept:t')", (fid,))
+    assert _labelled_digests(con, sid) == {}
+    root = tmp_path / "r"
+    root.mkdir()
+    (root / ".inventio-meta.json").write_text(json.dumps({"ho-so/": {"acl": ["dept:t"]}}))
+    won = {"ho-so/a.csv": read_labels(root)[0]}
+    _refuse_copies(con, sid, won, [("b.csv", "stat:1:1")], {})                       # no refusal

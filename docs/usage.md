@@ -163,7 +163,7 @@ top-level files too), and a key ending in `/`, or naming a folder, stands for ev
 the most literal characters (`*` and `?` not counted; an exact path wins a tie with a glob) wins whatever its
 place in the file, and only a tie goes to the later entry. A winner that would give a file wider access than a
 key it overrides (its ids are not a subset of that key's) stops the ingest unless its entry says
-`"widen": true`: `{"ho-so/": {"acl": ["dept:a", "dept:b"]}, "**/HD-47*": {"acl": ["dept:a"]}}` narrows the
+`"widen": ["<the key>"]` (the keys it may override): `{"ho-so/": {"acl": ["dept:a", "dept:b"]}, "**/HD-47*": {"acl": ["dept:a"]}}` narrows the
 contract, the reverse is refused. `init` prints how many files each key matched and which files took a more
 specific key's label. Values are `dept:<id>` or `user:<email>` (`[a-z0-9._@+-]`, lower-cased).
 
@@ -172,13 +172,18 @@ the manifest is gone at the next run, though no file changed). Anything that cou
 open stops the ingest, keeps the previous copy and labels, and is shown as the source's `sync_error`:
 a manifest that cannot be read, repeats a key, or holds an empty or malformed `acl`; a key that
 matches no file on disk (any regular file counts, a DOCX or a file over the size limit too) while the same run
-also brings a new file without a label (what a rename looks like; every such key is listed at once; a dead key
-alone, such as a labelled file the owner deleted, only prints a warning so a revocation is never blocked); a
+also brings a new file that has no label or ids not within every such key's (what a rename looks like, even
+under a broader folder key or a `*` catch-all: move the key to the new path, delete it only if the file is
+really gone; a dead key alone, such as a labelled file the owner deleted, only warns so a revocation is never
+blocked); a file added or edited in this run whose bytes equal a labelled file's (now or before the run:
+copy then delete, an archived `v1`, a hard link) but whose ids are not within that file's; a
 `.inventio-meta*` file below the root (skipped with a warning in a source that has no labels); **no manifest at all when the source had labels** (deleted or
 skipped by a copy; write `{}` to say every file is open), or with `init --require-labels`, always.
 Symbolic links are not indexed in a source with labels (or `--require-labels`, which a later `sync` keeps
 applying); elsewhere they are indexed as files. A first `init` that fails leaves an empty source with its
-`sync_error`, which `sync` retries.
+`sync_error`, which `sync` retries. A run that succeeds keeps its warnings (dead keys, `override:` lines) in
+`sync_warning`, shown by `sources` and `sources --json`, and clears them when it is clean. Not covered: a file
+renamed *and* edited across two runs; keep restricted files under a restricting folder key.
 `-w visible:dept:tham-dinh,user:bo@finx.vn` keeps the files with no label and those labelled
 with one of the ids (compared exactly, without case); `visible:-` keeps only the unlabelled. It narrows
 every way into the pool, so a restricted file is neither ranked nor cut into the 15, and the links a hit

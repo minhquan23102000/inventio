@@ -55,8 +55,8 @@ def cmd_init(args) -> int:
             stats = ingest_source(con, name, root, args.public, args.exclude or [], full=args.full,
                                   require_labels=args.require_labels)
             links = rebuild_links(con)
-            con.execute("UPDATE sources SET sync_error = NULL, sync_error_at = NULL WHERE name = ?", (name,))
-    except ValueError as e:   # the old copy and labels stay; the reason is kept on the source, where `sources` shows it
+            _sync_ok(con, name, stats)
+    except (ValueError, OSError) as e:   # the old copy and labels stay; the reason is kept on the source, where `sources` shows it
         _sync_failed(con, name, f"not indexed: {e}", root=root.resolve(), public=args.public,
                      excludes=args.exclude or [], require_labels=args.require_labels)
         return 1
@@ -158,12 +158,12 @@ def cmd_sync(args) -> int:
             _sync_failed(con, r["name"], f"access lost, {dropped} files dropped: {e}")
             failed.append(r["name"])
             continue
-        except (connectors.RemoteError, ValueError) as e:   # ValueError: a manifest ingest refuses (the copy stays)
+        except (connectors.RemoteError, ValueError, OSError) as e:   # ValueError: a manifest ingest refuses (the copy stays)
             _sync_failed(con, r["name"], str(e))
             failed.append(r["name"])
             continue
         with con:
-            con.execute("UPDATE sources SET sync_error = NULL, sync_error_at = NULL WHERE name = ?", (r["name"],))
+            _sync_ok(con, r["name"], stats)
         _report(stats, links, t, args)
     if failed:
         print(f"not synced: {', '.join(failed)}", file=sys.stderr)
@@ -172,6 +172,15 @@ def cmd_sync(args) -> int:
         code = cmd_facts(args)
         return 2 if failed else code
     return 2 if failed else 0
+
+
+def _sync_ok(con, name: str, stats: dict) -> None:
+    """A sync that succeeded clears sync_error and keeps what the owner should still see (keys that match no
+    file, `widen` overrides) in sync_warning; a clean run clears it too."""
+    notes = [f"override: {o['path']} takes {o['key']!r} over {o['over']!r}" for o in stats.get("overrides", [])]
+    notes += stats.get("warnings", [])
+    con.execute("UPDATE sources SET sync_error = NULL, sync_error_at = NULL, sync_warning = ? WHERE name = ?",
+                ("\n".join(notes) or None, name))
 
 
 def _sync_failed(con, name: str, why: str, root: Path | None = None, public: bool = False,
@@ -190,7 +199,7 @@ def source_rows(con) -> list[dict]:
     """Each source with its size and how its last sync went: the rows `sources --json` and `serve --http`'s
     GET /sources print. indexed_at is the last ingest that succeeded; sync_error says why the last sync did not."""
     return [dict(r) for r in con.execute(
-        "SELECT s.name, s.kind, s.origin, s.public, s.indexed_at, s.sync_error, s.sync_error_at, "
+        "SELECT s.name, s.kind, s.origin, s.public, s.indexed_at, s.sync_error, s.sync_error_at, s.sync_warning, "
         "(SELECT count(*) FROM files f WHERE f.source_id = s.id) files, "
         "(SELECT count(*) FROM chunks c JOIN files f ON f.id = c.file_id WHERE f.source_id = s.id) chunks "
         "FROM sources s ORDER BY s.name")]
@@ -368,6 +377,8 @@ def cmd_sources(args) -> int:
               f"auth {r['auth']:<7}  {where}  ({r['indexed_at']})")
         if r["sync_error"]:
             print(f"{'':<16} last sync failed {r['sync_error_at']}: {r['sync_error']}")
+        for w in (r["sync_warning"] or "").splitlines():
+            print(f"{'':<16} warning: {w}")
     if not rows:
         print("no sources; run `inventio init <path>`")
     return 0

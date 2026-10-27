@@ -148,7 +148,7 @@ class Label:
     rx: "re.Pattern[str]"
     plain: bool = False   # no wildcard: a file's path, or a folder's name
     literal: int = 0      # literal characters of the key (a plain key counts one more: an exact path wins a tie)
-    widen: bool = False   # the entry says it may give a file wider access than a key it overrides
+    widen: frozenset = frozenset()   # normalised keys this entry may give a file wider access than
 
 
 def _key_regex(norm: str) -> "tuple[re.Pattern[str], int, bool]":
@@ -190,7 +190,7 @@ def read_labels(root: Path) -> list[Label] | None:
 
     A key is a path relative to the source root, a folder (`ho-so/`, or its name), or a glob (`*` also crosses
     `/`, `**/` may match no folder); compared case-folded, in NFC, ignoring `./`, a leading `/` and `\\`. An
-    entry may add `"widen": true` to give a file wider access than a key it overrides (see resolve_labels). A
+    entry may add `"widen": ["<key>", ...]`, the keys it may give a file wider access than (see resolve_labels). A
     manifest that cannot be read, repeats a key, or has an entry whose `acl` is not a non-empty list of
     `dept:<id>` / `user:<email>` raises ValueError: ingesting on regardless would index a file its owner meant to
     restrict as readable by everyone."""
@@ -206,7 +206,7 @@ def read_labels(root: Path) -> list[Label] | None:
         return dict(items)
 
     try:
-        data = json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=pairs)
+        data = json.loads(path.read_text(encoding="utf-8-sig"), object_pairs_hook=pairs)
     except (OSError, ValueError) as e:
         raise ValueError(f"{path}: {e}") from None
     if not isinstance(data, dict):
@@ -217,9 +217,9 @@ def read_labels(root: Path) -> list[Label] | None:
         if not isinstance(acl, list) or not acl or not all(isinstance(v, str) and v.strip() for v in acl):
             raise ValueError(f"{path}: {pattern!r}: acl must be a non-empty list of ids "
                              "(dept:<id>, user:<email>); delete the entry to leave the file open")
-        widen = entry.get("widen", False)
-        if not isinstance(widen, bool):
-            raise ValueError(f"{path}: {pattern!r}: widen must be true or false")
+        widen = entry.get("widen", [])
+        if not isinstance(widen, list) or not all(isinstance(v, str) and norm_path(v).strip("/") for v in widen):
+            raise ValueError(f"{path}: {pattern!r}: widen must be a list of the keys this entry may override")
         ids = sorted({v.strip().lower() for v in acl})
         bad = [v for v in ids if not ACL_VALUE.match(v)]
         if bad:
@@ -232,7 +232,7 @@ def read_labels(root: Path) -> list[Label] | None:
             raise ValueError(f"{path}: {pattern!r} and {seen[norm]!r} are the same key")
         seen[norm] = pattern
         rx, literal, plain = _key_regex(norm)
-        labels.append(Label(pattern, norm, ids, rx, plain, literal, widen))
+        labels.append(Label(pattern, norm, ids, rx, plain, literal, frozenset(norm_path(v) for v in widen)))
     return labels
 
 
@@ -243,14 +243,16 @@ def resolve_labels(labels: list[Label], rels: list[str], known: "set[str] | froz
 
     The most specific key wins whatever the order: the one with the most literal characters (an exact path
     ties above a glob of the same length), then the later entry. It must not widen access: when the winner's ids
-    are not a subset of a loser's, ValueError names every such file unless the winner's entry says
-    `"widen": true`; otherwise `**/HD-2026-047*` (narrow) listed beside `ho-so/` (wide) would be a silent leak
+    are not a subset of a loser's, ValueError names every such file unless the winner's `widen` lists that
+    loser's key; otherwise `**/HD-2026-047*` (narrow) listed beside `ho-so/` (wide) would be a silent leak
     in whichever direction the order falls.
 
     A key is dead when it matches no regular file on disk (`disk()` lists them; `rels` are only those inventio
     can index, so a labelled DOCX or a file the owner deleted is not counted as a typo). A dead key alone is
-    returned for a warning, so a revocation is never blocked; with a new unlabelled file (not in `known`) in the
-    same run it looks like a rename, and ValueError refuses: the renamed file would be indexed open."""
+    returned for a warning, so a revocation is never blocked; with a new file (not in `known`) in the same run
+    that is unlabelled, or whose ids are not a subset of every dead key's, it looks like a rename, and
+    ValueError refuses: the renamed file would be indexed open or wider (a broader folder key or a `*`
+    catch-all still labels it)."""
     plain = {l.norm: l for l in labels if l.plain}
     wild = [l for l in labels if not l.plain]
     order = {id(l): i for i, l in enumerate(labels)}
@@ -272,12 +274,13 @@ def resolve_labels(labels: list[Label], rels: list[str], known: "set[str] | froz
             for l in hit:
                 if l is not best and l.acl != best.acl:
                     over.append((rel, best, l))
-                    if not best.widen and not set(best.acl) <= set(l.acl):
+                    if l.norm not in best.widen and not set(best.acl) <= set(l.acl):
                         widened.setdefault((best.key, l.key), rel)
     if widened:
         lines = "; ".join(f"{w!r} takes {rel} over {l!r}" for (w, l), rel in widened.items())
         raise ValueError(f"a more specific key would give a file wider access than a key it overrides ({lines}); "
-                         "narrow it, or add \"widen\": true to that entry if it is meant")
+                         "narrow it, or list the overridden key in that entry's \"widen\" (\"widen\": [\"<key>\"]) "
+                         "if it is meant")
     dead = [l for l in labels if not counts[l.key]]
     if dead and disk is not None:
         on_disk = [norm_path(p) for p in disk()]
@@ -285,11 +288,15 @@ def resolve_labels(labels: list[Label], rels: list[str], known: "set[str] | froz
             counts[l.key] = sum(1 for p in on_disk if l.rx.match(p))
         dead = [l for l in dead if not counts[l.key]]
     keys = [l.key for l in dead]
-    fresh = [rel for rel in rels if rel not in won and rel not in known]
-    if keys and fresh:
-        raise ValueError(f"{', '.join(map(repr, keys))} match{'es' if len(keys) == 1 else ''} no file while "
-                         f"{len(fresh)} new file(s) have no label ({', '.join(fresh[:3])}): a renamed or moved "
-                         "file would be indexed open; fix or delete the entries")
+    if dead:
+        loose = [rel for rel in rels if rel not in known
+                 and (rel not in won or not all(set(won[rel].acl) <= set(l.acl) for l in dead))]
+        if loose:
+            raise ValueError(f"{', '.join(map(repr, keys))} match{'es' if len(keys) == 1 else ''} no file while "
+                             f"{len(loose)} new file(s) have no label or one that gives wider access than the "
+                             f"dead key ({', '.join(loose[:3])}): a renamed or moved file would be indexed open "
+                             "or wider; move the key to the file's new path, and delete it only if the file is "
+                             "really gone")
     return won, counts, over, keys
 
 
@@ -789,6 +796,44 @@ def chunk_file(text: str, lang: str, rel: str) -> list[Chunk]:
     return chunks
 
 
+def _labelled_digests(con, sid: int) -> "dict[str, list[tuple[str, frozenset[str]]]]":
+    """{sha1: [(path, ids)]} of the source's labelled files as the map holds them now (data files, whose digest
+    is only a size and a date, are left out)."""
+    out: dict[str, list[tuple[str, frozenset[str]]]] = {}
+    for r in con.execute(
+            "SELECT f.path, f.sha1, group_concat(m.value, char(31)) AS acl FROM files f "
+            "JOIN file_meta m ON m.file_id = f.id AND m.key = 'acl' "
+            "WHERE f.source_id = ? AND f.sha1 NOT LIKE 'stat:%' GROUP BY f.id", (sid,)):
+        out.setdefault(r["sha1"], []).append((r["path"], frozenset(r["acl"].split("\x1f"))))
+    return out
+
+
+def _refuse_copies(con, sid: int, won: dict[str, Label], fresh: "list[tuple[str, str]]",
+                   prior: "dict[str, list[tuple[str, frozenset[str]]]]") -> None:
+    """ValueError when a file added or changed by this run has the bytes of a labelled file (one labelled now, or
+    one that was before this run: a copy first and a delete later, an archived `v1` beside a new file under the
+    old name, a hard link) and its own ids are not a subset of that file's; unlabelled counts as wider. The
+    winner's `widen` may name the key of the file it copies."""
+    refs = {sha: list(v) for sha, v in prior.items()}
+    for path, sha in con.execute("SELECT path, sha1 FROM files WHERE source_id = ? AND sha1 NOT LIKE 'stat:%'", (sid,)):
+        if path in won:
+            refs.setdefault(sha, []).append((path, frozenset(won[path].acl)))
+    leaks = []
+    for rel, sha in fresh:
+        mine = won.get(rel)
+        for ref, ids in refs.get(sha, ()):
+            if ref == rel or (mine is not None and frozenset(mine.acl) <= ids):
+                continue
+            if mine is not None and ref in won and won[ref].norm in mine.widen:
+                continue
+            leaks.append(f"{rel} has the content of {ref}")
+            break
+    if leaks:
+        raise ValueError(f"{len(leaks)} new or edited file(s) have the same content as a labelled file but "
+                         f"less restrictive ids ({'; '.join(leaks[:3])}): a copy or a move would be readable by "
+                         "more people than the original; label it as restrictively, or remove the copy")
+
+
 def ingest_source(con, name: str, root: Path, public: bool, excludes: list[str], full: bool = False,
                   dtype: str | None = None, require_labels: bool = False) -> dict:
     """Bring one source's part of the map in line with the files on disk.
@@ -810,7 +855,8 @@ def ingest_source(con, name: str, root: Path, public: bool, excludes: list[str],
     from .store import drop_file, drop_source
 
     root = root.resolve()
-    row = con.execute("SELECT id FROM sources WHERE name = ?", (name,)).fetchone()
+    row = con.execute("SELECT id, require_labels FROM sources WHERE name = ?", (name,)).fetchone()
+    require_labels = require_labels or bool(row and row["require_labels"])   # the flag stored on the source holds for `init` too
     labels = read_labels(root)
     had = row is not None and con.execute(
         "SELECT 1 FROM file_meta m JOIN files f ON f.id = m.file_id WHERE m.key = 'acl' AND f.source_id = ? LIMIT 1",
@@ -833,8 +879,10 @@ def ingest_source(con, name: str, root: Path, public: bool, excludes: list[str],
                              " and --require-labels is set") + "; restore it, or write {} to open every file")
         labels = []
     before = {r["path"] for r in con.execute("SELECT path FROM files WHERE source_id = ?", (row["id"],))} if row else set()
+    prior = _labelled_digests(con, row["id"]) if row else {}
     won, matched, over, dead = resolve_labels(labels, rels, before, lambda: disk_files(root))
-    warnings += [f"key {k!r} matches no file on disk; its entry labels nothing (delete it)" for k in dead]
+    warnings += [f"key {k!r} matches no file on disk; its entry labels nothing (delete it only if the file is really "
+                 "gone; if it was renamed or moved, move the key to the new path)" for k in dead]
     keep = int(require_labels)
     if row:
         sid = row["id"]
@@ -858,6 +906,7 @@ def ingest_source(con, name: str, root: Path, public: bool, excludes: list[str],
                              "FROM files WHERE source_id = ?", (sid,))
     }
     counts = {"added": 0, "changed": 0, "removed": 0, "unchanged": 0}
+    fresh_files: list[tuple[str, str]] = []   # (path, sha1) of every file added or changed by this run
     for rel in rels:
         path = root / rel
         st = path.stat()
@@ -908,9 +957,13 @@ def ingest_source(con, name: str, root: Path, public: bool, excludes: list[str],
             continue
         counts["changed" if old is not None else "added"] += 1
         _insert_file(con, sid, rel, lang, dtype_, text, st.st_size, st.st_mtime_ns, digest, shown)
+        if not digest.startswith("stat:"):
+            fresh_files.append((rel, digest))
     for old in known.values():  # indexed before, gone from disk or now excluded
         drop_file(con, old["id"])
         counts["removed"] += 1
+    if fresh_files:
+        _refuse_copies(con, sid, won, fresh_files, prior)
     write_labels(con, sid, won)
     n_files, n_chunks = con.execute(
         "SELECT count(DISTINCT f.id), count(c.id) FROM files f LEFT JOIN chunks c ON c.file_id = f.id "
